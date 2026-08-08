@@ -9,6 +9,10 @@
            #:make-model-definition #:model-definition-p
            #:model-definition-chunk-types #:model-definition-chunks
            #:model-definition-productions #:model-definition-initial-goal
+           ;; production accessors (reader/compiler/matcher clients inspect these)
+           #:production-p #:production-name
+           #:production-lhs #:production-rhs
+           #:production-kind #:production-kc
            ;; reader
            #:read-model-file
            ;; compiler
