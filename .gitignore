@@ -1,0 +1,8 @@
+# Lisp build artifacts
+*.fasl
+*.fasl-tmp
+*.lx32fsl
+*.lx64fsl
+*.wx32fsl
+*.wx64fsl
+__pycache__/
