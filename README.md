@@ -47,8 +47,6 @@ The `mtt.asd` system file defines four ASDF systems:
 ```lisp
 (ql:quickload :mtt/test)
 (5am:run! :mtt)
-;; or the package entry point:
-(mtt/test:run-all)
 ```
 
 From the shell:
