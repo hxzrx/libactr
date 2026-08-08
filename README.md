@@ -111,5 +111,40 @@ mtt/
 
 ## Status
 
-Scaffold complete. Core systems load; the FiveAM master suite is registered
-and the smoke test passes. Engine internals are filled in by subsequent tasks.
+Kernel complete (Tasks 1-7): types, reader, compiler, matcher, oracle, and the
+dual-track regression suite. **146/146 checks pass** (138 unit + 6 oracle + 2
+dual-track) under SBCL 2.6.7 against act-r SVN r3493.
+
+### Dual-track regression results
+
+The `mtt/dual` suite cross-checks mtt's `model-matching-productions` against
+the act-r oracle (`oracle-matches-p`) on every tutorial model.  Both engines
+start from the **same goal-only state** (goal = model's `initial-goal`, all
+other buffers empty); a discrepancy indicates either an mtt matcher bug or an
+out-of-subset feature.
+
+**Models covered** (tutorial/unit1 + unit2):
+
+| Model                      | Productions | Result                                |
+|----------------------------|-------------|---------------------------------------|
+| addition.lisp              | 4           | AGREE (0 discrepancies)               |
+| count.lisp                 | 3           | AGREE                                 |
+| semantic.lisp              | 4           | AGREE                                 |
+| tutor-model-solution.lisp  | 6           | AGREE                                 |
+| demo2-model.lisp           | 4           | AGREE                                 |
+| tutor-model.lisp           | 0           | SKIP (no productions; has goal)       |
+| unit2-assignment-model.lisp| 0           | SKIP (no productions; has goal)       |
+| broken-addition.lisp       | —           | KNOWN NON-DEFECT (file is deliberately malformed: unbalanced parens → reader EOF error, caught by handler-case) |
+
+**Summary: 5 models with productions, all AGREE (0 discrepancies); 2 models
+skipped (no productions); 1 known non-defect (deliberately broken file).**
+
+### Bug fix during Task 7
+
+The dual-track work exposed a deferred `:?` buffer-state-query inversion
+(noted in Task 5): `?buf> buffer empty` matched when the buffer was
+**occupied** and failed when **empty** — exactly backwards.  Fixed in
+`src/matcher.lisp`: `?buf>` queries now evaluate state keywords (`buffer`
+empty/full/failure, `state` free/busy/error) against buffer occupancy/module
+state, handled **before** the null-chunk check so `buffer empty` can match.
+Locked in by 9 new unit tests in `test-matcher.lisp`.

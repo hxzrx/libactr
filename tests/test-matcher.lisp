@@ -281,3 +281,102 @@
       (is (= 1 (length results)))
       (is (eq (mtt:production-name (caar results)) 'sum-is-five))
       (is (null (cdar results))))))
+
+;;; ---------- :? buffer-state-query semantics (Task 7 fix) ----------
+;;;
+;;; ACT-R's ?buf> queries test buffer MODULE STATE, not chunk content:
+;;;   buffer empty  -> buffer has no chunk
+;;;   buffer full   -> buffer has a chunk
+;;;   buffer failure-> last request failed (never set in a static snapshot)
+;;;   state free    -> module idle (always true in a static snapshot)
+;;;   state busy    -> module processing (never true in a static snapshot)
+;;;   state error   -> module error (never true in a static snapshot)
+;;; Previously the matcher treated :? as "buffer is occupied" — exactly
+;;; INVERTED for `buffer empty`, the most common query.  These tests lock in
+;;; the corrected semantics.
+
+(defun make-state-query-production (buffer slot-tests)
+  "Build a production whose LHS is a single ?buf> state query."
+  (mtt::make-production
+   'query-prod
+   (list (mtt::make-buffer-pattern buffer :? nil slot-tests))
+   nil nil :correct))
+
+;;; Helper: does PROD match STATE?  Uses matching-productions (not
+;;; match-production) because :? state queries bind zero variables — a
+;;; successful match collapses to nil through the match-production entry point,
+;;; and matching-productions is the API dual-track-check consumes.
+(defun query-matches-p (prod state)
+  (not (null (mtt:matching-productions (list prod) state))))
+
+(test buffer-empty-query-matches-when-buffer-empty
+  ;; ?retrieval> buffer empty  -> must match when retrieval is EMPTY.
+  (let* ((prod (make-state-query-production
+                'retrieval
+                (list (mtt::make-slot-test 'buffer :literal 'empty))))
+         (state (mtt:make-buffer-state)))  ; no retrieval chunk -> empty
+    (is-true (query-matches-p prod state))))
+
+(test buffer-empty-query-fails-when-buffer-occupied
+  ;; ?retrieval> buffer empty  -> must NOT match when retrieval has a chunk.
+  (let* ((prod (make-state-query-production
+                'retrieval
+                (list (mtt::make-slot-test 'buffer :literal 'empty))))
+         (state (mtt:make-buffer-state)))
+    (setf (mtt:buffer-chunk state 'retrieval)
+          (mtt:make-chunk :isa 'number :slots '((number . one))))
+    (is-false (query-matches-p prod state))))
+
+(test buffer-full-query-matches-when-occupied
+  ;; ?goal> buffer full  -> must match when goal has a chunk.
+  (let* ((prod (make-state-query-production
+                'goal
+                (list (mtt::make-slot-test 'buffer :literal 'full))))
+         (state (mtt:make-buffer-state)))
+    (setf (mtt:buffer-chunk state 'goal)
+          (mtt:make-chunk :isa 'add :slots '((sum . five))))
+    (is-true (query-matches-p prod state))))
+
+(test buffer-full-query-fails-when-empty
+  ;; ?goal> buffer full  -> must NOT match when goal is empty.
+  (let* ((prod (make-state-query-production
+                'goal
+                (list (mtt::make-slot-test 'buffer :literal 'full))))
+         (state (mtt:make-buffer-state)))   ; no goal chunk -> empty
+    (is-false (query-matches-p prod state))))
+
+(test state-free-query-always-matches
+  ;; ?imaginal> state free  -> always true in a static snapshot (occupied or not).
+  (let* ((prod (make-state-query-production
+                'imaginal
+                (list (mtt::make-slot-test 'state :literal 'free))))
+         (state-empty (mtt:make-buffer-state))
+         (state-full  (mtt:make-buffer-state)))
+    (setf (mtt:buffer-chunk state-full 'imaginal)
+          (mtt:make-chunk :isa 'array :slots '((letter . a))))
+    (is-true (query-matches-p prod state-empty))
+    (is-true (query-matches-p prod state-full))))
+
+(test state-busy-query-never-matches
+  ;; ?manual> state busy  -> never true in a static snapshot.
+  (let* ((prod (make-state-query-production
+                'manual
+                (list (mtt::make-slot-test 'state :literal 'busy))))
+         (state (mtt:make-buffer-state)))
+    (setf (mtt:buffer-chunk state 'manual)
+          (mtt:make-chunk :isa 'command :slots '((cmd . press-key))))
+    (is-false (query-matches-p prod state))))
+
+(test buffer-failure-query-never-matches-in-snapshot
+  ;; ?retrieval> buffer failure -> failure is a post-request state; never set
+  ;; in a static snapshot (no retrieval has been issued).  Both mtt and the
+  ;; oracle start from the same snapshot, so both say FALSE — they agree.
+  (let* ((prod (make-state-query-production
+                'retrieval
+                (list (mtt::make-slot-test 'buffer :literal 'failure))))
+         (state-empty (mtt:make-buffer-state))
+         (state-full  (mtt:make-buffer-state)))
+    (setf (mtt:buffer-chunk state-full 'retrieval)
+          (mtt:make-chunk :isa 'number :slots '((number . one))))
+    (is-false (query-matches-p prod state-empty))
+    (is-false (query-matches-p prod state-full))))

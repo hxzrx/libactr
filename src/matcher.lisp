@@ -27,11 +27,17 @@
 ;;;;   * ISA        — chunk's isa EQUALS the pattern type-name, OR is a subtype
 ;;;;                  (walk chunk-type-def-parent chain in ct-table).  A nil
 ;;;;                  type-name means "no ISA test" and always passes.
-;;;;   * :? buffer  — state query (e.g. ?retrieval> buffer empty).  This subset
-;;;;                  models only buffer presence, so a :? pattern matches iff
-;;;;                  the buffer is occupied and ISA-compatible; its slot-tests
-;;;;                  (state keywords like BUFFER/STATE) are not chunk slots and
-;;;;                  are ignored.
+;;;;   * :? buffer  — state query (e.g. ?retrieval> buffer empty).  The state
+;;;;                  keywords (BUFFER/STATE) and their values (EMPTY/FULL/
+;;;;                  FAILURE/FREE/BUSY/ERROR) are evaluated against the
+;;;;                  buffer's occupancy/module state, NOT against chunk slots:
+;;;;                    buffer empty   -> match iff buffer chunk is nil
+;;;;                    buffer full    -> match iff buffer chunk is non-nil
+;;;;                    buffer failure -> never set in a static snapshot
+;;;;                    state free     -> always true (module idle)
+;;;;                    state busy     -> never true (no in-flight request)
+;;;;                    state error    -> never true (no module error)
+;;;;                  An empty query (no slot-tests) always succeeds.
 ;;;
 ;;;; Internal vs public failure signalling:
 ;;;;   Bindings are an alist that may legitimately be NIL (empty — no variables
@@ -116,20 +122,55 @@
 
 ;; ------------------------------------------------------ pattern / production
 
+(defun match-buffer-state-query (slot-tests chunk)
+  "Evaluate a :? buffer-state query's SLOT-TESTS against the buffer's current
+   CHUNK (nil when empty).  State keywords test buffer occupancy or module
+   state — never chunk slots — so this must be reachable even when CHUNK is
+   nil (the whole point of 'buffer empty').  Returns T if every state query
+   is satisfied, NIL otherwise.  See MATCHER top comment for the state table."
+  (every (lambda (st) (state-query-satisfied-p st chunk))
+         slot-tests))
+
+(defun state-query-satisfied-p (st chunk)
+  "True when the single state query in slot-test ST holds for CHUNK.
+   Operates on symbol NAMES so it is package-agnostic — the query keywords
+   may be interned in any package the model was read into."
+  (let* ((slot-name (symbol-name (slot-test-slot st)))
+         (operand   (slot-test-operand st))
+         (val-name  (if (symbolp operand) (symbol-name operand)
+                        (princ-to-string operand))))
+    (cond
+      ((string= slot-name "BUFFER")
+       (cond
+         ((string= val-name "EMPTY")  (null chunk))
+         ((string= val-name "FULL")   (not (null chunk)))
+         ;; FAILURE and any other buffer state: not tracked in a static
+         ;; snapshot, so conservatively fail.
+         (t nil)))
+      ((string= slot-name "STATE")
+       (cond
+         ((string= val-name "FREE") t)
+         ;; BUSY / ERROR and any other state: never in a static snapshot.
+         (t nil)))
+      (t nil))))            ; unknown state keyword: conservatively fail
+
 (defun match-pattern (bp state bindings ct-table)
   "Match one buffer-pattern BP against STATE, threading BINDINGS.
    Returns the (possibly nil) bindings alist on success, or :mtt-match-fail."
   (let ((chunk (buffer-chunk state (buffer-pattern-buffer bp))))
     (cond
+      ;; :? state queries evaluate buffer occupancy/module state, NOT chunk
+      ;; slots.  Handle BEFORE the (null chunk) check: "buffer empty" must
+      ;; match precisely when CHUNK IS nil.
+      ((eq (buffer-pattern-modifier bp) :?)
+       (if (match-buffer-state-query (buffer-pattern-slot-tests bp) chunk)
+           bindings
+           :mtt-match-fail))
       ((null chunk) :mtt-match-fail)
       ((not (isa-compatible-p (chunk-isa chunk)
                               (buffer-pattern-type-name bp)
                               ct-table))
        :mtt-match-fail)
-      ;; :? state queries (e.g. ?retrieval> buffer empty): this subset models
-      ;; only buffer presence, so they pass once the buffer is occupied and
-      ;; ISA-compatible; their state keywords are not chunk slots.
-      ((eq (buffer-pattern-modifier bp) :?) bindings)
       (t
        (loop :with b := bindings
              :for st :in (buffer-pattern-slot-tests bp)
