@@ -37,13 +37,15 @@
 ;;;;   Bindings are an alist that may legitimately be NIL (empty — no variables
 ;;;;   bound yet).  To keep "matched with empty bindings" distinguishable from
 ;;;;   "failed" DURING the match, the internal helpers (match-slot-test,
-;;;;   match-pattern) return the keyword :mtt-match-fail on failure and the
-;;;;   (possibly nil) alist otherwise.  match-production, the public boundary,
-;;;;   collapses :mtt-match-fail back to nil.  Consequence (documented): a
-;;;;   production that matches while binding zero variables is reported as nil
-;;;;   by match-production — i.e. treated as a non-match by the public API.
-;;;;   Every fireable production in tutorial/unit1/addition.lisp binds at least
-;;;;   one variable, so this does not arise in practice.
+;;;;   match-pattern, %match-production*) return the keyword :mtt-match-fail on
+;;;;   failure and the (possibly nil) alist otherwise.  match-production, the
+;;;;   public boundary, collapses :mtt-match-fail back to nil — so by design a
+;;;;   zero-variable match looks like nil through THAT entry point.  However
+;;;;   matching-productions consumes %match-production* directly and filters on
+;;;;   (eq b :mtt-match-fail), NOT truthiness, so a zero-variable match (e.g. a
+;;;;   literal/ISA/negation-only LHS) IS kept there with its empty bindings.
+;;;;   model-matching-productions delegates to matching-productions and
+;;;;   therefore keeps such matches as well.
 (in-package :mtt)
 
 ;; ------------------------------------------------------------------ helpers
@@ -135,28 +137,45 @@
                              :mtt-match-fail))
              :finally (return b))))))
 
+(defun %match-production* (production state ct-table)
+  "Internal: match PRODUCTION's LHS buffer-patterns against STATE, threading a
+   single bindings alist across all patterns so a variable shared between
+   patterns unifies.  Returns the (possibly nil/empty) bindings alist on
+   success, or the keyword :mtt-match-fail on failure — keeping the two cases
+   distinguishable for callers that must treat an empty-but-successful match
+   (a zero-variable LHS) differently from no match.  CT-TABLE (from
+   model-definition-chunk-types) enables ISA subtype matching.
+   Pure: allocates a fresh alist per call; does not mutate PRODUCTION, STATE,
+   or any global."
+  (loop :with b := nil
+        :for bp :in (production-lhs production)
+        :while (not (eq (setf b (match-pattern bp state b ct-table))
+                        :mtt-match-fail))
+        :finally (return b)))
+
 (defun match-production (production state &optional (ct-table nil))
   "Match PRODUCTION's LHS buffer-patterns against STATE, threading a single
    bindings alist across all patterns so a variable shared between patterns
    unifies.  Returns the final bindings alist on success, or NIL if any
-   pattern or slot-test fails.  CT-TABLE (from model-definition-chunk-types)
-   enables ISA subtype matching; pass nil to accept exact isa only.
-   Pure: allocates a fresh alist per call; does not mutate PRODUCTION, STATE,
-   or any global."
-  (let ((result (loop :with b := nil
-                      :for bp :in (production-lhs production)
-                      :while (not (eq (setf b (match-pattern bp state b ct-table))
-                                      :mtt-match-fail))
-                      :finally (return b))))
-    (if (eq result :mtt-match-fail) nil result)))
+   pattern or slot-test fails.  NOTE: a successful match that binds zero
+   variables collapses to nil here and is thus indistinguishable from failure
+   through THIS entry point — use matching-productions (or %match-production*)
+   to observe zero-variable matches.  CT-TABLE (from model-definition-chunk-types)
+   enables ISA subtype matching; pass nil to accept exact isa only."
+  (let ((r (%match-production* production state ct-table)))
+    (if (eq r :mtt-match-fail) nil r)))
 
 (defun matching-productions (productions state &optional (ct-table nil))
   "Return a list of (production . bindings) for every production in PRODUCTIONS
    whose LHS matches STATE.  Order matches PRODUCTIONS.  Each bindings alist is
-   freshly allocated by match-production."
+   freshly allocated per match.  Consumes %match-production* directly and
+   filters on (eq b :mtt-match-fail) — NOT on truthiness of b — so a
+   zero-variable match (a literal/ISA/negation-only LHS that succeeds while
+   binding nothing) IS kept here with empty bindings, rather than being
+   silently dropped as it would be through match-production."
   (loop :for p :in productions
-        :for b := (match-production p state ct-table)
-        :when b :collect (cons p b)))
+        :for b := (%match-production* p state ct-table)
+        :unless (eq b :mtt-match-fail) :collect (cons p b)))
 
 (defun model-matching-productions (model-definition state)
   "Convenience wrapper: match the model's productions against STATE using the

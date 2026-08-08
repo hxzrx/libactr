@@ -215,3 +215,69 @@
     (is (eq (mtt:buffer-chunk state 'goal) goal))
     (is (eq (cdr (assoc 'arg1 (mtt:chunk-slots goal))) 'five))
     (is (eq (cdr (assoc 'sum  (mtt:chunk-slots goal))) 'nil))))
+
+;;; ---------- Regression: zero-variable matching productions are kept ----------
+;;;
+;;; A production whose LHS matches but binds ZERO variables (only :literal /
+;;; ISA / :negation slot-tests, no :variable tests) must still appear in
+;;; matching-productions' output with empty bindings.  Previously
+;;; match-production collapsed a successful empty-bindings result to nil
+;;; (indistinguishable from failure) and matching-productions' truthiness
+;;; filter then dropped it.  T7's dual-track validation depends on this.
+
+(defun make-zero-variable-add-production ()
+  "A production whose LHS is =goal> ISA add sum five — a single :literal slot
+   test, NO variables.  Matches any add chunk whose sum slot is five."
+  (mtt::make-production
+   'sum-is-five
+   (list (mtt::make-buffer-pattern
+          'goal := 'add
+          (list (mtt::make-slot-test 'sum :literal 'five))))
+   nil nil :correct))
+
+(test matching-productions-keeps-zero-variable-match
+  ;; The literal-only production matches a goal chunk with sum=five but binds
+  ;; nothing.  matching-productions MUST include it (with empty bindings),
+  ;; not silently drop it.  This is the regression for the collapsed-nil bug.
+  (let* ((ct  (make-hash-table :test 'eq))
+         (state (mtt:make-buffer-state))
+         (prod (make-zero-variable-add-production)))
+    (setf (gethash 'add ct)
+          (mtt:make-chunk-type-def :name 'add :slots '(sum) :parent nil))
+    (setf (mtt:buffer-chunk state 'goal)
+          (mtt:make-chunk :isa 'add :slots '((sum . five))))
+    ;; Sanity: match-production returns nil here (empty bindings collapse to
+    ;; nil by the public contract) — this is the documented trap.
+    (is (null (mtt:match-production prod state ct)))
+    ;; The fix: matching-productions keeps it anyway, with EMPTY bindings.
+    (let ((results (mtt:matching-productions (list prod) state ct)))
+      (is (= 1 (length results)))
+      (is (eq (mtt:production-name (caar results)) 'sum-is-five))
+      (is (null (cdar results))))   ; bindings alist is empty (nil), not absent
+
+    ;; Negative control: a non-matching state (sum=six) must still be EXCLUDED.
+    (setf (mtt:buffer-chunk state 'goal)
+          (mtt:make-chunk :isa 'add :slots '((sum . six))))
+    (is (null (mtt:matching-productions (list prod) state ct)))))
+
+(test model-matching-productions-keeps-zero-variable-match
+  ;; model-matching-productions delegates to matching-productions and so also
+  ;; keeps zero-variable matches.  Hand-build a model-definition whose only
+  ;; production is the literal-only one above.
+  (let* ((ct  (make-hash-table :test 'eq))
+         (state (mtt:make-buffer-state))
+         (prod (make-zero-variable-add-production))
+         (md  (mtt:make-model-definition
+               :chunk-types ct
+               :chunks (make-hash-table :test 'eq)
+               :productions (list prod)
+               :initial-goal nil
+               :params nil)))
+    (setf (gethash 'add ct)
+          (mtt:make-chunk-type-def :name 'add :slots '(sum) :parent nil))
+    (setf (mtt:buffer-chunk state 'goal)
+          (mtt:make-chunk :isa 'add :slots '((sum . five))))
+    (let ((results (mtt:model-matching-productions md state)))
+      (is (= 1 (length results)))
+      (is (eq (mtt:production-name (caar results)) 'sum-is-five))
+      (is (null (cdar results))))))
