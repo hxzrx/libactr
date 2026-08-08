@@ -149,17 +149,31 @@
 
 ;; --------------------------------------------------------- productions
 
+(defun extract-feedback (tokens)
+  "Split TOKENS into (values feedback-string remaining-tokens). The feedback
+   is the string of the first top-level (:feedback <string>) form found in
+   TOKENS, or nil. That form is removed so it never reaches parse-patterns."
+  (let ((fb-form (find-if (lambda (tk)
+                            (and (consp tk)
+                                 (symbolp (first tk))
+                                 (string= (symbol-name (first tk)) "FEEDBACK")
+                                 (>= (length tk) 2)
+                                 (stringp (second tk))))
+                          tokens)))
+    (values (when fb-form (second fb-form))
+            (if fb-form (remove fb-form tokens) tokens))))
+
 (defun parse-production (body)
-  "Parse a flat production body into a production with RAW LHS/RHS patterns.
-   body = (name . tokens...) where tokens is the flat buffer-test stream."
+  "Parse a flat production body into a production with RAW LHS/RHS patterns and
+   an optional captured feedback string."
   (let ((name (first body))
         (tokens (rest body)))
-    (multiple-value-bind (lhs-tokens rhs-tokens)
-        (split-at-arrow tokens)
-      (make-production name
-                       (parse-patterns lhs-tokens)
-                       (parse-patterns rhs-tokens)
-                       nil :correct))))
+    (multiple-value-bind (feedback rest-tokens) (extract-feedback tokens)
+      (multiple-value-bind (lhs-tokens rhs-tokens) (split-at-arrow rest-tokens)
+        (make-production name
+                         (parse-patterns lhs-tokens)
+                         (parse-patterns rhs-tokens)
+                         nil :correct feedback)))))
 
 (defun split-at-arrow (tokens)
   "Split a flat token list at the first ==>: values lhs-tokens, rhs-tokens."

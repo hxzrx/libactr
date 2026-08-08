@@ -54,12 +54,13 @@ Wraps (setf buffer-chunk) for the exported API."
   (spec     nil :type list))                  ; ((slot . value)...) 或请求/output 形式
 
 ;; 产生式
-(defstruct (production (:constructor make-production (name lhs rhs kc kind)))
+(defstruct (production (:constructor make-production (name lhs rhs kc kind &optional (feedback nil))))
   (name nil :type symbol)
   (lhs  nil :type list)   ; list of buffer-pattern
   (rhs  nil :type list)   ; list of action
   (kc   nil :type symbol)
-  (kind :correct :type (member :correct :buggy)))
+  (kind :correct :type (member :correct :buggy))
+  (feedback nil))
 
 ;; model-definition(只读共享产物)
 (defstruct (model-definition (:constructor make-model-definition% (chunk-types chunks productions initial-goal params)))
@@ -71,3 +72,26 @@ Wraps (setf buffer-chunk) for the exported API."
 
 (defun make-model-definition (&key chunk-types chunks productions initial-goal params)
   (make-model-definition% chunk-types chunks productions initial-goal params))
+
+;; step-intent: 领域无关的学生输入(对 buffer 的提议 delta)
+(defstruct step-intent
+  (assignments nil)   ; list of (buffer slot value);value 为字面量
+  (action-type nil))  ; 可选适配器标签;默认策略不用,留给未来策略
+
+;; kc-event: 每步 KC 触发,供期 6 knowledge tracing(纯数据)
+(defstruct kc-event
+  (kc nil)            ; production-kc,或无 kc 时取 production-name
+  (correct-p nil)     ; on-path correct → t;off-path/buggy/unclassified → nil
+  (production nil)    ; 命中产生式(correct 或 buggy),或 nil
+  (kind :correct))    ; :correct | :buggy | :unclassified
+
+;; trace-result: trace-step 单一返回对象(Approach A:内含推进后状态)
+(defstruct trace-result
+  (status :off-path)        ; :on-path | :off-path-buggy | :off-path
+  (production nil)
+  (bindings nil)
+  (feedback nil)
+  (events nil)              ; list of kc-event
+  (next-state nil)
+  (next-path nil)
+  (alternatives nil))

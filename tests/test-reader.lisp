@@ -112,3 +112,29 @@
   (is (equal (mtt::model-definition-params
               (mtt:read-model-file *addition-model*))
              '(:esc t :lf 0.05))))
+
+;;; --- Phase 3: :feedback annotation parsing ---
+
+(test reader-parses-feedback-annotation
+  "A (:feedback <string>) form inside a production body is captured into
+   production-feedback; standard ACT-R files (addition) leave it nil."
+  (let ((tmp (pathname "/tmp/mtt-feedback-test.lisp")))
+    (with-open-file (f tmp :direction :output :if-exists :supersede)
+      (print '(clear-all) f)
+      (print '(define-model fb
+                (chunk-type ct slot)
+                (P my-prod
+                   =goal> ISA ct slot x
+                   ==>
+                   =goal> slot y
+                   (:feedback "wrong!"))) f))
+    (unwind-protect
+        (let ((prod (first (model-definition-productions (read-model-file tmp)))))
+          (is (eq 'my-prod (production-name prod)))
+          (is (equal "wrong!" (production-feedback prod))))
+      (delete-file tmp)))
+  ;; addition.lisp has no feedback annotations → all nil
+  (let ((md (read-model-file
+              (asdf:system-relative-pathname "act-r" "tutorial/unit1/addition.lisp"))))
+    (is (every #'null (mapcar #'production-feedback
+                              (model-definition-productions md))))))

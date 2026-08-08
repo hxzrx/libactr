@@ -78,3 +78,24 @@
     (is (null (mtt:model-definition-productions dm)))
     (is (null (mtt:model-definition-initial-goal dm)))
     (is (equal (mtt::model-definition-params dm) '(:esc t)))))
+
+;;; --- Phase 3: production feedback + new data-model structs ---
+
+(test make-production-accepts-optional-feedback
+  "make-production takes an optional 6th feedback arg; 5-arg calls default to nil."
+  (is (null (production-feedback (make-production 'p nil nil nil :correct))))
+  (is (equal "hint"
+             (production-feedback (make-production 'p nil nil nil :buggy "hint")))))
+
+(test step-intent-and-events-construct
+  "New Phase 3 structs construct and read back."
+  (let ((intent (make-step-intent :assignments '((goal sum seven)))))
+    (is (equal '((goal sum seven)) (step-intent-assignments intent)))
+    (is (null (step-intent-action-type intent))))
+  (let ((ev (make-kc-event :kc 'add :correct-p t :production 'terminate-addition
+                           :kind :correct)))
+    (is (eq :correct (kc-event-kind ev)))
+    (is (eq t (kc-event-correct-p ev))))
+  (let ((r (make-trace-result :status :on-path :feedback nil)))
+    (is (eq :on-path (trace-result-status r)))
+    (is (null (trace-result-events r)))))

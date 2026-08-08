@@ -10,7 +10,7 @@
            #:model-definition-chunk-types #:model-definition-chunks
            #:model-definition-productions #:model-definition-initial-goal
            ;; production accessors (reader/compiler/matcher clients inspect these)
-           #:production-p #:production-name
+           #:production-p #:production-name #:make-production
            #:production-lhs #:production-rhs
            #:production-kind #:production-kc
            ;; reader
@@ -19,6 +19,23 @@
            #:compile-model
            ;; matcher
            #:matching-productions #:match-production #:model-matching-productions
-           #:make-buffer-state #:buffer-chunk #:set-buffer-chunk))
+           #:make-buffer-state #:buffer-chunk #:set-buffer-chunk
+           ;; Phase 3: production feedback
+           #:production-feedback
+           ;; Phase 3: step-intent / kc-event / trace-result
+           #:step-intent #:make-step-intent #:step-intent-p
+           #:step-intent-assignments #:step-intent-action-type
+           #:kc-event #:make-kc-event #:kc-event-p
+           #:kc-event-kc #:kc-event-correct-p #:kc-event-production #:kc-event-kind
+           #:trace-result #:make-trace-result #:trace-result-p
+           #:trace-result-status #:trace-result-production #:trace-result-bindings
+           #:trace-result-feedback #:trace-result-events
+           #:trace-result-next-state #:trace-result-next-path #:trace-result-alternatives
+           ;; 已有但此前未导出 —— 期 3 适配器/buggy 库需程序化构造产生式,故公开
+           #:chunk-slot
+           #:make-buffer-pattern #:buffer-pattern-buffer #:buffer-pattern-modifier
+           #:buffer-pattern-type-name #:buffer-pattern-slot-tests
+           #:make-slot-test #:slot-test-slot #:slot-test-kind #:slot-test-operand
+           #:make-action #:action-modifier #:action-buffer #:action-spec))
 
 (in-package :mtt)
