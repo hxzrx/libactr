@@ -98,14 +98,27 @@
             :collect (cons prod bindings))))
 
 (defun off-path-diagnosis (model state intent)
-  "Off-path diagnosis. Task 5: unclassified only (no buggy library yet).
-   Task 6 extends this to query buggy productions first. STATE is never
-   advanced off-path."
-  (declare (ignore model intent))
-  (make-trace-result
-   :status :off-path
-   :next-state state
-   :events (list (make-kc-event :correct-p nil :kind :unclassified))))
+  "Off-path diagnosis: query the buggy library. If a buggy production covers
+   the intent, diagnose that misconception (feedback + buggy KC, deterministic
+   first match). Otherwise unclassified. STATE is never advanced off-path."
+  (let ((buggy (covering-productions-of-kind model state intent :buggy)))
+    (if buggy
+        (let* ((choice (first buggy))            ; deterministic: first buggy match
+               (prod (car choice)))
+          (make-trace-result
+           :status :off-path-buggy
+           :production prod
+           :bindings (cdr choice)
+           :feedback (production-feedback prod)
+           :next-state state
+           :events (list (make-kc-event :kc (production-kc-or-name prod)
+                                        :correct-p nil
+                                        :production (production-name prod)
+                                        :kind :buggy))))
+        (make-trace-result
+         :status :off-path
+         :next-state state
+         :events (list (make-kc-event :correct-p nil :kind :unclassified))))))
 
 (defun trace-step (model state path intent &key (strategy #'path-continuity-strategy))
   "Diagnose one student step. Pure: returns a trace-result; never mutates MODEL,

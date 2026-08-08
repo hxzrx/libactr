@@ -124,3 +124,47 @@
     (is (null (trace-result-production r)))
     (is (eq :unclassified (kc-event-kind (first (trace-result-events r)))))
     (is (eq state (trace-result-next-state r)))))
+
+(defun model-with-buggy-initialize ()
+  "addition model plus one buggy rule: starting count at one instead of zero."
+  (let ((md (addition-compiled-model)))
+    (setf (model-definition-productions md)
+          (append (model-definition-productions md)
+                  (list
+                    (make-production
+                     'buggy-start-count-at-one
+                     ;; LHS: goal add arg1=num1 sum=nil  (compiled buffer-pattern)
+                     (list (make-buffer-pattern
+                            'goal :=
+                            'add
+                            (list (make-slot-test 'arg1 :variable '=num1)
+                                  (make-slot-test 'sum :literal nil))))
+                     ;; RHS: =goal> count one   (wrong; correct is zero)
+                     (list (make-action := 'goal '((count . one))))
+                     nil :buggy "Count on from zero."))))
+    md))
+
+(test trace-step-off-path-buggy-diagnoses-misconception
+  "A student 'start' with count=one (wrong) → off-path-buggy via
+   buggy-start-count-at-one; feedback + buggy KC; state unchanged."
+  (let* ((md (model-with-buggy-initialize))
+         (state (goal-state 'arg1 'five 'arg2 'two 'sum nil))
+         (intent (make-step-intent :assignments '((goal count one))))
+         (r (trace-step md state nil intent)))
+    (is (eq :off-path-buggy (trace-result-status r)))
+    (is (eq 'buggy-start-count-at-one (production-name (trace-result-production r))))
+    (is (equal "Count on from zero." (trace-result-feedback r)))
+    (is (eq state (trace-result-next-state r)))
+    (let ((ev (first (trace-result-events r))))
+      (is (eq 'buggy-start-count-at-one (kc-event-kc ev)))
+      (is (null (kc-event-correct-p ev)))
+      (is (eq :buggy (kc-event-kind ev))))))
+
+(test trace-step-off-path-buggy-falls-through-to-unclassified
+  "A wrong step matching NO buggy rule stays :off-path unclassified."
+  (let* ((md (model-with-buggy-initialize))
+         (state (goal-state 'arg1 'five 'arg2 'two 'sum nil))
+         (intent (make-step-intent :assignments '((goal count banana))))
+         (r (trace-step md state nil intent)))
+    (is (eq :off-path (trace-result-status r)))
+    (is (eq :unclassified (kc-event-kind (first (trace-result-events r)))))))
