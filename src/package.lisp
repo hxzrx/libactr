@@ -18,7 +18,7 @@
            ;; compiler
            #:compile-model
            ;; matcher
-           #:matching-productions #:match-production
+           #:matching-productions #:match-production #:model-matching-productions
            #:buffer-state #:make-buffer-state #:buffer-chunk #:set-buffer-chunk))
 
 (in-package :mtt)
