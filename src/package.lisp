@@ -36,6 +36,8 @@
            #:make-buffer-pattern #:buffer-pattern-buffer #:buffer-pattern-modifier
            #:buffer-pattern-type-name #:buffer-pattern-slot-tests
            #:make-slot-test #:slot-test-slot #:slot-test-kind #:slot-test-operand
-           #:make-action #:action-modifier #:action-buffer #:action-spec))
+           #:make-action #:action-modifier #:action-buffer #:action-spec
+           ;; Phase 3: tracer
+           #:apply-rhs))
 
 (in-package :mtt)

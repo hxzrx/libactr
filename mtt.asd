@@ -10,7 +10,8 @@
                (:file "src/types")
                (:file "src/reader")
                (:file "src/compiler")
-               (:file "src/matcher"))
+               (:file "src/matcher")
+               (:file "src/tracer"))
   :in-order-to ((test-op (test-op "mtt/test"))))
 
 ;;; act-r/ dual-track oracle — dev-time only, pulls in act-r.
@@ -26,7 +27,8 @@
                (:file "tests/test-types")
                (:file "tests/test-reader")
                (:file "tests/test-compiler")
-               (:file "tests/test-matcher")))
+               (:file "tests/test-matcher")
+               (:file "tests/test-tracer")))
 
 ;;; Dual-track regression — needs act-r via oracle.
 (asdf:defsystem "mtt/dual"
