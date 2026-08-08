@@ -73,3 +73,16 @@
 (test covers-p-empty-intent-is-vacuously-true
   "An empty intent covers any effect (callers only pass real student intents)."
   (is (covers-p (make-step-intent) (goal-state 'sum 'seven))))
+
+(test path-continuity-strategy-picks-first-deterministically
+  "Default strategy returns the first covering production (definition order);
+   path/intent reserved for future richer strategies."
+  (let ((p1 (make-production 'first nil nil nil :correct))
+        (p2 (make-production 'second nil nil nil :correct))
+        (intent (make-step-intent :assignments '((goal sum seven)))))
+    (let ((choice (funcall #'path-continuity-strategy
+                           (list (cons p1 '((=num1 . five)))
+                                 (cons p2 '((=num1 . six))))
+                           intent nil)))
+      (is (eq 'first (production-name (car choice))))
+      (is (equal '((=num1 . five)) (cdr choice))))))

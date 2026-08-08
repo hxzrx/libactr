@@ -65,3 +65,15 @@
              (let ((chunk (buffer-chunk effect-state buffer)))
                (and chunk (equal (chunk-slot chunk slot) value)))))
          (step-intent-assignments intent)))
+
+;; Disambiguation strategy protocol.
+;; A strategy is a function (covering intent path) -> (production . bindings),
+;; where COVERING is a list of (production . bindings) that all cover the intent.
+;; path-continuity-strategy is the Phase 3 default: deterministic definition
+;; order (first). Addition/tutorial models rarely present multiple correct
+;; coverings at one state, so this is reproducible and sufficient; PATH and
+;; INTENT are accepted so action-type anchoring / confidence ranking can be
+;; dropped in later without changing trace-step.
+(defun path-continuity-strategy (covering intent path)
+  (declare (ignore intent path))
+  (first covering))

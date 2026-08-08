@@ -39,6 +39,7 @@
            #:make-action #:action-modifier #:action-buffer #:action-spec
            ;; Phase 3: tracer
            #:apply-rhs
-           #:covers-p))
+           #:covers-p
+           #:path-continuity-strategy))
 
 (in-package :mtt)
