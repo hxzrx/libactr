@@ -28,6 +28,11 @@
 (defun (setf buffer-chunk) (new-value state buffer-name)
   (setf (gethash buffer-name state) new-value))
 
+(defun set-buffer-chunk (state buffer-name chunk)
+  "Imperative setter: store CHUNK in STATE's BUFFER-NAME buffer.
+Wraps (setf buffer-chunk) for the exported API."
+  (setf (buffer-chunk state buffer-name) chunk))
+
 ;; 带类型的槽测试
 ;; kind: :literal(等于字面值) | :variable(绑定变量) | :negation(不等于某值,值可为字面或已绑定变量)
 (defstruct (slot-test (:constructor make-slot-test (slot kind operand)))
