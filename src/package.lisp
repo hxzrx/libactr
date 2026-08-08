@@ -40,6 +40,7 @@
            ;; Phase 3: tracer
            #:apply-rhs
            #:covers-p
-           #:path-continuity-strategy))
+           #:path-continuity-strategy
+           #:trace-step))
 
 (in-package :mtt)

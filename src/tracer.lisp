@@ -77,3 +77,56 @@
 (defun path-continuity-strategy (covering intent path)
   (declare (ignore intent path))
   (first covering))
+
+;; ------------------------------------------------------------------ trace-step
+
+(defun production-kc-or-name (production)
+  "KC id for an event: production-kc if set, else the production name
+   (one-rule-one-KC default)."
+  (or (production-kc production) (production-name production)))
+
+(defun covering-productions-of-kind (model state intent kind)
+  "Return list of (production . bindings) among productions whose KIND matches
+   the given keyword (:correct or :buggy), that match STATE and whose RHS effect
+   COVERS intent."
+  (let ((ct (model-definition-chunk-types model))
+        (prods (remove-if-not (lambda (p) (eq (production-kind p) kind))
+                              (model-definition-productions model))))
+    (loop :for (prod . bindings) :in (matching-productions prods state ct)
+          :for effect = (apply-rhs (production-rhs prod) state bindings)
+          :when (covers-p intent effect)
+            :collect (cons prod bindings))))
+
+(defun off-path-diagnosis (model state intent)
+  "Off-path diagnosis. Task 5: unclassified only (no buggy library yet).
+   Task 6 extends this to query buggy productions first. STATE is never
+   advanced off-path."
+  (declare (ignore model intent))
+  (make-trace-result
+   :status :off-path
+   :next-state state
+   :events (list (make-kc-event :correct-p nil :kind :unclassified))))
+
+(defun trace-step (model state path intent &key (strategy #'path-continuity-strategy))
+  "Diagnose one student step. Pure: returns a trace-result; never mutates MODEL,
+   STATE, PATH, or any global. On-path → advance state/path, emit correct KC,
+   record alternatives when >1 covered. Off-path → off-path-diagnosis."
+  (let ((covering (covering-productions-of-kind model state intent :correct)))
+    (if covering
+        (let* ((choice (funcall strategy covering intent path))
+               (prod (car choice))
+               (bindings (cdr choice))
+               (next-state (apply-rhs (production-rhs prod) state bindings))
+               (alternatives (remove prod (mapcar #'car covering))))
+          (make-trace-result
+           :status :on-path
+           :production prod
+           :bindings bindings
+           :next-state next-state
+           :next-path (append path (list (production-name prod)))
+           :events (list (make-kc-event :kc (production-kc-or-name prod)
+                                        :correct-p t
+                                        :production (production-name prod)
+                                        :kind :correct))
+           :alternatives alternatives))
+        (off-path-diagnosis model state intent))))

@@ -86,3 +86,41 @@
                            intent nil)))
       (is (eq 'first (production-name (car choice))))
       (is (equal '((=num1 . five)) (cdr choice))))))
+
+(test trace-step-on-path-initialize-addition
+  "A student 'start' intent (sum=arg1, count=zero) on the fresh goal is on-path
+   via initialize-addition: status :on-path, production initialize-addition,
+   advanced state has sum=five/count=zero, correct KC event emitted."
+  (let* ((md (addition-compiled-model))
+         (state (goal-state 'arg1 'five 'arg2 'two 'sum nil))
+         (intent (make-step-intent :assignments '((goal sum five) (goal count zero))))
+         (r (trace-step md state nil intent)))
+    (is (eq :on-path (trace-result-status r)))
+    (is (eq 'initialize-addition (production-name (trace-result-production r))))
+    (is (equal 'five (chunk-slot (buffer-chunk (trace-result-next-state r) 'goal) 'sum)))
+    (is (equal 'zero (chunk-slot (buffer-chunk (trace-result-next-state r) 'goal) 'count)))
+    (is (equal '(initialize-addition) (trace-result-next-path r)))
+    (let ((ev (first (trace-result-events r))))
+      (is (eq 'initialize-addition (kc-event-kc ev)))
+      (is (eq t (kc-event-correct-p ev)))
+      (is (eq :correct (kc-event-kind ev))))))
+
+(test trace-step-input-state-unchanged-on-path
+  "trace-step is pure: input state is not mutated even on on-path advance."
+  (let* ((md (addition-compiled-model))
+         (state (goal-state 'arg1 'five 'arg2 'two 'sum nil))
+         (intent (make-step-intent :assignments '((goal count zero)))))
+    (trace-step md state nil intent)
+    (is (null (chunk-slot (buffer-chunk state 'goal) 'count)))))
+
+(test trace-step-off-path-unclassified-when-no-cover
+  "A student intent no correct production covers → off-path unclassified; state
+   unchanged. (Buggy matching arrives in Task 6.)"
+  (let* ((md (addition-compiled-model))
+         (state (goal-state 'arg1 'five 'arg2 'two 'sum nil))
+         (intent (make-step-intent :assignments '((goal sum banana)))) ; nonsense
+         (r (trace-step md state nil intent)))
+    (is (eq :off-path (trace-result-status r)))
+    (is (null (trace-result-production r)))
+    (is (eq :unclassified (kc-event-kind (first (trace-result-events r)))))
+    (is (eq state (trace-result-next-state r)))))
