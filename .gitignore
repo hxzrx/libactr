@@ -5,3 +5,6 @@
 *.lx64fsl
 *.wx32fsl
 *.wx64fsl
+
+# Superpowers SDD scratch (per-plan workspace)
+.superpowers/
