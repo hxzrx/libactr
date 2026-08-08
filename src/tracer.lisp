@@ -54,3 +54,14 @@
                   (setf (buffer-chunk next buffer) new-chunk)))))
         (:- (setf (buffer-chunk next (action-buffer act)) nil))
         ((:+ :!) nil)))))
+
+(defun covers-p (intent effect-state)
+  "Subset-consistent coverage: every (buffer slot value) in INTENT.assignments
+   must EQUAL EFFECT-STATE's value at (buffer slot). Extra slots the production
+   changed (that the student didn't express) are ignored. Any expressed slot
+   that contradicts the effect → not covered."
+  (every (lambda (assign)
+           (destructuring-bind (buffer slot value) assign
+             (let ((chunk (buffer-chunk effect-state buffer)))
+               (and chunk (equal (chunk-slot chunk slot) value)))))
+         (step-intent-assignments intent)))

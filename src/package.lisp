@@ -38,6 +38,7 @@
            #:make-slot-test #:slot-test-slot #:slot-test-kind #:slot-test-operand
            #:make-action #:action-modifier #:action-buffer #:action-spec
            ;; Phase 3: tracer
-           #:apply-rhs))
+           #:apply-rhs
+           #:covers-p))
 
 (in-package :mtt)

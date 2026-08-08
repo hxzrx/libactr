@@ -54,3 +54,22 @@
       (is (not (null bindings)))
       (let ((next (apply-rhs (production-rhs prod) state bindings)))
         (is (null (chunk-slot (buffer-chunk next 'goal) 'count)))))))
+
+(test covers-p-subset-allows-extra-slots
+  "Student expresses a subset of the production's effect → covered. The rule
+   may change extra internal slots the student didn't express."
+  (let ((effect (goal-state 'sum 'seven 'count 'two 'arg1 'five 'arg2 'two)))
+    (is (covers-p (make-step-intent :assignments '((goal sum seven))) effect))
+    (is (covers-p (make-step-intent :assignments '((goal sum seven) (goal count two)))
+                  effect))))
+
+(test covers-p-rejects-contradiction
+  "An expressed slot that contradicts the effect → not covered."
+  (let ((effect (goal-state 'sum 'seven 'count 'two)))
+    (is (not (covers-p (make-step-intent :assignments '((goal sum six))) effect)))
+    (is (not (covers-p (make-step-intent :assignments '((goal sum seven) (goal count three)))
+                       effect)))))
+
+(test covers-p-empty-intent-is-vacuously-true
+  "An empty intent covers any effect (callers only pass real student intents)."
+  (is (covers-p (make-step-intent) (goal-state 'sum 'seven))))
