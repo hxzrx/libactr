@@ -33,7 +33,8 @@
 ;;; Dual-track regression — needs act-r via oracle.
 (asdf:defsystem "mtt/dual"
   :depends-on ("mtt/test" "mtt/oracle")
-  :components ((:file "tests/test-dual-track")))
+  :components ((:file "tests/test-dual-track")
+               (:file "tests/test-tracer-dual")))
 
 ;;; Fuller example tutor — a consumer of the core, not part of mtt itself.
 (asdf:defsystem "mtt/addition-tutor"

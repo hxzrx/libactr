@@ -57,7 +57,8 @@
            #:oracle-set-goal-from-chunk
            #:oracle-set-retrieval-from-chunk
            #:oracle-set-buffer-from-chunk
-           #:oracle-matches-p))
+           #:oracle-matches-p
+           #:oracle-fire-and-read-slots))
 
 (in-package :mtt/oracle)
 
@@ -144,3 +145,26 @@ PRODUCTION-NAME may be a symbol/keyword/string in any package; it is interned
 into :ACT-R before the conflict-set membership test."
   (let ((pname (ar production-name)))
     (not (null (member pname (conflict-set) :test #'eq)))))
+
+(defun oracle-fire-and-read-slots (mtt-goal-chunk slot-names &optional mtt-retrieval-chunk)
+  "Set ACT-R goal (+ retrieval if given), run to fire the single matching
+production (timed run — verified sufficient for single-matcher states; tutorial
+models match one production per state), then return an alist of
+(SLOT-NAME-KEYWORD . VALUE-KEYWORD) for the goal's SLOT-NAME symbols.
+SLOT-NAMES are mtt-side symbols; they are re-homed to :ACT-R for the read and
+returned as package-neutral keywords. Values likewise keywordized (nil passes
+through). Verified mechanism: set-state → run → buffer-read + chunk-slot-value-fct."
+  (oracle-set-goal-from-chunk mtt-goal-chunk)
+  (when mtt-retrieval-chunk
+    (oracle-set-retrieval-from-chunk mtt-retrieval-chunk))
+  (act-r::no-output (act-r::run 0.05))
+  (let ((g (act-r::buffer-read 'act-r::goal)))
+    (when g
+      (mapcar (lambda (s)
+                (let ((v (act-r::chunk-slot-value-fct g (ar s))))
+                  (cons (intern (symbol-name s) :keyword)
+                        (typecase v
+                          (null nil)
+                          (symbol (intern (symbol-name v) :keyword))
+                          (t v)))))
+              slot-names))))
