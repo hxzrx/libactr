@@ -13,8 +13,11 @@
     (maphash (lambda (k v) (setf (gethash k copy) v)) state)
     copy))
 
-(defun copy-chunk (chunk)
-  "Copy a chunk (new slots alist) so slot writes don't mutate the original."
+(defun copy-chunk-deep (chunk)
+  "Copy a chunk with a fresh slots alist so slot writes don't mutate the original.
+   The DEEP copy (copy-alist) is REQUIRED: apply-rhs mutates alist cells in place
+   via (setf (cdr entry) val), so the defstruct auto-copier's shallow copy would
+   alias the slots alist and silently break purity."
   (make-chunk :isa (chunk-isa chunk)
               :slots (copy-alist (chunk-slots chunk))))
 
@@ -42,7 +45,7 @@
         (:= (let* ((buffer (action-buffer act))
                    (chunk (buffer-chunk next buffer)))
               (when chunk
-                (let ((new-chunk (copy-chunk chunk)))
+                (let ((new-chunk (copy-chunk-deep chunk)))
                   (dolist (pair (action-spec act))
                     (let ((slot (car pair))
                           (val (resolve-rhs-value (cdr pair) bindings))

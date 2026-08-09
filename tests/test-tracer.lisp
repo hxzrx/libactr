@@ -55,6 +55,21 @@
       (let ((next (apply-rhs (production-rhs prod) state bindings)))
         (is (null (chunk-slot (buffer-chunk next 'goal) 'count)))))))
 
+(test apply-rhs-clear-buffer-branch-clears-goal-and-preserves-input
+  "The :- (clear-buffer) branch sets the buffer's chunk to nil. apply-rhs is
+   pure: the input state's goal buffer must be unchanged after the call."
+  (let* ((state (goal-state 'arg1 'five 'arg2 'two))
+         (orig-chunk (buffer-chunk state 'goal)))
+    ;; sanity: goal is populated before the call (real chunk, not nil)
+    (is (not (null orig-chunk)))
+    (let ((next (apply-rhs (list (make-action :- 'goal nil)) state nil)))
+      ;; (a) returned state's goal buffer is cleared (read the buffer back)
+      (is (null (buffer-chunk next 'goal)))
+      ;; (b) purity: input state's goal buffer is unchanged — same chunk object,
+      ;;     still non-nil, and its slots are still readable.
+      (is (eq orig-chunk (buffer-chunk state 'goal)))
+      (is (equal 'five (chunk-slot (buffer-chunk state 'goal) 'arg1))))))
+
 (test covers-p-subset-allows-extra-slots
   "Student expresses a subset of the production's effect → covered. The rule
    may change extra internal slots the student didn't express."
