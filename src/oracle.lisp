@@ -107,6 +107,26 @@ synchronously via set-buffer-chunk.  Returns the chunk name."
     (act-r::set-buffer-chunk (ar buffer-name) chunk-name)
     chunk-name))
 
+(defun %cancel-pending-goal-focus ()
+  "A model file's (goal-focus ...) schedules a :max-priority set-buffer-chunk
+into the goal buffer at time 0 (plus a clear-delayed-goal maintenance event),
+both queued by the GOAL module during RESET.  These fire at the start of the
+next (run ...) and OVERWRITE any goal an oracle caller placed via
+set-buffer-chunk, which defeats oracle verification of arbitrary mid-path
+states whose goal differs from the model's goal-focus chunk (e.g. addition's
+increment-sum state: sum=five count=zero).  Cancel those pending GOAL-module
+events and clear the goal module's delayed slot so the oracle has stable manual
+control of the goal buffer.  Necessary for mid-path oracle verification;
+harmless for the initial goal-focus state (Layer 1), where the oracle sets the
+same chunk the goal-focus would have.  Verified on SBCL 2.6.7 / act-r ASDF."
+  (let ((mp (act-r::current-mp)))
+    (dolist (e (act-r::mp-scheduled-events mp))
+      (when (eq (act-r::act-r-event-module e) (ar 'goal))
+        (act-r::delete-event (act-r::act-r-event-num e)))))
+  (let ((gmod (act-r::get-module-fct (ar 'goal))))
+    (when gmod
+      (setf (act-r::goal-module-delayed gmod) nil))))
+
 ;;;-----------------------------------------------------------------------------
 ;;; Public interface
 ;;;---------------------------------------------------------------------------
@@ -120,6 +140,7 @@ buffers/modules exist, and return the model's production names as keywords."
     (act-r::clear-all)
     (load pathname))
   (act-r::reset)
+  (%cancel-pending-goal-focus)
   (production-names-as-keywords))
 
 (defun oracle-production-names ()
