@@ -66,44 +66,36 @@ retrieval buffer) that trace-step traces against."
             :do (return (chunk-slot-val ch 'next)))))
 
 ;; --- the tutor session --------------------------------------------------------
-;; A per-instance session object (local state, mutated by tutor-step).  This is
-;; the demo's session wrapper — equivalent to the future cognitive-session
-;; (Phase 4) — and is NOT the global mutable state the core forbids.  No
-;; defvar/defparameter lives in this file.
+;; Built on the Phase 4 cognitive-session (the runtime session primitive). The
+;; session holds the per-instance private mutable state (buffer-state, path) and
+;; the authoritative event-log; this adapter only adds retrieval priming (a
+;; consumer responsibility — the core does not simulate retrieval, spec 4.5).
 
 (defstruct (tutor (:constructor %make-tutor))
-  (model nil)
-  (state nil)
-  (path nil))
+  (session nil))   ; a cognitive-session
 
 (defun make-tutor (arg1 arg2)
   "New addition tutor for ARG1 + ARG2 (number symbols)."
   (let* ((md (load-tutor-model))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'goal)
+         (session (mtt:start-session md 'student (list arg1 arg2))))
+    ;; override the initial-goal template with the problem-specific goal
+    (setf (mtt:buffer-chunk (mtt:session-state session) 'goal)
           (mtt:make-chunk :isa 'add :slots `((arg1 . ,arg1) (arg2 . ,arg2) (sum . nil))))
-    (%make-tutor :model md :state state)))
+    (%make-tutor :session session)))
 
 (defun prime-num (tutor val)
-  "Prime the retrieval buffer with the dm number-chunk for VAL (number . val,
-next . (dm-next val)) so a production that retrieves number=VAL can match.
-The core does not simulate retrieval (spec 4.5); the adapter sets up the state."
-  (let ((md (tutor-model tutor)))
-    (setf (mtt:buffer-chunk (tutor-state tutor) 'retrieval)
+  "Prime the retrieval buffer with the dm number-chunk for VAL so a production
+   that retrieves number=VAL can match. The core does not simulate retrieval."
+  (let ((md (mtt:session-model (tutor-session tutor)))
+        (state (mtt:session-state (tutor-session tutor))))
+    (setf (mtt:buffer-chunk state 'retrieval)
           (mtt:make-chunk :isa 'number
-                          :slots `((number . ,val)
-                                   (next . ,(dm-next md val)))))))
+                          :slots `((number . ,val) (next . ,(dm-next md val)))))))
 
 (defun trace-and-advance (tutor intent)
-  "Run trace-step against the (already-primed) session state; on on-path, advance
-the session state/path. Returns the trace-result. Caller is responsible for
-priming retrieval beforehand."
-  (let ((r (mtt:trace-step (tutor-model tutor) (tutor-state tutor)
-                           (tutor-path tutor) intent)))
-    (when (eq (mtt:trace-result-status r) :on-path)
-      (setf (tutor-state tutor) (mtt:trace-result-next-state r))
-      (setf (tutor-path tutor) (mtt:trace-result-next-path r)))
-    r))
+  "Run step-session against the session (already primed by caller); returns the
+   trace-result. step-session advances state/path on on-path + appends an event."
+  (mtt:step-session (tutor-session tutor) intent))
 
 (defun advance-count! (tutor)
   "Fire the model's internal increment-count step that accompanies each new total.
@@ -112,9 +104,9 @@ In the ACT-R addition model every increment-sum is followed by an increment-coun
 only ever reports the running total.  We trace that count increment as a hidden
 on-path step so the goal's count reaches arg2, which terminate-addition requires.
 Primes retrieval=number(count), traces count -> (dm-next count), advances."
-  (let* ((goal (mtt:buffer-chunk (tutor-state tutor) 'goal))
+  (let* ((goal (mtt:buffer-chunk (mtt:session-state (tutor-session tutor)) 'goal))
          (count (chunk-slot-val goal 'count))
-         (newcount (dm-next (tutor-model tutor) count)))
+         (newcount (dm-next (mtt:session-model (tutor-session tutor)) count)))
     (prime-num tutor count)
     (trace-and-advance tutor (mtt:make-step-intent :assignments `((goal count ,newcount))))))
 
@@ -145,14 +137,14 @@ the student-visible trace-result (initialize / increment-sum / terminate step)."
      (trace-and-advance tutor intent))
     (:next-total
      ;; Student reports a new total -> increment-sum fires (retrieval = current sum).
-     (prime-num tutor (chunk-slot-val (mtt:buffer-chunk (tutor-state tutor) 'goal) 'sum))
+     (prime-num tutor (chunk-slot-val (mtt:buffer-chunk (mtt:session-state (tutor-session tutor)) 'goal) 'sum))
      (let ((r (trace-and-advance tutor intent)))
        (when (eq (mtt:trace-result-status r) :on-path)
          (advance-count! tutor))
        r))
     (:submit
      ;; terminate-addition: retrieval must hold the answer's number chunk.
-     (prime-num tutor (chunk-slot-val (mtt:buffer-chunk (tutor-state tutor) 'goal) 'sum))
+     (prime-num tutor (chunk-slot-val (mtt:buffer-chunk (mtt:session-state (tutor-session tutor)) 'goal) 'sum))
      (trace-and-advance tutor intent))
     (:buggy
      ;; No priming: let the off-path diagnosis query the buggy library.
