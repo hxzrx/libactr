@@ -46,3 +46,8 @@
 (asdf:defsystem "mtt/addition-tutor"
   :depends-on ("mtt")
   :components ((:file "examples/addition-tutor")))
+
+;;; Phase 4 concurrent-isolation proof — needs bordeaux-threads (portable APIv2).
+(asdf:defsystem "mtt/concurrent"
+  :depends-on ("mtt/test" "bordeaux-threads")
+  :components ((:file "tests/test-concurrent")))
