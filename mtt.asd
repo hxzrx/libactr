@@ -51,3 +51,8 @@
 (asdf:defsystem "mtt/concurrent"
   :depends-on ("mtt/test" "bordeaux-threads")
   :components ((:file "tests/test-concurrent")))
+
+;;; Phase 4 portable image-dump smoke — de-risks Phase 5 deployment.
+(asdf:defsystem "mtt/image"
+  :depends-on ("mtt")
+  :components ((:file "examples/image-smoke")))
