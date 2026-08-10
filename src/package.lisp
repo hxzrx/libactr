@@ -41,6 +41,14 @@
            #:apply-rhs
            #:covers-p
            #:path-continuity-strategy
-           #:trace-step))
+           #:trace-step
+           ;; Phase 4: event log
+           #:log-event #:make-log-event #:log-event-p
+           #:log-event-seq #:log-event-timestamp
+           #:log-event-student-id #:log-event-session-id #:log-event-problem-id
+           #:log-event-kc-event #:log-event-intent-summary #:log-event-result-summary
+           #:make-event-log #:event-log-p
+           #:log-append #:log-all-events #:log-events-since #:log-last-seq
+           #:serialize-event-log #:deserialize-event-log))
 
 (in-package :mtt)
