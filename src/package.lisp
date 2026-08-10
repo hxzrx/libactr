@@ -49,6 +49,12 @@
            #:log-event-kc-event #:log-event-intent-summary #:log-event-result-summary
            #:make-event-log #:event-log-p
            #:log-append #:log-all-events #:log-events-since #:log-last-seq
-           #:serialize-event-log #:deserialize-event-log))
+           #:serialize-event-log #:deserialize-event-log
+           ;; Phase 4: cognitive-session
+           #:cognitive-session #:cognitive-session-p
+           #:session-model #:session-state #:session-path #:session-log
+           #:session-student-id #:session-problem-id #:session-model-id #:session-id
+           #:session-step-count #:session-status
+           #:start-session #:step-session #:end-session))
 
 (in-package :mtt)
