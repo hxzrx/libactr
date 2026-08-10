@@ -14,8 +14,13 @@
    (problem-id  :reader  session-problem-id  :initarg :problem-id)
    (model-id    :reader  session-model-id    :initarg :model-id :initform nil)
    (session-id  :reader  session-id          :initarg :session-id :initform (gensym "session"))
-   (step-count  :accessor session-step-count :initform 0)
-   (status      :accessor session-status     :initform :active)))
+   (step-count      :accessor session-step-count :initform 0)
+   (status          :accessor session-status     :initform :active)
+   ;; Most recent checkpoint plist (from periodic :checkpoint-every or end-session).
+   ;; Written internally via slot-value; no initarg. The checkpoint itself is pure
+   ;; data built by checkpoint-session, so this slot is the diagnostic channel that
+   ;; makes :checkpoint-every observable (spec §6.1 step 5).
+   (last-checkpoint :reader session-last-checkpoint :initform nil)))
 
 (defun cognitive-session-p (x)
   "Type predicate for cognitive-session (defclass does not auto-generate -p)."
@@ -80,13 +85,14 @@ step-count is a multiple of it, also take a checkpoint (diagnostic only)."
     (when (and checkpoint-every
                (plusp checkpoint-every)
                (zerop (mod (session-step-count session) checkpoint-every)))
-      (checkpoint-session session))
+      (setf (slot-value session 'last-checkpoint) (checkpoint-session session)))
     r))
 
 (defun end-session (session)
   "Mark session ended, take a final checkpoint, return a summary plist."
   (setf (session-status session) :ended)
   (let ((cp (checkpoint-session session)))
+    (setf (slot-value session 'last-checkpoint) cp)
     (list :session-id (session-id session)
           :step-count (session-step-count session)
           :event-count (length (log-all-events (session-log session)))

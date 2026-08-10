@@ -43,7 +43,7 @@ model (shared; worker reloads it) and the event log (retained separately)."
         :model-id (session-model-id session)
         :step-count (session-step-count session)
         :status (session-status session)
-        :last-seq (log-last-seq (session-log session))
+        :last-seq (log-last-seq (session-log session))   ; redo_window boundary: events with seq > this are the dropped window (Phase 6 mastery replay)
         :state (serialize-buffer-state (session-state session))
         :path (session-path session)))
 

@@ -56,6 +56,7 @@
            #:session-student-id #:session-problem-id #:session-model-id #:session-id
            #:session-step-count #:session-status
            #:start-session #:step-session #:end-session
+           #:session-last-checkpoint
            ;; Phase 4: checkpoint/restore
            #:checkpoint-session #:restore-from-checkpoint))
 

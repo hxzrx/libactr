@@ -70,6 +70,33 @@
     (is (eq :unclassified
             (kc-event-kind (log-event-kc-event (first (log-all-events (session-log s)))))))))
 
+(test step-session-checkpoint-every-populates-last-checkpoint
+  "step-session with :checkpoint-every 1 takes a checkpoint after the step and
+   stores it in session-last-checkpoint (the diagnostic channel — spec §6.1 step 5).
+   The stored checkpoint reflects the post-step state: step-count 1, advanced path."
+  (let* ((s (fresh-addition-session))
+         (intent (make-step-intent :assignments '((goal sum five) (goal count zero))))
+         (r (step-session s intent :checkpoint-every 1)))
+    (is (eq :on-path (trace-result-status r)))
+    (is (not (null (session-last-checkpoint s))))
+    (is (eql 1 (getf (session-last-checkpoint s) :step-count)))
+    (is (equal '(initialize-addition) (getf (session-last-checkpoint s) :path)))))
+
+(test step-session-without-checkpoint-every-leaves-last-checkpoint-nil
+  "Stepping without :checkpoint-every never touches session-last-checkpoint (stays nil)."
+  (let ((s (fresh-addition-session)))
+    (step-session s (make-step-intent :assignments '((goal sum five) (goal count zero))))
+    (is (null (session-last-checkpoint s)))))
+
+(test end-session-populates-last-checkpoint-with-final-checkpoint
+  "After end-session, session-last-checkpoint holds the final checkpoint (non-nil),
+   so the slot always reflects the most recent checkpoint taken."
+  (let ((s (fresh-addition-session)))
+    (step-session s (make-step-intent :assignments '((goal sum five) (goal count zero))))
+    (end-session s)
+    (is (not (null (session-last-checkpoint s))))
+    (is (eql 1 (getf (session-last-checkpoint s) :step-count)))))
+
 (test end-session-marks-ended-and-summarizes
   "end-session sets status :ended, takes a final checkpoint, returns a summary
    with step/event counts."
