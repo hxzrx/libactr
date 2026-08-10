@@ -26,10 +26,6 @@
 (defgeneric checkpoint-session (session)
   (:documentation "Snapshot SESSION's solving state to pure data (see checkpoint.lisp)."))
 
-;; Temporary default method returning nil — keeps Task 2 independently green.
-;; Task 3 Step 4 replaces this with a specializing method on cognitive-session.
-(defmethod checkpoint-session ((session t)) nil)
-
 (defun start-session (model student-id problem-id
                       &key model-id event-log session-id)
   "Create a cognitive-session for one student x one problem. State initializes

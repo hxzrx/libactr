@@ -55,6 +55,8 @@
            #:session-model #:session-state #:session-path #:session-log
            #:session-student-id #:session-problem-id #:session-model-id #:session-id
            #:session-step-count #:session-status
-           #:start-session #:step-session #:end-session))
+           #:start-session #:step-session #:end-session
+           ;; Phase 4: checkpoint/restore
+           #:checkpoint-session #:restore-from-checkpoint))
 
 (in-package :mtt)
