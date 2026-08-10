@@ -17,6 +17,10 @@
    (step-count  :accessor session-step-count :initform 0)
    (status      :accessor session-status     :initform :active)))
 
+(defun cognitive-session-p (x)
+  "Type predicate for cognitive-session (defclass does not auto-generate -p)."
+  (typep x 'cognitive-session))
+
 ;; Declared here (method in checkpoint.lisp) so step/end can call it without a
 ;; forward-reference compile warning. checkpoint.lisp adds the specializing method.
 (defgeneric checkpoint-session (session)

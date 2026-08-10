@@ -81,6 +81,13 @@
       (is (eql 1 (getf summary :event-count)))
       (is (equal '(initialize-addition) (getf summary :path))))))
 
+(test cognitive-session-p-recognizes-session
+  "cognitive-session-p is a real defined predicate (defclass does not auto-make -p)."
+  (let ((s (fresh-addition-session)))
+    (is (cognitive-session-p s))
+    (is (not (cognitive-session-p 42)))
+    (is (not (cognitive-session-p nil)))))
+
 (test model-definition-is-not-mutated-by-tracing
   "READ-ONLY SHARING: many sessions tracing against one shared model-definition
    never mutate it — productions/chunk-types/chunks counts are unchanged."
