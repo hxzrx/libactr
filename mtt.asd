@@ -15,6 +15,7 @@
                (:file "src/event-log")
                (:file "src/session")
                (:file "src/checkpoint")
+               (:file "src/kt")
                (:file "src/student-session"))
   :in-order-to ((test-op (test-op "mtt/test"))))
 
@@ -36,6 +37,7 @@
                (:file "tests/test-event-log")
                (:file "tests/test-session")
                (:file "tests/test-checkpoint")
+               (:file "tests/test-kt")
                (:file "tests/test-student-session")))
 
 ;;; Dual-track regression — needs act-r via oracle.
