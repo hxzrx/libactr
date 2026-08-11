@@ -43,3 +43,10 @@
         (is (eq t (kc-event-correct-p (log-event-kc-event r))))
         (is (equal '((goal sum five)) (log-event-intent-summary r)))
         (is (equal '(:on-path initialize-addition nil 0) (log-event-result-summary r)))))))
+
+(test disconnect-log.no-op-for-in-memory-log
+  "disconnect-log on an in-memory event-log is a safe no-op."
+  (let ((log (make-event-log)))
+    (log-append log (make-log-event :student-id "s1"))
+    (is (eql log (disconnect-log log)))
+    (is (= 1 (length (log-all-events log))))))        ; data unaffected

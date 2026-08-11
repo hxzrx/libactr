@@ -49,6 +49,7 @@
            #:log-event-kc-event #:log-event-intent-summary #:log-event-result-summary
            #:make-event-log #:event-log-p
            #:log-append #:log-all-events #:log-events-since #:log-last-seq
+           #:disconnect-log
            #:serialize-event-log #:deserialize-event-log
            ;; Phase 4: cognitive-session
            #:cognitive-session #:cognitive-session-p

@@ -52,29 +52,41 @@ rebind it to nil so each log opens its own independent connection."
           (lambda (k) (string-downcase (symbol-name k))))
         (yason:*symbol-encoder*
           (lambda (s) (string-downcase (symbol-name s)))))
-    (with-output-to-string (s)
-      (yason:encode-plist
-       (list "seq" (log-event-seq e)
-             "student_id" (princ-to-string (log-event-student-id e))
-             "session_id" (princ-to-string (log-event-session-id e))
-             "problem_id" (princ-to-string (log-event-problem-id e))
-             "kc" (let ((ke (log-event-kc-event e)))
-                    (and ke (kc-event-kc ke) (princ-to-string (kc-event-kc ke))))
-             "correct" (let ((ke (log-event-kc-event e))) (and ke (kc-event-correct-p ke)))
-             "intent" (log-event-intent-summary e)
-             "result" (log-event-result-summary e))
-       s))))
+    (let* ((ke (log-event-kc-event e))
+           (kc (and ke (kc-event-kc ke))))
+      (with-output-to-string (s)
+        (yason:encode-plist
+         (list "student_id" (princ-to-string (log-event-student-id e))
+               "session_id" (princ-to-string (log-event-session-id e))
+               "problem_id" (princ-to-string (log-event-problem-id e))
+               "kc" (and kc (princ-to-string kc))
+               "kc_package" (and kc (symbol-package kc) (package-name (symbol-package kc)))
+               "correct" (and ke (kc-event-correct-p ke))
+               "intent" (log-event-intent-summary e)
+               "result" (log-event-result-summary e))
+         s)))))
+
+(defun %coerce-to-list (x)
+  "Recursively coerce yason-parsed vectors to lists (intent/result summaries)."
+  (typecase x
+    (vector (map 'list #'%coerce-to-list x))
+    (list   (mapcar #'%coerce-to-list x))
+    (otherwise x)))
 
 (defun json-to-log-event (json-string)
   (let* ((a (let ((yason:*parse-object-as* :alist)) (yason:parse json-string)))
-         (kc (cdr (assoc "kc" a :test #'string=))))
+         (kc (cdr (assoc "kc" a :test #'string=)))
+         (kcpkg (cdr (assoc "kc_package" a :test #'string=)))
+         (pkg (or (and kcpkg (find-package kcpkg)) (find-package :mtt))))
     (make-log-event
      :seq (or (cdr (assoc "seq" a :test #'string=)) 0)
      :student-id (cdr (assoc "student_id" a :test #'string=))
      :session-id (cdr (assoc "session_id" a :test #'string=))
      :problem-id (cdr (assoc "problem_id" a :test #'string=))
-     :kc-event (when kc (make-kc-event :kc (intern kc :mtt)
-                                       :correct-p (cdr (assoc "correct" a :test #'string=)))))))
+     :kc-event (when kc (make-kc-event :kc (intern kc pkg)
+                                       :correct-p (cdr (assoc "correct" a :test #'string=))))
+     :intent-summary (%coerce-to-list (cdr (assoc "intent" a :test #'string=)))
+     :result-summary (%coerce-to-list (cdr (assoc "result" a :test #'string=))))))
 
 ;; --- protocol specializations ------------------------------------------------
 (defmethod log-append ((log redis-event-log) (event log-event))
@@ -107,6 +119,15 @@ rebind it to nil so each log opens its own independent connection."
 (defmethod log-last-seq ((log redis-event-log))
   (with-redis (log)
     (redis:red-llen (redis-event-log-key log))))
+
+(defmethod disconnect-log ((log redis-event-log))
+  "Close the cl-redis connection if open; idempotent. Does NOT create a connection."
+  (let ((conn (slot-value log 'conn)))
+    (when conn
+      (let ((redis:*connection* conn))
+        (ignore-errors (redis:disconnect)))
+      (setf (slot-value log 'conn) nil)))
+  log)
 
 (defmethod serialize-event-log ((log redis-event-log))
   ;; portable export (Redis is already durable; this is a snapshot)

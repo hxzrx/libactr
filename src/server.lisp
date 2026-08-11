@@ -146,11 +146,16 @@ if requested so Task 4 can install handlers into a running server."
     server))
 
 (defun stop-tutor-server (server)
-  "Stop the Hunchentoot acceptor (soft) if running and clear the slot. Returns
-SERVER. Safe to call multiple times."
+  "Stop the Hunchentoot acceptor (soft) if running, disconnect each student's
+event log (no-op for in-memory; closes redis), and clear the acceptor slot.
+Returns SERVER. Safe to call multiple times."
   (when (server-acceptor server)
     (hunchentoot:stop (server-acceptor server) :soft t))
   (setf (server-acceptor server) nil)
+  (maphash (lambda (id ss)
+             (declare (ignore id))
+             (disconnect-log (mtt:student-session-log ss)))
+           (server-students server))
   server)
 
 (defun register-model (server model-id model adapter)

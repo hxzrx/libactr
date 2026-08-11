@@ -34,6 +34,9 @@
   (:documentation "Events with seq > SEQ (the post-checkpoint window / replay set)."))
 (defgeneric log-last-seq (log)
   (:documentation "Current highest seq (0 if empty)."))
+(defgeneric disconnect-log (log)
+  (:documentation "Release any backend resources held by LOG (e.g. close a socket).
+Idempotent. The in-memory event-log has nothing to release (default no-op)."))
 
 ;; --- in-memory implementation ------------------------------------------------
 (defstruct (event-log (:constructor %make-event-log (events)))
@@ -59,6 +62,10 @@
 (defmethod log-last-seq ((log event-log))
   (let ((n (length (event-log-events log))))
     (if (zerop n) 0 (log-event-seq (aref (event-log-events log) (1- n))))))
+
+(defmethod disconnect-log ((log event-log))
+  ;; In-memory log holds no external resources.
+  log)
 
 ;; --- serialization (pure data, portable) -------------------------------------
 (defun serialize-kc-event (k)
