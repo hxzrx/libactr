@@ -42,7 +42,7 @@ skipped. :p-l is the Bayesian Knowledge Tracing posterior (Corbett & Anderson
 deterministic derivation of the event log (recomputed every call — backend
 agnostic, since EVENTS comes from log-all-events of either backend). KT-PARAMS
 defaults to (make-kt-params); pass a custom set to tune L0/T/G/S."
-  (let ((buckets (make-hash-table :test #'equal)))   ; kc -> (correct total . rev-observations)
+  (let ((buckets (make-hash-table :test #'equal)))   ; kc -> (correct total rev-observations)
     (dolist (e events)
       (let* ((ke (log-event-kc-event e))
              (kc (and ke (kc-event-kc ke))))
