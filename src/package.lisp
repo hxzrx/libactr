@@ -69,6 +69,10 @@
            ;; Phase 5: Redis durable event-log backend (mtt/redis-store system)
            #:redis-event-log #:redis-event-log-p
            #:make-redis-event-log #:redis-event-log-connection
-           #:redis-event-log-key #:redis-event-log-host #:redis-event-log-port))
+           #:redis-event-log-key #:redis-event-log-host #:redis-event-log-port
+           ;; Phase 5: domain-adapter protocol (mtt/server system; lives in :mtt
+           ;; because adapters reference it alongside step-intent / trace-result).
+           #:domain-adapter
+           #:prepare-session #:adapt-action #:step-done?))
 
 (in-package :mtt)

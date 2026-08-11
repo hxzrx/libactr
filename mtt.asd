@@ -68,3 +68,16 @@
 (asdf:defsystem "mtt/redis-store-test"
   :depends-on ("mtt/redis-store" "fiveam")
   :components ((:file "tests/test-redis-store")))
+
+;;; Phase 5 service layer — Hunchentoot + bordeaux-threads (domain-agnostic engine).
+;;; adapter.lisp lives in the :mtt package (it is core-adjacent: the three protocol
+;;; generics are exported from :mtt). server.lisp defines the :mtt/server package.
+(asdf:defsystem "mtt/server"
+  :depends-on ("mtt" "hunchentoot" "bordeaux-threads")
+  :serial t
+  :components ((:file "src/adapter")
+               (:file "src/server")))
+
+(asdf:defsystem "mtt/server-test"
+  :depends-on ("mtt/server" "fiveam")
+  :components ((:file "tests/test-server")))
