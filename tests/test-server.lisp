@@ -209,3 +209,102 @@ event log) in the students registry."
              (let ((ss (gethash "alice" (server-students server))))
                (is (= 2 (mtt:log-last-seq (mtt:student-session-log ss)))))))
       (stop-tutor-server server))))
+
+;;; --- concurrency tests (cover reviewer findings 1, 2, 3) ---------------------
+;;;
+;;; These tests demonstrate the three concurrency fixes structurally:
+;;;   * ensure-student serializes on students-lock  -> exactly one student-session
+;;;     is created when N threads race on the same NEW student-id (no orphaned
+;;;     event log).
+;;;   * server-step-session holds the per-session lock across adapt-action +
+;;;     step-session -> priming side-effects never interleave.
+;;;   * server-step-session re-checks :ended INSIDE the lock -> if a concurrent
+;;;     server-end-session wins the race, the stepper observes :conflict (or
+;;;     :not-found once the handle is remhash'd) rather than stepping an ended
+;;;     session. The outside-lock fast path remains as a cheap rejection.
+
+(test ensure-student.concurrent-same-new-student-id
+  "N threads concurrently call server-start-session on the SAME brand-new
+student-id. Without the students-lock, two callers would each miss the registry
+and create a student-session; the second setf would orphan the first (spliting
+mastery). With the lock, exactly ONE student-session exists afterward, and all
+N session-ids are distinct and registered."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil))
+        (n 16))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (let ((threads
+                   (loop repeat n collect
+                         (bt:make-thread
+                          (lambda ()
+                            (server-start-session server "racer" "1+1" "add"))))))
+             (let ((sids (mapcar #'bt:join-thread threads)))
+               ;; all session-ids are distinct strings
+               (is (= n (length sids)))
+               (is (every #'stringp sids))
+               (is (= n (length (remove-duplicates sids :test #'string=))))
+               ;; exactly ONE student-session was created
+               (is (= 1 (hash-table-count (server-students server))))
+               ;; all N session-handles are registered
+               (is (= n (hash-table-count (server-sessions server))))
+               ;; the single student-session's log is shared by all N sessions
+               (let ((ss (gethash "racer" (server-students server))))
+                 (is (not (null ss)))
+                 (is (= n (length (mtt:student-session-sessions ss))))))))
+      (stop-tutor-server server))))
+
+(test server-step-session.concurrent-step-vs-end-race
+  "N stepper threads and 1 ender thread race against one session. Every stepper
+must return either (values trace-result adapter session) on success or one of
+the sentinels (values nil :conflict) / (values nil :not-found); no stepper ever
+observes a torn write or steps an :ended cognitive-session. The ender either
+returns the summary plist (:status :ended) or (values nil :not-found) if a
+stepper beat it (not currently possible — steppers don't end the session — but
+the assertion covers the contract)."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil))
+        (n 16))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (let ((sid (server-start-session server "racer" "1+1" "add")))
+             ;; spawn N steppers + 1 ender; join all; collect steppers' results
+             (let ((steppers
+                     (loop repeat n collect
+                           (bt:make-thread
+                            (lambda ()
+                              (multiple-value-list
+                               (server-step-session server sid '((type . start))))))))
+                   (ender (bt:make-thread
+                           (lambda ()
+                             (multiple-value-list
+                              (server-end-session server sid))))))
+               (let ((step-results (mapcar #'bt:join-thread steppers))
+                     (end-result (bt:join-thread ender)))
+                 ;; every stepper result is one of: success (non-nil first value)
+                 ;; or :conflict or :not-found
+                 (dolist (r step-results)
+                   (let ((result (first r))
+                         (sentinel (second r)))
+                     (is (or (and (not (null result))
+                                  (mtt:trace-result-p result))
+                             (eq :conflict sentinel)
+                             (eq :not-found sentinel))
+                         (format nil "unexpected stepper result: ~a" r))))
+                 ;; at least one stepper succeeded (the session was :active when
+                 ;; the race began, and the ender cannot win until at least one
+                 ;; stepper has finished queueing on the lock).
+                 (is (some (lambda (r) (mtt:trace-result-p (first r))) step-results))
+                 ;; ender either succeeded (summary plist with :ended) or got
+                 ;; :not-found (impossible today, but contract-checked).
+                 (let ((summary (first end-result))
+                       (sentinel (second end-result)))
+                   (is (or (and (listp summary) (eql :ended (getf summary :status)))
+                           (eq :not-found sentinel))))
+                 ;; invariant: the cognitive-session's status is :ended once the
+                 ;; ender has run (whoever won the race, the session is now ended
+                 ;; OR fully remhash'd). The handle is gone from the registry.
+                 (is (null (gethash sid (server-sessions server))))))))
+      (stop-tutor-server server))))

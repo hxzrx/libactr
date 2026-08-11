@@ -46,16 +46,20 @@ The cognitive-session itself (mtt core) holds no lock slot."))
 ;;; --- tutor-server: the infrastructure-state container -------------------------
 
 (defclass tutor-server ()
-  ((acceptor     :accessor server-acceptor     :initform nil)
-   (port         :reader   server-port         :initarg :port :initform 0)
-   (students     :accessor server-students     :initform (make-hash-table :test #'equal))
-   (sessions     :accessor server-sessions     :initform (make-hash-table :test #'equal))
-   (models       :accessor server-models       :initform (make-hash-table :test #'equal))
-   (redis-config :reader   server-redis-config :initarg :redis-config :initform nil))
+  ((acceptor       :accessor server-acceptor       :initform nil)
+   (port           :reader   server-port           :initarg :port :initform 0)
+   (students       :accessor server-students       :initform (make-hash-table :test #'equal))
+   (students-lock  :reader   server-students-lock  :initform (bt:make-lock "tutor-server.students"))
+   (sessions       :accessor server-sessions       :initform (make-hash-table :test #'equal))
+   (models         :accessor server-models         :initform (make-hash-table :test #'equal))
+   (redis-config   :reader   server-redis-config   :initarg :redis-config :initform nil))
   (:documentation "Infrastructure-state container. Each instance owns its own
 acceptor, registries, and per-student event logs. Multiple tutor-servers can
 coexist (no global mutable state) — the multi-user-safety invariant is
-structural, exactly as in Phase 4's concurrent proof."))
+structural, exactly as in Phase 4's concurrent proof. The students-lock
+serializes the gethash-or-create path in ensure-student so two concurrent
+server-start-session calls for the same NEW student-id cannot orphan one
+caller's student-session/event-log."))
 
 (defun tutor-server-p (x)
   "Type predicate for tutor-server."
@@ -117,11 +121,21 @@ model by id. Returns SERVER."
 (defun ensure-student (server student-id)
   "Look up or create the student-session for STUDENT-ID. The student-session
 owns the per-student (possibly durable) event log shared across all of that
-student's cognitive-sessions."
-  (or (gethash student-id (server-students server))
-      (setf (gethash student-id (server-students server))
-            (mtt:start-student-session student-id
-                                       :event-log (event-log-for server student-id)))))
+student's cognitive-sessions.
+
+Concurrency: the gethash-or-create path is serialized by the server's
+students-lock. Without it, two concurrent server-start-session calls for the
+same NEW student-id would both miss the registry, both create a student-session
+(with separate event logs), and the second setf would orphan the first —
+silently splitting that student's mastery across two logs. The lock is held
+only for the hash-table transaction, not for downstream session-start work."
+  (let ((table (server-students server))
+        (lock (server-students-lock server)))
+    (bt:with-lock-held (lock)
+      (or (gethash student-id table)
+          (setf (gethash student-id table)
+                (mtt:start-student-session student-id
+                                           :event-log (event-log-for server student-id)))))))
 
 (defun server-start-session (server student-id problem-id model-id)
   "Start a new cognitive-session for STUDENT-ID working on PROBLEM-ID against the
@@ -156,19 +170,31 @@ step-intent). Returns three values:
   (values trace-result adapter session)   ; on success
   (values nil :not-found)                 ; unknown session-id
   (values nil :conflict)                  ; session already ended
-The trace itself (model lookup, state update, event append) is serialized by
-the session-handle's per-session bordeaux lock — concurrent calls against the
-same session-id do not interleave on the cognitive-session."
+
+Concurrency: the per-session bordeaux lock serializes the WHOLE step —
+adapt-action (which may prime the retrieval buffer as a side-effect) AND
+step-session (model lookup + state update + event append). An outside-lock
+fast-path :ended check is kept for cheap rejection, but the authoritative
+:ended check is INSIDE the lock to close the TOCTOU window against a concurrent
+server-end-session."
   (let ((handle (gethash session-id (server-sessions server))))
     (unless handle
       (return-from server-step-session (values nil :not-found)))
     (let ((session (handle-session handle))
-          (adapter (handle-adapter handle)))
+          (adapter (handle-adapter handle))
+          (lock (handle-lock handle)))
+      ;; Outside-lock fast path: cheap rejection of clearly-ended sessions.
       (when (eq :ended (mtt:session-status session))
         (return-from server-step-session (values nil :conflict)))
-      (let ((intent (mtt:adapt-action adapter action session))
-            (lock (handle-lock handle)))
-        (bt:with-lock-held (lock)
+      (bt:with-lock-held (lock)
+        ;; Authoritative re-check under the lock: a concurrent server-end-session
+        ;; may have ended this session between the fast-path check and lock
+        ;; acquisition.
+        (when (eq :ended (mtt:session-status session))
+          (return-from server-step-session (values nil :conflict)))
+        ;; adapt-action is inside the lock because it may mutate the session's
+        ;; retrieval buffer; priming + step must be serialized together.
+        (let ((intent (mtt:adapt-action adapter action session)))
           (values (mtt:step-session session intent) adapter session))))))
 
 (defun server-end-session (server session-id)
