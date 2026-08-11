@@ -114,3 +114,36 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
                           :output :string :error-output :string))
       (sleep 1)
       (ignore-errors (uiop:delete-directory-tree dir :validate t)))))
+
+(test redis-event-log.non-nil-summaries-round-trip
+  "REGRESSION (C1): a log-event with NON-NIL intent-summary and result-summary
+— the shape produced on EVERY real traced step (see src/session.lisp:83-84,
+intent-summary = step-intent-assignments like ((goal sum five)), result-summary
+= (status production feedback alt-count) like (:on-path initialize-addition
+nil 0)) — must round-trip through log-event-to-json + log-all-events WITHOUT
+crashing yason. Pre-fix, yason's default *symbol-encoder* (ENCODE-SYMBOL-ERROR)
+crashed with \"No policy for symbols as keys defined\" on the symbol values.
+The fix binds *symbol-encoder* / *symbol-key-encoder* to a lowercase-name
+converter (mirrors src/http-api.lisp's json-encode). The existing 9 tests
+passed only because their fixtures used make-log-event with default nil
+summaries — this test closes that gap."
+  (with-test-redis (conn port)
+    (let* ((rlog (make-redis-event-log :key "mtt:test:ni" :host "127.0.0.1" :port port))
+           ;; the exact non-nil summary shapes produced by step-session
+           (ev (make-log-event
+                :student-id "s1" :session-id "sess-x" :problem-id "5+2"
+                :kc-event (make-kc-event :kc 'add :correct-p t)
+                :intent-summary '((goal sum five) (goal count zero))
+                :result-summary (list :on-path 'initialize-addition nil 0))))
+      ;; MUST NOT crash — pre-fix this signalled
+      ;; "No policy for symbols as keys defined" inside yason:encode-plist.
+      (is (eql rlog (log-append rlog ev)))
+      (is (= 1 (log-last-seq rlog)))
+      ;; round-trip: log-all-events decodes the stored JSON back; assert we
+      ;; got 1 event back with the kc/correct-p preserved (JSON loses the
+      ;; symbol summaries on decode — json-to-log-event only reconstructs kc
+      ;; — but the round-trip must complete without error).
+      (let ((all (log-all-events rlog)))
+        (is (= 1 (length all)))
+        (is (eql 1 (log-event-seq (first all))))
+        (is (eql t (kc-event-correct-p (log-event-kc-event (first all)))))))))

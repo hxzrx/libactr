@@ -17,7 +17,6 @@
 ;;; closes over the tutor-server instance passed to make-handlers /
 ;;; install-handlers!.
 (in-package :mtt/server)
-(ql:quickload :yason :silent t)
 
 ;;; --- JSON helpers ------------------------------------------------------------
 ;;;

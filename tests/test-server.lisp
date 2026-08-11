@@ -189,25 +189,34 @@ action to an on-path intent), check mastery aggregates, end the session."
       (stop-tutor-server server))))
 
 (test server-shared-student-log-across-sessions
-  "Two sessions under the same student share ONE student-session (and thus one
-event log) in the students registry."
+  "Two SEQUENTIAL sessions under the same student share ONE student-session
+(and thus one event log) in the students registry. server-start-session is
+IDEMPOTENT per student: while one cognitive-session is ACTIVE, subsequent
+same-student starts return the existing session's id. To get a SECOND distinct
+session for the same student, the first must be ended first — which mirrors
+the real lifecycle (one active problem attempt per student at a time, but the
+shared student log accumulates across all of that student's attempts)."
   (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
     (unwind-protect
          (progn
            (multiple-value-bind (md adapter) (%stub-model+adapter)
              (register-model server "add" md adapter))
-           (let ((sid1 (server-start-session server "alice" "5+2" "add"))
-                 (sid2 (server-start-session server "alice" "3+1" "add")))
-             (is (not (equal sid1 sid2)))
-             ;; one student-session for both sessions
-             (is (= 1 (hash-table-count (server-students server))))
-             ;; both sessions registered
-             (is (= 2 (hash-table-count (server-sessions server))))
-             ;; stepping both contributes 2 events on the shared student log
+           (let ((sid1 (server-start-session server "alice" "5+2" "add")))
+             ;; step sid1 -> 1 event on the shared student log
              (server-step-session server sid1 '((type . start)))
-             (server-step-session server sid2 '((type . start)))
-             (let ((ss (gethash "alice" (server-students server))))
-               (is (= 2 (mtt:log-last-seq (mtt:student-session-log ss)))))))
+             ;; end sid1 -> handle remhash'd, cognitive-session :ended; the
+             ;; next same-student start can now create a NEW session.
+             (server-end-session server sid1)
+             (let ((sid2 (server-start-session server "alice" "3+1" "add")))
+               (is (not (equal sid1 sid2)))
+               ;; one student-session for both sessions
+               (is (= 1 (hash-table-count (server-students server))))
+               ;; only sid2 is currently active (sid1's handle was remhash'd)
+               (is (= 1 (hash-table-count (server-sessions server))))
+               ;; step sid2 -> 2 events total on the shared student log
+               (server-step-session server sid2 '((type . start)))
+               (let ((ss (gethash "alice" (server-students server))))
+                 (is (= 2 (mtt:log-last-seq (mtt:student-session-log ss))))))))
       (stop-tutor-server server))))
 
 ;;; --- concurrency tests (cover reviewer findings 1, 2, 3) ---------------------
@@ -225,10 +234,12 @@ event log) in the students registry."
 
 (test ensure-student.concurrent-same-new-student-id
   "N threads concurrently call server-start-session on the SAME brand-new
-student-id. Without the students-lock, two callers would each miss the registry
-and create a student-session; the second setf would orphan the first (spliting
-mastery). With the lock, exactly ONE student-session exists afterward, and all
-N session-ids are distinct and registered."
+student-id. server-start-session is IDEMPOTENT under same-student concurrent
+starts: the first caller through the students-lock creates the cognitive-
+session; the rest observe it ACTIVE and return its id. So 16 concurrent
+same-student starts yield exactly ONE cognitive-session (no pushnew-on-shared-
+list race, no server-sessions hash-table setf race), and ALL 16 returned ids
+are EQUAL. This is deterministic — no flake."
   (let ((server (start-tutor-server :port 0 :start-acceptor-p nil))
         (n 16))
     (unwind-protect
@@ -241,18 +252,20 @@ N session-ids are distinct and registered."
                           (lambda ()
                             (server-start-session server "racer" "1+1" "add"))))))
              (let ((sids (mapcar #'bt:join-thread threads)))
-               ;; all session-ids are distinct strings
+               ;; all 16 calls returned a string
                (is (= n (length sids)))
                (is (every #'stringp sids))
-               (is (= n (length (remove-duplicates sids :test #'string=))))
+               ;; all 16 returned ids are EQUAL — the idempotent invariant
+               (is (= 1 (length (remove-duplicates sids :test #'string=)))
+                   (format nil "expected all ~a sids equal, got ~a" n sids))
                ;; exactly ONE student-session was created
                (is (= 1 (hash-table-count (server-students server))))
-               ;; all N session-handles are registered
-               (is (= n (hash-table-count (server-sessions server))))
-               ;; the single student-session's log is shared by all N sessions
+               ;; exactly ONE cognitive-session handle is registered
+               (is (= 1 (hash-table-count (server-sessions server))))
+               ;; the single student-session has exactly one cognitive-session id
                (let ((ss (gethash "racer" (server-students server))))
                  (is (not (null ss)))
-                 (is (= n (length (mtt:student-session-sessions ss))))))))
+                 (is (= 1 (length (mtt:student-session-sessions ss))))))))
       (stop-tutor-server server))))
 
 (test server-step-session.concurrent-step-vs-end-race
@@ -527,12 +540,14 @@ pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
 
 (test http.concurrent-different-sessions-parallel
   "N threads each drive a DIFFERENT session over HTTP; all succeed independently
-(Phase 5 isolation under real concurrent HTTP traffic). The server starts 1
-student-session (shared log) and N distinct cognitive-sessions under it; each
-thread POSTs a /session/step to ITS OWN session-id. Every step fires
-initialize-addition under that session's per-session lock — no shared mutable
-target across threads, so all N responses are 200 and there is no crosstalk.
-This is the Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
+(Phase 5 isolation under real concurrent HTTP traffic). The server starts N
+DISTINCT student-sessions (one per student-id) — one cognitive-session each —
+because server-start-session is now IDEMPOTENT per student (a same-student
+second start returns the existing active session's id). Each thread POSTs a
+/session/step to ITS OWN session-id. Every step fires initialize-addition
+under that session's per-session lock — no shared mutable target across
+threads, so all N responses are 200 and there is no crosstalk. This is the
+Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
   (let* ((port (%find-free-port))
          (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
     (unwind-protect
@@ -542,16 +557,18 @@ This is the Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                                       (mtt/addition-adapter:make-addition-adapter))
            (sleep 0.3)
            (let* ((n 6)
-                  ;; Pre-start N sessions SERIALLY (so session creation isn't
-                  ;; part of the parallel stress — we want the step path
-                  ;; parallelized, exactly per the brief).
-                  (sids (loop repeat n collect
+                  ;; Pre-start N sessions SERIALLY under N DIFFERENT student-ids
+                  ;; (u1..u6) — server-start-session is now idempotent per
+                  ;; student, so reusing one student-id would collapse to 1
+                  ;; session. We want N genuinely-distinct sessions for the
+                  ;; parallel-step isolation proof.
+                  (sids (loop for i from 1 to n collect
                               (cdr (assoc "session_id"
                                           (yason:parse
                                            (nth-value 0
                                             (dex:post
                                              (format nil "http://127.0.0.1:~a/session/start" port)
-                                             :content "{\"student_id\":\"u\",\"problem_id\":\"5+2\",\"model_id\":\"add\"}"))
+                                             :content (format nil "{\"student_id\":\"u~a\",\"problem_id\":\"5+2\",\"model_id\":\"add\"}" i)))
                                            :object-as :alist)
                                           :test #'string=))))
                   ;; DEVIATION (closure capture): (let ((sid sid)) ...) inside

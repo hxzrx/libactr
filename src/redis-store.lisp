@@ -6,8 +6,6 @@
 ;;;; thread-per-request each call dynamically rebinds *connection* to THIS log's
 ;;;; own connection. No global mutable state in this file.
 (in-package :mtt)
-(ql:quickload :cl-redis :silent t)
-(ql:quickload :yason :silent t)
 
 (defclass redis-event-log ()
   ((key  :reader redis-event-log-key :initarg :key)
@@ -40,19 +38,32 @@ rebind it to nil so each log opens its own independent connection."
 ;; NOTE: yason's default *symbol-key-encoder* is ENCODE-SYMBOL-KEY-ERROR, so
 ;; barred keywords like :|seq| signal an error. We use plain STRING keys which
 ;; yason:encode-plist accepts directly and produces exact-case JSON keys.
+;; HOWEVER, the VALUE positions of "intent" / "result" carry live symbols on
+;; every real traced step — intent-summary is step-intent-assignments like
+;; ((goal sum five) ...), and result-summary is (status production feedback
+;; alt-count) where status is a keyword (:on-path / :off-path / ...). yason's
+;; default *symbol-encoder* is ENCODE-SYMBOL-ERROR, which crashes on any
+;; symbol VALUE — so we bind BOTH *symbol-key-encoder* and *symbol-encoder*
+;; to a lowercase-name converter (mirrors src/http-api.lisp's json-encode).
+;; Without this, the first real (non-nil-summary) event crashes encoding with
+;; "No policy for symbols as keys defined".
 (defun log-event-to-json (e)
-  (with-output-to-string (s)
-    (yason:encode-plist
-     (list "seq" (log-event-seq e)
-           "student_id" (princ-to-string (log-event-student-id e))
-           "session_id" (princ-to-string (log-event-session-id e))
-           "problem_id" (princ-to-string (log-event-problem-id e))
-           "kc" (let ((ke (log-event-kc-event e)))
-                  (and ke (kc-event-kc ke) (princ-to-string (kc-event-kc ke))))
-           "correct" (let ((ke (log-event-kc-event e))) (and ke (kc-event-correct-p ke)))
-           "intent" (log-event-intent-summary e)
-           "result" (log-event-result-summary e))
-     s)))
+  (let ((yason:*symbol-key-encoder*
+          (lambda (k) (string-downcase (symbol-name k))))
+        (yason:*symbol-encoder*
+          (lambda (s) (string-downcase (symbol-name s)))))
+    (with-output-to-string (s)
+      (yason:encode-plist
+       (list "seq" (log-event-seq e)
+             "student_id" (princ-to-string (log-event-student-id e))
+             "session_id" (princ-to-string (log-event-session-id e))
+             "problem_id" (princ-to-string (log-event-problem-id e))
+             "kc" (let ((ke (log-event-kc-event e)))
+                    (and ke (kc-event-kc ke) (princ-to-string (kc-event-kc ke))))
+             "correct" (let ((ke (log-event-kc-event e))) (and ke (kc-event-correct-p ke)))
+             "intent" (log-event-intent-summary e)
+             "result" (log-event-result-summary e))
+       s))))
 
 (defun json-to-log-event (json-string)
   (let* ((a (let ((yason:*parse-object-as* :alist)) (yason:parse json-string)))

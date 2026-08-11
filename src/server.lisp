@@ -93,9 +93,11 @@ The cognitive-session itself (mtt core) holds no lock slot."))
 acceptor, registries, and per-student event logs. Multiple tutor-servers can
 coexist (no global mutable state) — the multi-user-safety invariant is
 structural, exactly as in Phase 4's concurrent proof. The students-lock
-serializes the gethash-or-create path in ensure-student so two concurrent
-server-start-session calls for the same NEW student-id cannot orphan one
-caller's student-session/event-log."))
+serializes the whole ensure-student + active-session-check + create-and-register
+path in server-start-session: same-student concurrent starts are idempotent
+(first caller creates, rest observe that active session and return its id),
+eliminating the gethash/setf race that would otherwise orphan a
+student-session/event-log or push a duplicate session onto the shared list."))
 
 (defun tutor-server-p (x)
   "Type predicate for tutor-server."
@@ -163,19 +165,27 @@ model by id. Returns SERVER."
 owns the per-student (possibly durable) event log shared across all of that
 student's cognitive-sessions.
 
-Concurrency: the gethash-or-create path is serialized by the server's
-students-lock. Without it, two concurrent server-start-session calls for the
-same NEW student-id would both miss the registry, both create a student-session
-(with separate event logs), and the second setf would orphan the first —
-silently splitting that student's mastery across two logs. The lock is held
-only for the hash-table transaction, not for downstream session-start work."
-  (let ((table (server-students server))
-        (lock (server-students-lock server)))
-    (bt:with-lock-held (lock)
-      (or (gethash student-id table)
-          (setf (gethash student-id table)
-                (mtt:start-student-session student-id
-                                           :event-log (event-log-for server student-id)))))))
+Concurrency: this function is NOT thread-safe by itself — callers must hold
+the server's students-lock (server-start-session does). The lock serializes
+the gethash-or-create path so two concurrent server-start-session calls for
+the same NEW student-id cannot orphan one caller's student-session/event-log."
+  (let ((table (server-students server)))
+    (or (gethash student-id table)
+        (setf (gethash student-id table)
+              (mtt:start-student-session student-id
+                                         :event-log (event-log-for server student-id))))))
+
+(defun find-active-session-id (server student-session)
+  "Return the session-id of the first ACTIVE cognitive-session registered under
+STUDENT-SESSION, or nil if the student has no active session. NOT thread-safe
+by itself — callers must hold the server's students-lock (so the sessions
+registry and the per-session cognitive-session status are observed
+consistently)."
+  (loop :for sid :in (mtt:student-session-sessions student-session)
+        :for handle = (gethash sid (server-sessions server))
+        :when (and handle
+                   (eq :active (mtt:session-status (handle-session handle))))
+        :return sid))
 
 (defun server-start-session (server student-id problem-id model-id)
   "Start a new cognitive-session for STUDENT-ID working on PROBLEM-ID against the
@@ -183,25 +193,39 @@ pre-registered MODEL-ID. Reuses (or creates) the student-session so the event
 log is shared across the student's sessions. Runs the adapter's prepare-session,
 registers the cognitive-session under the student, installs a session-handle
 (session + per-session lock + adapter) in the sessions registry, and returns
-the new session-id (string)."
+the new session-id (string).
+
+IDEMPOTENT UNDER SAME-STUDENT CONCURRENT STARTS: if STUDENT-ID already has an
+ACTIVE cognitive-session, return that session's id WITHOUT creating a new one.
+This eliminates the same-student concurrent-start race (no second session is
+created, no pushnew-on-shared-list race, no server-sessions hash-table setf
+race — all 16 concurrent callers observe the same active session-id). The
+active-check + create is serialized under the server's students-lock: the
+first caller through the lock creates the session; the rest see it active and
+return its id. Different students don't conflict on the student-session object
+but share the lock — acceptable for Phase 5 scale; the per-session step lock
+(the hot path) remains independent."
   (let ((entry (gethash model-id (server-models server))))
     (unless entry
       (error "unknown model-id ~a" model-id))
-    (let* ((model (car entry))
-           (adapter (cdr entry))
-           (ss (ensure-student server student-id))
-           (sid (make-session-id))
-           (session (mtt:start-session model student-id problem-id
-                                       :event-log (mtt:student-session-log ss)
-                                       :model-id model-id :session-id sid)))
-      (mtt:prepare-session adapter session problem-id)
-      (mtt:register-cognitive-session ss session)
-      (setf (gethash sid (server-sessions server))
-            (make-instance 'session-handle
-                           :session session
-                           :lock (bt:make-lock (format nil "session-~a" sid))
-                           :adapter adapter))
-      sid)))
+    (let ((model (car entry))
+          (adapter (cdr entry))
+          (lock (server-students-lock server)))
+      (bt:with-lock-held (lock)
+        (let ((ss (ensure-student server student-id)))
+          (or (find-active-session-id server ss)
+              (let* ((sid (make-session-id))
+                     (session (mtt:start-session model student-id problem-id
+                                                 :event-log (mtt:student-session-log ss)
+                                                 :model-id model-id :session-id sid)))
+                (mtt:prepare-session adapter session problem-id)
+                (mtt:register-cognitive-session ss session)
+                (setf (gethash sid (server-sessions server))
+                      (make-instance 'session-handle
+                                     :session session
+                                     :lock (bt:make-lock (format nil "session-~a" sid))
+                                     :adapter adapter))
+                sid)))))))
 
 (defun server-step-session (server session-id action)
   "Trace one student step against the session registered under SESSION-ID.
