@@ -5,7 +5,8 @@
 (defpackage :mtt/addition-tutor
   (:use :cl)
   (:nicknames :addition-tutor)
-  (:export #:make-tutor #:tutor-step #:demonstrate))
+  (:export #:make-tutor #:tutor-step #:demonstrate
+           #:load-tutor-model #:dm-next #:chunk-slot-val))
 (in-package :mtt/addition-tutor)
 
 ;; --- buggy library (mtt-authored, each with feedback) -------------------------

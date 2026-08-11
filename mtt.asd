@@ -88,3 +88,15 @@
 (asdf:defsystem "mtt/server-test"
   :depends-on ("mtt/server" "fiveam")
   :components ((:file "tests/test-server")))
+
+;;; Phase 5 Task 5 — reference addition domain adapter (reuses mtt/addition-tutor
+;;; model-load + dm priming; implements the 3-method adapter protocol against the
+;;; tutor-server). mtt/addition-adapter-test depends on mtt/server-test because
+;;; the test file joins the :mtt/server FiveAM suite defined in test-server.lisp.
+(asdf:defsystem "mtt/addition-adapter"
+  :depends-on ("mtt/server" "mtt/addition-tutor")
+  :components ((:file "src/addition-adapter")))
+
+(asdf:defsystem "mtt/addition-adapter-test"
+  :depends-on ("mtt/addition-adapter" "mtt/server-test" "fiveam")
+  :components ((:file "tests/test-addition-adapter")))
