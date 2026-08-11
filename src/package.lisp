@@ -58,6 +58,13 @@
            #:start-session #:step-session #:end-session
            #:session-last-checkpoint
            ;; Phase 4: checkpoint/restore
-           #:checkpoint-session #:restore-from-checkpoint))
+           #:checkpoint-session #:restore-from-checkpoint
+           ;; Phase 5: student-session
+           #:student-session #:student-session-p
+           #:student-session-student-id #:student-session-log
+           #:student-session-sessions #:student-session-status
+           #:start-student-session #:end-student-session
+           #:register-cognitive-session
+           #:compute-mastery))
 
 (in-package :mtt)
