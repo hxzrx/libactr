@@ -58,3 +58,13 @@
 (asdf:defsystem "mtt/image"
   :depends-on ("mtt")
   :components ((:file "examples/image-smoke")))
+
+;;; Phase 5 durable event-log backend — cl-redis (AOF). Own suite :mtt/redis-store.
+(asdf:defsystem "mtt/redis-store"
+  :depends-on ("mtt" "cl-redis" "yason")
+  :components ((:file "src/redis-store"))
+  :in-order-to ((test-op (test-op "mtt/redis-store-test"))))
+
+(asdf:defsystem "mtt/redis-store-test"
+  :depends-on ("mtt/redis-store" "fiveam")
+  :components ((:file "tests/test-redis-store")))

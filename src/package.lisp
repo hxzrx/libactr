@@ -43,7 +43,7 @@
            #:path-continuity-strategy
            #:trace-step
            ;; Phase 4: event log
-           #:log-event #:make-log-event #:log-event-p
+           #:log-event #:make-log-event #:log-event-p #:copy-log-event
            #:log-event-seq #:log-event-timestamp
            #:log-event-student-id #:log-event-session-id #:log-event-problem-id
            #:log-event-kc-event #:log-event-intent-summary #:log-event-result-summary
@@ -65,6 +65,10 @@
            #:student-session-sessions #:student-session-status
            #:start-student-session #:end-student-session
            #:register-cognitive-session
-           #:compute-mastery))
+           #:compute-mastery
+           ;; Phase 5: Redis durable event-log backend (mtt/redis-store system)
+           #:redis-event-log #:redis-event-log-p
+           #:make-redis-event-log #:redis-event-log-connection
+           #:redis-event-log-key #:redis-event-log-host #:redis-event-log-port))
 
 (in-package :mtt)
