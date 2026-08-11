@@ -19,7 +19,9 @@
            ;; slot readers/accessors used by tests and (Task 4) HTTP handlers
            #:server-acceptor #:server-port
            #:server-students #:server-sessions #:server-models
-           #:server-redis-config))
+           #:server-redis-config
+           ;; Task 4 — per-instance HTTP dispatch (subclass of easy-acceptor)
+           #:tutor-acceptor #:tutor-acceptor-dispatch-table))
 (in-package :mtt/server)
 
 ;;; Forward declarations for the soft mtt/redis-store dependency. The
@@ -32,6 +34,40 @@
 (declaim (ftype (function (&key (:key string) (:host string) (:port integer))
                           (values t &optional))
                 mtt:make-redis-event-log))
+
+;;; Forward declaration for install-handlers! (defined in src/http-api.lisp,
+;;; loaded AFTER this file per mtt.asd :serial t). start-tutor-server calls it
+;;; at runtime; the notinline declaim lets the call compile before http-api is
+;;; loaded without a style-warning, and explicitly permits the late redefinition.
+(declaim (notinline install-handlers!))
+
+;;; --- tutor-acceptor: per-instance dispatch table -----------------------------
+;;;
+;;; Hunchentoot's `easy-acceptor` reads the GLOBAL `hunchentoot:*dispatch-table*`
+;;; (special variable) in its `acceptor-dispatch-request` method. There is no
+;;; exported per-acceptor dispatch slot. To preserve the multi-tutor-server
+;;; isolation invariant (multiple servers can coexist with no shared/global
+;;; mutable state — server.lisp line 58), we subclass `easy-acceptor` with our
+;;; own dispatch-table slot and specialize `acceptor-dispatch-request` to
+;;; consult THAT instead of the global. install-handlers! (http-api.lisp) sets
+;;; this slot. Each tutor-server's dispatchers close over that server's
+;;; handlers, which close over the server instance — so the dispatcher graph
+;;; is structurally isolated per server.
+
+(defclass tutor-acceptor (hunchentoot:easy-acceptor)
+  ((dispatch-table :accessor tutor-acceptor-dispatch-table :initform nil))
+  (:documentation "Subclass of easy-acceptor with a per-instance dispatch-table
+slot, so each tutor-server has its own dispatcher list (no shared global
+hunchentoot:*dispatch-table* state)."))
+
+(defmethod hunchentoot:acceptor-dispatch-request ((acceptor tutor-acceptor) request)
+  "Iterate the per-instance dispatch-table; on a miss, defer to the next method
+(easy-acceptor's default, which would consult hunchentoot:*dispatch-table* —
+empty by default in this deployment)."
+  (loop :for dispatcher :in (tutor-acceptor-dispatch-table acceptor)
+        :for action = (funcall dispatcher request)
+        :when action :return (funcall action)
+        :finally (return (call-next-method))))
 
 ;;; --- session-handle: per-session cognitive-session + lock + adapter -----------
 
@@ -95,11 +131,15 @@ if requested so Task 4 can install handlers into a running server."
   (let ((server (make-instance 'tutor-server :port port :redis-config redis-config)))
     (when start-acceptor-p
       (setf (server-acceptor server)
-            (make-instance 'hunchentoot:easy-acceptor :port port
+            (make-instance 'tutor-acceptor :port port
                            :taskmaster (make-instance
                                         'hunchentoot:one-thread-per-connection-taskmaster)))
-      ;; dispatch table is populated by http-api (Task 4); start anyway so a
-      ;; bare server is operational once handlers are installed.
+      ;; Wire the 5 HTTP endpoint handlers (defined in http-api.lisp) into the
+      ;; acceptor's per-instance dispatch table BEFORE hunchentoot:start so
+      ;; they are live from the moment the acceptor starts accepting
+      ;; connections. Done only when start-acceptor-p is true (tests use
+      ;; :start-acceptor-p nil and drive handle-* directly).
+      (install-handlers! server)
       (hunchentoot:start (server-acceptor server)))
     server))
 

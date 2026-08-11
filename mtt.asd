@@ -72,11 +72,18 @@
 ;;; Phase 5 service layer — Hunchentoot + bordeaux-threads (domain-agnostic engine).
 ;;; adapter.lisp lives in the :mtt package (it is core-adjacent: the three protocol
 ;;; generics are exported from :mtt). server.lisp defines the :mtt/server package.
+;;; http-api.lisp (Task 4) loads AFTER server.lisp because it references
+;;; tutor-server accessors and the server-* ops defined there; it provides
+;;; install-handlers!, which start-tutor-server (in server.lisp) calls at
+;;; runtime. server.lisp carries a (declaim (notinline install-handlers!)) to
+;;; silence the undefined-function compile-time warning; yason is pulled in for
+;;; JSON encode/decode at the HTTP boundary.
 (asdf:defsystem "mtt/server"
-  :depends-on ("mtt" "hunchentoot" "bordeaux-threads")
+  :depends-on ("mtt" "hunchentoot" "bordeaux-threads" "yason")
   :serial t
   :components ((:file "src/adapter")
-               (:file "src/server")))
+               (:file "src/server")
+               (:file "src/http-api")))
 
 (asdf:defsystem "mtt/server-test"
   :depends-on ("mtt/server" "fiveam")

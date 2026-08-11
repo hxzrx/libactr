@@ -308,3 +308,143 @@ the assertion covers the contract)."
                  ;; OR fully remhash'd). The handle is gone from the registry.
                  (is (null (gethash sid (server-sessions server))))))))
       (stop-tutor-server server))))
+
+
+;;; --- Phase 5 Task 4: HTTP handler-logic tests -------------------------------
+;;;
+;;; These tests exercise the PURE handler-logic functions (handle-start,
+;;; handle-step, handle-end, handle-mastery, handle-health) directly, NOT the
+;;; Hunchentoot wrappers. Each logic fn has signature (server parsed-body) →
+;;; (values response-plist http-status). Parsed-body is the alist produced by
+;;; yason:parse with *parse-object-as* :alist (string keys).
+;;;
+;;; DEVIATION FROM BRIEF (noted): the brief's http.handle-start-step-end test
+;;; asserts that a step AFTER handle-end yields 409 (:conflict). Per Task 3's
+;;; server-end-session contract, however, end takes the session's lock and
+;;; prog1 (mtt:end-session ...) (remhash ...) — the handle is removed atomically
+;;; with the :ended marking. A subsequent step therefore finds NO handle and
+;;; returns (values nil :not-found) → 404, not 409. The :conflict (409) path is
+;;; only reachable in the step-vs-end race where a stepper reads the handle
+;;; before the ender acquires the lock, then observes the (now :ended) session
+;;; in its outside-lock fast path (server-step-session lines 187-188). That
+;;; path is covered by server-step-session.concurrent-step-vs-end-race above
+;;; and by http.step-conflict-via-ended-handle below (which re-inserts an
+;;; :ended handle to deterministically exercise 409). The brief's verbatim
+;;; assertion would never see 409 in a sequential test.
+;;;
+;;; DEVIATION FROM BRIEF (paren typos): the brief's http.errors test has 1
+;;; extra close-paren in each of the unknown-model clause (line: ("model_id"
+;;; . "nope")))) — should be 3 closes: pair, alist, handle-start, leaving mvb
+;;; open for the body) and the mastery clause (line: "ghost")) — should be 1
+;;; close, just handle-mastery). Without these fixes the file does not read.
+
+(test http.handle-start-step-end
+  "Pure handler-logic lifecycle: handle-start -> handle-step (200, :on-path) ->
+handle-end (200, :ok t) -> handle-step again (404 — Task 3's server-end-session
+remhashes the handle, so a sequential post-end step is :not-found, not
+:conflict). The :conflict path is exercised separately below."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (multiple-value-bind (resp status)
+               (mtt/server::handle-start server '(("student_id" . "alice")
+                                                  ("problem_id" . "5+2")
+                                                  ("model_id" . "add")))
+             (is (= 200 status))
+             (is (stringp (getf resp :session_id)))
+             (let ((sid (getf resp :session_id)))
+               ;; step (stub maps to on-path)
+               (multiple-value-bind (r2 s2)
+                   (mtt/server::handle-step server `(("session_id" . ,sid)
+                                                     ("action" ((type . start)))))
+                 (is (= 200 s2))
+                 (is (eq :on-path (getf r2 :status))))
+               ;; end
+               (multiple-value-bind (r3 s3)
+                   (mtt/server::handle-end server `(("session_id" . ,sid)))
+                 (is (= 200 s3))
+                 (is (eql t (getf r3 :ok))))
+               ;; step after end -> 404 (NOT 409). server-end-session remhashes
+               ;; the handle atomically with marking :ended, so a sequential
+               ;; post-end step sees no handle -> :not-found -> 404. Brief said
+               ;; 409; see deviation note above.
+               (multiple-value-bind (r4 s4)
+                   (mtt/server::handle-step server `(("session_id" . ,sid)
+                                                     ("action" ((type . start)))))
+                 (declare (ignore r4))
+                 (is (= 404 s4))))))
+      (stop-tutor-server server))))
+
+(test http.errors
+  "Error-code mapping: unknown session -> 404, unknown model_id -> 404, unknown
+student (mastery) -> 404."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           ;; unknown session -> 404
+           (multiple-value-bind (_ s)
+               (mtt/server::handle-step server '(("session_id" . "nope")
+                                                 ("action" ((type . start)))))
+             (declare (ignore _)) (is (= 404 s)))
+           ;; unknown model -> 404
+           (multiple-value-bind (_ s)
+               (mtt/server::handle-start server '(("student_id" . "a")
+                                                  ("problem_id" . "p")
+                                                  ("model_id" . "nope")))
+             (declare (ignore _)) (is (= 404 s)))
+           ;; mastery for unknown student -> 404
+           (multiple-value-bind (_ s)
+               (mtt/server::handle-mastery server "ghost")
+             (declare (ignore _)) (is (= 404 s))))
+      (stop-tutor-server server))))
+
+(test http.step-conflict-via-ended-handle
+  "Deterministically exercise the :conflict (409) path: register a session,
+capture its handle, end it (which remhashes), then re-insert the (now :ended)
+handle and verify handle-step returns 409. This mirrors the race-window shape
+that server-step-session.concurrent-step-vs-end-race tests at the programmatic
+layer: a handle exists in the registry pointing at an :ended cognitive-session."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (let ((sid (server-start-session server "alice" "5+2" "add")))
+             (is (stringp sid))
+             (let ((handle (gethash sid (server-sessions server))))
+               (is (not (null handle)))
+               ;; end: remhashes the handle, marks the cognitive-session :ended.
+               (multiple-value-bind (r3 s3)
+                   (mtt/server::handle-end server `(("session_id" . ,sid)))
+                 (is (= 200 s3))
+                 (is (eql t (getf r3 :ok))))
+               (is (null (gethash sid (server-sessions server))))
+               ;; re-insert the (now :ended) handle to force the :conflict path.
+               (setf (gethash sid (server-sessions server)) handle)
+               (multiple-value-bind (r4 s4)
+                   (mtt/server::handle-step server `(("session_id" . ,sid)
+                                                     ("action" ((type . start)))))
+                 (declare (ignore r4))
+                 (is (= 409 s4))))))
+      (stop-tutor-server server))))
+
+(test http.handle-health-shape
+  "handle-health returns (values plist 200); plist has :status \"ok\" and
+counter keys (delegating to server-health)."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (server-start-session server "alice" "5+2" "add")
+           (multiple-value-bind (resp status)
+               (mtt/server::handle-health server)
+             (is (= 200 status))
+             (is (equal "ok" (getf resp :status)))
+             (is (eql 1 (getf resp :active_sessions)))
+             (is (eql 1 (getf resp :students)))))
+      (stop-tutor-server server))))
