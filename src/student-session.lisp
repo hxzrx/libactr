@@ -33,28 +33,36 @@ passed (the service layer passes a redis-event-log for durable storage)."
         :event-count (length (log-all-events (student-session-log student-session)))
         :status :ended))
 
-(defun compute-mastery (events)
+(defun compute-mastery (events &key (kt-params (make-kt-params)))
   "EVENTS: a list of log-event. Returns a list of plists
-  (:kc <kc> :correct <n> :total <n> :accuracy <float>), one per kc, sorted by kc.
-  Events with no kc-event or nil kc (unclassified off-path) are skipped."
-  (let ((buckets (make-hash-table :test #'equal)))   ; kc -> (correct . total)
+  (:kc <kc> :correct <n> :total <n> :accuracy <float> :p-l <float>), one per kc,
+sorted by kc. Events with no kc-event or nil kc (unclassified off-path) are
+skipped. :p-l is the Bayesian Knowledge Tracing posterior (Corbett & Anderson
+4-parameter) over each kc's correct/incorrect sequence, folded from L0; it is a
+deterministic derivation of the event log (recomputed every call — backend
+agnostic, since EVENTS comes from log-all-events of either backend). KT-PARAMS
+defaults to (make-kt-params); pass a custom set to tune L0/T/G/S."
+  (let ((buckets (make-hash-table :test #'equal)))   ; kc -> (correct total . rev-observations)
     (dolist (e events)
       (let* ((ke (log-event-kc-event e))
              (kc (and ke (kc-event-kc ke))))
         (when kc
           (let* ((correct-p (kc-event-correct-p ke))
-                 (cell (or (gethash kc buckets) (cons 0 0))))
-            (incf (cdr cell))                ; total
-            (when correct-p (incf (car cell))) ; correct
+                 (cell (or (gethash kc buckets) (list 0 0 nil))))
+            (incf (first cell) (if correct-p 1 0))
+            (incf (second cell) 1)
+            (push correct-p (third cell))
             (setf (gethash kc buckets) cell)))))
     (let (result)
       (maphash (lambda (kc cell)
-                 (push (list :kc kc
-                             :correct (car cell)
-                             :total (cdr cell)
-                             :accuracy (if (zerop (cdr cell))
-                                           0.0d0
-                                           (coerce (/ (car cell) (cdr cell)) 'double-float)))
-                       result))
+                 (destructuring-bind (correct total rev-obs) cell
+                   (push (list :kc kc
+                               :correct correct
+                               :total total
+                               :accuracy (if (zerop total)
+                                             0.0d0
+                                             (coerce (/ correct total) 'double-float))
+                               :p-l (kt-posterior (nreverse rev-obs) kt-params))
+                         result)))
                buckets)
       (sort result #'string< :key (lambda (p) (princ-to-string (getf p :kc)))))))

@@ -104,7 +104,11 @@ action to an on-path intent), check mastery aggregates, end the session."
              (let ((m (server-student-mastery server "alice")))
                (is (listp m))
                ;; one on-path step against initialize-addition produces one kc-event.
-               (is (= 1 (length m))))
+               (is (= 1 (length m)))
+               ;; Phase 6: the stub's single on-path step yields one kc with P(L)=[t]=2/5.
+               (let ((entry (first m)))
+                 (is (numberp (getf entry :p-l)))
+                 (is (< (abs (- (getf entry :p-l) 2/5)) 1e-6))))
              ;; end: summary plist has :status :ended.
              (let ((summary (server-end-session server sid)))
                (is (eql :ended (getf summary :status))))

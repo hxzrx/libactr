@@ -71,7 +71,8 @@ from the student's full event log, and the domain-specific done flag."
                              (list :kc (kc->json (getf m :kc))
                                    :correct (getf m :correct)
                                    :total (getf m :total)
-                                   :accuracy (getf m :accuracy)))
+                                   :accuracy (getf m :accuracy)
+                                   :p_l (getf m :p-l)))
                            mastery)
           :done (mtt:step-done? adapter result session))))
 
@@ -153,7 +154,8 @@ failure). See the contract note above."
                                     (list :kc (kc->json (getf x :kc))
                                           :correct (getf x :correct)
                                           :total (getf x :total)
-                                          :accuracy (getf x :accuracy)))
+                                          :accuracy (getf x :accuracy)
+                                          :p_l (getf x :p-l)))
                                   m))
                 200))))
 

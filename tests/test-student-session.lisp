@@ -48,8 +48,25 @@ both carry the same student-id, and seq is monotonic across problems."
       (let ((add (find 'add mastery :key (lambda (p) (getf p :kc)))))
         (is (= 2 (getf add :correct)))
         (is (= 3 (getf add :total)))
-        (is (< 0.66 (getf add :accuracy) 0.67)))
+        (is (< 0.66 (getf add :accuracy) 0.67))
+        ;; Phase 6: P(L) over [t t nil] = 191/515 ≈ 0.370874 (spec §3.4).
+        (is (< (abs (- (getf add :p-l) 191/515)) 1e-6)))
       (let ((sub (find 'sub mastery :key (lambda (p) (getf p :kc)))))
         (is (= 1 (getf sub :correct)))
         (is (= 1 (getf sub :total)))
-        (is (= 1.0d0 (getf sub :accuracy)))))))
+        (is (= 1.0d0 (getf sub :accuracy)))
+        ;; Phase 6: P(L) over [t] = 2/5 = 0.4 (spec §3.4).
+        (is (< (abs (- (getf sub :p-l) 2/5)) 1e-6))))))
+
+(test compute-mastery-kt-params-injection
+  "compute-mastery honors a custom kt-params: same events, higher guess → lower P(L)
+on a correct-first sequence."
+  (flet ((ev (kc correct)
+           (make-log-event :seq 0 :kc-event (make-kc-event :kc kc :correct-p correct))))
+    (let* ((events (list (ev 'add t) (ev 'add t)))
+           (m-default (compute-mastery events))
+           (m-hi-guess (compute-mastery events :kt-params (make-kt-params :guess 0.3d0)))
+           (pl-default (getf (first m-default) :p-l))
+           (pl-hi (getf (first m-hi-guess) :p-l)))
+      (is (approx pl-default 31/40))         ; [t t] default = 0.775
+      (is (< pl-hi pl-default)))))           ; higher guess → more skeptical → lower P(L)
