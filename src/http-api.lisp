@@ -13,7 +13,7 @@
 ;;;     HTTP status. Not exercised by unit tests (would need a live acceptor);
 ;;;     their logic is the test-covered pure fns.
 ;;;
-;;; NO global mutable state in this file (no defvar/defparameter). Each handler
+;;; NO global mutable state in this file (no global variables). Each handler
 ;;; closes over the tutor-server instance passed to make-handlers /
 ;;; install-handlers!.
 (in-package :mtt/server)

@@ -2,7 +2,7 @@
 ;;;; The engine/domain seam: maps student JSON actions -> step-intent and primes
 ;;;; retrieval, reusing the dogfooded mtt/addition-tutor model-build + dm priming.
 ;;;; Implements the 3-method mtt adapter protocol (prepare-session / adapt-action /
-;;;; step-done?). Stateless: no defvar/defparameter.
+;;;; step-done?). Stateless: no global variables.
 ;;;;
 ;;;; TWO-STEP-PER-ACTION (the crux): the addition model requires, for each student
 ;;;; next-total, TWO trace steps — (a) increment-sum (the student's visible new

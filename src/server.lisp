@@ -1,7 +1,7 @@
 ;;;; src/server.lisp — tutor-server runtime container (Phase 5 service layer)
 ;;;; The infrastructure-state container: ALL per-server mutable state (acceptor,
 ;;;; students/sessions/models registries, redis-config) lives as INSTANCE SLOTS
-;;;; on this CLOS object — there are NO defvar/defparameter in this file. The
+;;;; on this CLOS object — there are NO global variables in this file. The
 ;;;; per-session bordeaux lock lives on the session-handle (NOT on the core
 ;;;; cognitive-session — locks stay in the service layer per the global
 ;;;; constraint). The mtt core remains zero-global and lock-free.

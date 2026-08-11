@@ -2,7 +2,7 @@
 ;;;; The upper session layer (spec §5.1): a student-session owns ONE event log
 ;;;; shared across all of that student's cognitive-sessions (via Phase 4's
 ;;;; start-session :event-log injection point) so cross-problem mastery is one
-;;;; read. Pure: no HTTP, no Redis, no locks, no defvar.
+;;;; read. Pure: no HTTP, no Redis, no locks, no global variables.
 (in-package :mtt)
 
 (defclass student-session ()
