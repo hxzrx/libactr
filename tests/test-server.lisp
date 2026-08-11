@@ -448,3 +448,128 @@ counter keys (delegating to server-health)."
              (is (eql 1 (getf resp :active_sessions)))
              (is (eql 1 (getf resp :students)))))
       (stop-tutor-server server))))
+
+;;; --- Phase 5 Task 6: real-HTTP smoke + concurrency isolation -----------------
+;;;
+;;; Tasks 3-4 unit-tested the PURE handler logic (handle-*) and the programmatic
+;;; server API. Task 6 closes the last gap: prove the wiring is correct end-to-end
+;;; over REAL HTTP (Hunchentoot acceptor on an ephemeral port + dexador client
+;;; hitting all 5 endpoints), and prove the Phase 4 isolation invariant — each
+;;; session is an independent unit of mutable state — holds under genuine
+;;; concurrent HTTP traffic. This is the Phase 5 analog of Phase 4's
+;;; tests/test-concurrent.lisp: different sessions driven in parallel must NOT
+;;; crosstalk.
+;;;
+;;; NOTES:
+;;;   * %find-free-port lives in THIS package (the redis-store test file defines
+;;;     its own copy in :mtt/redis-store-test — we don't import across test
+;;;     packages; tests stay decoupled).
+;;;   * yason:parse is called with :object-as :alist. Verified against
+;;;     yason-20250622-git/parse.lisp line 280: `parse` accepts (:object-as
+;;;     *parse-object-as*) as a keyword arg and binds it for the call. No need
+;;;     to wrap with (let ((yason:*parse-object-as* :alist)) ...).
+;;;   * DEVIATION FROM BRIEF (closure capture): the brief's
+;;;       (loop for sid in sids collect (bt:make-thread (lambda () ...sid...)))
+;;;     captures the SAME loop-variable binding across all lambdas under SBCL
+;;;     (verified: (loop for x in '(1 2 3) collect (lambda () x)) -> (3 3 3)),
+;;;     so all N threads would step the LAST session only — defeating the test's
+;;;     stated "DIFFERENT session" intent. Fixed via (let ((sid sid)) ...) inside
+;;;     the loop body so each thread closes over a fresh binding.
+
+(defun %find-free-port ()
+  "Bind socket 0 on the loopback, read the OS-assigned port, close. usocket is a
+transitive dependency via hunchentoot, so no extra asd dep needed. There is a
+small TOCTOU window between close and hunchentoot:listen, but it is the standard
+portable ephemeral-port idiom and is fine for smoke tests."
+  (let ((sock (usocket:socket-listen "127.0.0.1" 0 :reuse-address t)))
+    (unwind-protect (usocket:get-local-port sock)
+      (usocket:socket-close sock))))
+
+(test http.real-smoke-over-wire
+  "End-to-end over real HTTP: start a tutor-server with a live Hunchentoot
+acceptor on an ephemeral port, register the reference addition model+adapter,
+then dexador-drive /health, /session/start, and /session/step. Asserts each
+response is 200 + has the expected JSON body shape. Proves the
+tutor-acceptor per-instance dispatch-table is populated and routes hit the
+pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
+  (let* ((port (%find-free-port))
+         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+    (unwind-protect
+         (progn
+           (mtt/server:register-model s "add"
+                                      (mtt/addition-adapter:build-addition-model)
+                                      (mtt/addition-adapter:make-addition-adapter))
+           (sleep 0.3)                          ; acceptor is up; brief's paranoia window
+           ;; /health -> 200 + JSON {"status": "ok", ...}
+           (multiple-value-bind (body status)
+               (dex:get (format nil "http://127.0.0.1:~a/health" port))
+             (is (= 200 status))
+             (is (assoc "status" (yason:parse body :object-as :alist)
+                        :test #'string=)))
+           ;; /session/start -> 200 + JSON {"session_id": "...", "student_id": "a"}
+           (multiple-value-bind (body status)
+               (dex:post (format nil "http://127.0.0.1:~a/session/start" port)
+                         :content "{\"student_id\":\"a\",\"problem_id\":\"5+2\",\"model_id\":\"add\"}")
+             (is (= 200 status))
+             (let ((sid (cdr (assoc "session_id"
+                                    (yason:parse body :object-as :alist)
+                                    :test #'string=))))
+               (is (stringp sid))
+               ;; /session/step -> 200 + JSON step response (action start fires
+               ;; initialize-addition under the addition adapter).
+               (multiple-value-bind (b2 s2)
+                   (dex:post (format nil "http://127.0.0.1:~a/session/step" port)
+                             :content (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"start\"}}" sid))
+                 (is (= 200 s2))
+                 (is (assoc "status" (yason:parse b2 :object-as :alist)
+                            :test #'string=))))))
+      (mtt/server:stop-tutor-server s))))
+
+(test http.concurrent-different-sessions-parallel
+  "N threads each drive a DIFFERENT session over HTTP; all succeed independently
+(Phase 5 isolation under real concurrent HTTP traffic). The server starts 1
+student-session (shared log) and N distinct cognitive-sessions under it; each
+thread POSTs a /session/step to ITS OWN session-id. Every step fires
+initialize-addition under that session's per-session lock — no shared mutable
+target across threads, so all N responses are 200 and there is no crosstalk.
+This is the Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
+  (let* ((port (%find-free-port))
+         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+    (unwind-protect
+         (progn
+           (mtt/server:register-model s "add"
+                                      (mtt/addition-adapter:build-addition-model)
+                                      (mtt/addition-adapter:make-addition-adapter))
+           (sleep 0.3)
+           (let* ((n 6)
+                  ;; Pre-start N sessions SERIALLY (so session creation isn't
+                  ;; part of the parallel stress — we want the step path
+                  ;; parallelized, exactly per the brief).
+                  (sids (loop repeat n collect
+                              (cdr (assoc "session_id"
+                                          (yason:parse
+                                           (nth-value 0
+                                            (dex:post
+                                             (format nil "http://127.0.0.1:~a/session/start" port)
+                                             :content "{\"student_id\":\"u\",\"problem_id\":\"5+2\",\"model_id\":\"add\"}"))
+                                           :object-as :alist)
+                                          :test #'string=))))
+                  ;; DEVIATION (closure capture): (let ((sid sid)) ...) inside
+                  ;; the loop body so each thread closes over a FRESH sid
+                  ;; binding. See file header note for Phase 5 Task 6.
+                  (threads (loop for sid in sids collect
+                                 (let ((sid sid))
+                                   (bt:make-thread
+                                    (lambda ()
+                                      (nth-value 1
+                                       (dex:post
+                                        (format nil "http://127.0.0.1:~a/session/step" port)
+                                        :content (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"start\"}}"
+                                                         sid)))))))))
+             (is (= n (length sids)))
+             (is (= n (length (remove-duplicates sids :test #'string=))))
+             (let ((results (mapcar #'bt:join-thread threads)))
+               (is (= n (length results)))
+               (is (every (lambda (x) (= 200 x)) results)
+                   (format nil "expected all ~a results to be 200, got ~a" n results)))))
+      (mtt/server:stop-tutor-server s))))

@@ -86,7 +86,12 @@
                (:file "src/http-api")))
 
 (asdf:defsystem "mtt/server-test"
-  :depends-on ("mtt/server" "fiveam")
+  ;; dexador: real-HTTP client for Task 6's over-the-wire smoke + concurrency
+  ;;   tests. mtt/addition-adapter: provides build-addition-model +
+  ;;   make-addition-adapter so the smoke tests exercise the real reference
+  ;;   adapter (not just the stub). No cycle: mtt/addition-adapter (library)
+  ;;   depends on mtt/server + mtt/addition-tutor only — not on any test system.
+  :depends-on ("mtt/server" "mtt/addition-adapter" "fiveam" "dexador")
   :components ((:file "tests/test-server")))
 
 ;;; Phase 5 Task 5 — reference addition domain adapter (reuses mtt/addition-tutor
