@@ -24,7 +24,7 @@
            #:production-feedback
            ;; Phase 3: step-intent / kc-event / trace-result
            #:step-intent #:make-step-intent #:step-intent-p
-           #:step-intent-assignments #:step-intent-action-type
+           #:step-intent-assignments #:step-intent-action-type #:step-intent-prime
            #:kc-event #:make-kc-event #:kc-event-p
            #:kc-event-kc #:kc-event-correct-p #:kc-event-production #:kc-event-kind
            #:trace-result #:make-trace-result #:trace-result-p

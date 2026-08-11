@@ -262,9 +262,20 @@ server-end-session."
         (when (eq :ended (mtt:session-status session))
           (return-from server-step-session (values nil :conflict)))
         ;; adapt-action is inside the lock because it may mutate the session's
-        ;; retrieval buffer; priming + step must be serialized together.
-        (let ((intent (mtt:adapt-action adapter action session)))
-          (values (mtt:step-session session intent) adapter session))))))
+        ;; retrieval buffer; priming + step must be serialized together. Phase 6
+        ;; multi-step: adapt-action may return a single intent OR a list; each
+        ;; intent's PRIME (buffer . chunk) pairs are installed before that step;
+        ;; the FIRST step's trace-result is the student-facing result.
+        (let* ((raw (mtt:adapt-action adapter action session))
+               (intents (if (mtt:step-intent-p raw) (list raw) raw))
+               (results nil))
+          (dolist (intent intents)
+            ;; Install this step's prime buffers (if any) before tracing.
+            (dolist (p (mtt:step-intent-prime intent))
+              (setf (mtt:buffer-chunk (mtt:session-state session) (car p)) (cdr p)))
+            (push (mtt:step-session session intent) results))
+          ;; FIRST step's result is the student-facing primary result.
+          (values (first (nreverse results)) adapter session))))))
 
 (defun server-end-session (server session-id)
   "End the session under SESSION-ID: take the final checkpoint, mark the

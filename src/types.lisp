@@ -76,7 +76,10 @@ Wraps (setf buffer-chunk) for the exported API."
 ;; step-intent: 领域无关的学生输入(对 buffer 的提议 delta)
 (defstruct step-intent
   (assignments nil)   ; list of (buffer slot value);value 为字面量
-  (action-type nil))  ; 可选适配器标签;默认策略不用,留给未来策略
+  (action-type nil)   ; 可选适配器标签;默认策略不用,留给未来策略
+  (prime nil))        ; Phase 6: list of (buffer-name . chunk) to install in
+                      ; buffer-state BEFORE tracing this step (domain-neutral
+                      ; pre-step buffer setup; e.g. retrieval priming). nil = none.
 
 ;; kc-event: 每步 KC 触发,供期 6 knowledge tracing(纯数据)
 (defstruct kc-event

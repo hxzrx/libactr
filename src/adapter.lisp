@@ -14,9 +14,13 @@ session (the adapter may mutate it in place)."))
 
 (defgeneric adapt-action (adapter action session)
   (:documentation "Translate a decoded student ACTION (an alist shaped by the
-HTTP layer, e.g. ((type . start) (value . \"6\"))) into a step-intent the engine
-can trace. May prime the session's retrieval buffer as a side-effect. Returns a
-step-intent."))
+HTTP layer, e.g. ((type . start) (value . \"6\"))) into a step-intent OR a list of
+step-intents the engine can trace. May prime the session's retrieval buffer as a
+side-effect (legacy) — prefer bundling per-step buffer installs on each intent's
+PRIME slot (Phase 6 multi-step support). A single step-intent return is treated
+as a one-element list. When multiple intents are returned, they are traced in
+order; each intent's PRIME (buffer . chunk) pairs are installed before that step.
+The FIRST step's trace-result is the response's primary result (student-facing)."))
 
 (defgeneric step-done? (adapter trace-result session)
   (:documentation "Domain-specific termination predicate: did TRACE-RESULT just

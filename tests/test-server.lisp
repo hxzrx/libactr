@@ -605,10 +605,10 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
 ;;; step, and that /student/mastery returns kc-tagged mastery data (proves the
 ;;; shared student log is being aggregated from the per-session event log).
 ;;;
-;;; NOTE: per Task 5's parked limitation, the addition adapter's :next-total
-;;; returns the count-step (increment-count) as the VISIBLE step rather than the
-;;; sum-step. We therefore assert on :on-path + 200 status (the contract that
-;;; matters for tracing), NOT on a specific production name.
+;;; NOTE (Phase 6): the addition adapter's :next-total now returns BOTH steps
+;;; (increment-sum, then increment-count) as a primed intent list, so the VISIBLE
+;;; (first) step is increment-sum — the student's reported total. Both steps are
+;;; logged and feed mastery. We assert production = "increment-sum".
 
 (test addition.e2e-full-problem
   (let* ((port (%find-free-port))
@@ -631,13 +631,18 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                                     :test #'string=))))
                ;; full 5+2: start, six, seven, submit (mirror addition-tutor demonstrate)
                (is (= 200 (nth-value 1 (jstep sid "{\"type\":\"start\"}"))))
-               (is (= 200 (nth-value 1 (jstep sid "{\"type\":\"next-total\",\"value\":\"six\"}"))))
-               (is (= 200 (nth-value 1 (jstep sid "{\"type\":\"next-total\",\"value\":\"seven\"}"))))
+               ;; Phase 6 multi-step: :next-total's VISIBLE (first) step is now
+               ;; increment-sum (was increment-count).
+               (flet ((next-total-prod (action)
+                        (cdr (assoc "production"
+                                    (nth-value 0 (jstep sid action))
+                                    :test #'string=))))
+                 (is (string= "increment-sum"
+                              (next-total-prod "{\"type\":\"next-total\",\"value\":\"six\"}")))
+                 (is (string= "increment-sum"
+                              (next-total-prod "{\"type\":\"next-total\",\"value\":\"seven\"}"))))
                (multiple-value-bind (resp status) (jstep sid "{\"type\":\"submit\",\"value\":\"seven\"}")
                  (declare (ignore resp))
-                 ;; 200 is the tracing contract we assert; the specific
-                 ;; production is the parked Task 5 count-vs-sum visibility
-                 ;; quirk, not asserted here.
                  (is (= 200 status)))
                ;; mastery for lea — the shared student log has aggregated the
                ;; kc-events from this session; assert it returns kc data.

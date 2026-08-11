@@ -7,18 +7,17 @@
 ;;;; TWO-STEP-PER-ACTION (the crux): the addition model requires, for each student
 ;;;; next-total, TWO trace steps — (a) increment-sum (the student's visible new
 ;;;; total), and (b) increment-count (the model's hidden bookkeeping so the goal's
-;;;; count reaches arg2 and terminate-addition can fire on submit). The server's
-;;;; server-step-session calls adapt-action then ONE step-session with the returned
-;;;; intent. To run BOTH steps while preserving the MANDATORY ordering (sum before
-;;;; count — increment-sum's LHS guards -arg2=count, which fails once count reaches
-;;;; arg2), this adapter runs the sum-step INSIDE adapt-action (via
-;;;; mtt:step-session, safe under the server's per-session lock — see
-;;;; src/server.lisp server-step-session lines 229-238) and RETURNS the
-;;;; count-intent for the server's visible step. The returned trace-result is
-;;;; therefore increment-count (:on-path); the sum-step's event is still logged
-;;;; and counted in mastery. Mirrors examples/addition-tutor.lisp tutor-step
-;;;; :next-total + advance-count! exactly (prime-sum -> step-sum -> prime-count ->
-;;;; step-count), just split across adapt-action (sum) and the server (count).
+;;;; count reaches arg2 and terminate-addition can fire on submit). Phase 6
+;;;; multi-step support: adapt-action returns a 2-element list of primed intents
+;;;; (sum first, count second); the server's server-step-session runs each in
+;;;; order, installing each intent's PRIME (RETRIEVAL . number-chunk) before that
+;;;; step, and returns the FIRST step's trace-result (= increment-sum, the
+;;;; student-facing visible step). Both steps are logged and feed mastery. The
+;;;; MANDATORY ordering (sum before count — increment-sum's LHS guards
+;;;; -arg2=count, which fails once count reaches arg2) is preserved by list
+;;;; order. Mirrors examples/addition-tutor.lisp tutor-step :next-total +
+;;;; advance-count! exactly (prime-sum -> step-sum -> prime-count -> step-count),
+;;;; now unified server-side instead of split across adapt-action/server.
 ;;;;
 ;;;; PACKAGE NOTE: load-tutor-model reads the addition model with *PACKAGE* bound
 ;;;; to :mtt/addition-tutor, so ALL model symbols (GOAL, ADD, SUM, COUNT, number
@@ -86,17 +85,18 @@ package symbol stored in that slot (or nil)."
    (mtt:buffer-chunk (mtt:session-state session) (%at "GOAL"))
    (%at slot-name)))
 
-(defun %prime (session value)
-  "Prime SESSION's retrieval buffer with the dm number-chunk whose NUMBER slot =
-VALUE (NEXT looked up via dm-next from the model's declarative memory). The core
-does not simulate retrieval; priming is a consumer responsibility (spec 4.5).
-VALUE must be a model-package symbol (as read from the goal buffer)."
-  (let* ((md (mtt:session-model session))
-         (next (mtt/addition-tutor:dm-next md value)))
-    (setf (mtt:buffer-chunk (mtt:session-state session) (%at "RETRIEVAL"))
-          (mtt:make-chunk :isa (%at "NUMBER")
-                          :slots `((,(%at "NUMBER") . ,value)
-                                   (,(%at "NEXT") . ,next))))))
+(defun %number-chunk (session value)
+  "Build the NUMBER chunk for retrieval priming: isa NUMBER, NUMBER=value,
+NEXT=dm-next(value). Pure (does not touch buffer-state). VALUE is a model-package
+symbol read from the goal buffer."
+  (let ((next (mtt/addition-tutor:dm-next (mtt:session-model session) value)))
+    (mtt:make-chunk :isa (%at "NUMBER")
+                    :slots `((,(%at "NUMBER") . ,value)
+                             (,(%at "NEXT") . ,next)))))
+
+(defun %prime-pair (session value)
+  "Build the (RETRIEVAL . number-chunk) pair to put on a step-intent's PRIME slot."
+  (cons (%at "RETRIEVAL") (%number-chunk session value)))
 
 (defun %action-value (action)
   "Read the \"value\" entry of ACTION (an alist with string keys, as decoded by
@@ -120,13 +120,17 @@ problem. Returns SESSION."
   session)
 
 (defmethod mtt:adapt-action ((a addition-adapter) action session)
-  "Translate a decoded student ACTION alist into a step-intent the engine can
-trace, priming retrieval as a side-effect. Action types:
-  :start       -> initialize-addition (sum=arg1, count=zero); no retrieval priming.
-  :next-total  -> increment-sum + increment-count (see TWO-STEP note in the file
-                  header: sum-step runs here inside adapt-action, count-intent is
-                  returned for the server's visible step).
-  :submit      -> terminate-addition (retrieval primed with the current sum)."
+  "Translate a decoded student ACTION alist into a step-intent (or list of
+intents) the engine can trace, with retrieval priming bundled on each intent's
+PRIME slot (Phase 6 multi-step). Action types:
+  :start       -> initialize-addition (sum=arg1, count=zero); single intent, no
+                  prime (initialize-addition's LHS has no retrieval test).
+  :next-total  -> increment-sum + increment-count as a 2-element primed intent
+                  list (see TWO-STEP note in the file header: sum-intent first,
+                  count-intent second; the server runs both and returns the
+                  FIRST = increment-sum, the visible student step).
+  :submit      -> terminate-addition (retrieval primed with the current sum,
+                  bundled on the intent's PRIME slot)."
   (declare (ignore a))
   (let ((type (cdr (assoc "type" action :test #'string=))))
     (cond
@@ -137,42 +141,34 @@ trace, priming retrieval as a side-effect. Action types:
         :assignments `((,(%at "GOAL") ,(%at "SUM")   ,(%goal-slot session "ARG1"))
                        (,(%at "GOAL") ,(%at "COUNT") ,(%at "ZERO")))))
       ((string= type "next-total")
-       ;; Student reports a new total -> increment-sum fires (retrieval = current
-       ;; sum). We then advance-count (retrieval = current count) so the goal's
-       ;; count reaches arg2 and terminate-addition can later match. The sum-step
-       ;; runs HERE (inside adapt-action, under the server's per-session lock);
-       ;; the count-intent is returned for the server's visible step. Ordering:
-       ;; sum MUST precede count (increment-sum's -arg2=count guard fails once
-       ;; count=arg2). Mirrors addition-tutor.lisp tutor-step :next-total +
-       ;; advance-count!.
+       ;; Student reports a new total -> TWO ordered steps, each with its own
+       ;; retrieval prime (built from pre-step state; the sum step does not
+       ;; touch COUNT, so the count prime stays valid). The server runs them in
+       ;; order, installing each prime before that step. The FIRST (sum) step is
+       ;; the visible, student-facing step.
        (let* ((val           (%action-value action))
               (current-sum   (%goal-slot session "SUM"))
               (current-count (%goal-slot session "COUNT"))
               (newcount      (mtt/addition-tutor:dm-next
                               (mtt:session-model session) current-count)))
-         ;; Prime retrieval = number(current-sum); run the sum-step ourselves.
-         ;; increment-sum fires (LHS: sum=current-sum, -arg2=count, retrieval
-         ;; number=current-sum next=val). Effect: goal sum=val.
-         (%prime session current-sum)
-         (mtt:step-session
-          session
+         (list
+          ;; step 1 (visible): increment-sum. retrieval prime = number(current-sum).
           (mtt:make-step-intent
-           :assignments `((,(%at "GOAL") ,(%at "SUM") ,val))))
-         ;; Prime retrieval = number(current-count); return the count-intent for
-         ;; the server's visible step. increment-count fires (LHS: count=current-
-         ;; count, retrieval number=current-count next=newcount). Effect: goal
-         ;; count=newcount.
-         (%prime session current-count)
-         (mtt:make-step-intent
-          :assignments `((,(%at "GOAL") ,(%at "COUNT") ,newcount)))))
+           :assignments `((,(%at "GOAL") ,(%at "SUM") ,val))
+           :prime (list (%prime-pair session current-sum)))
+          ;; step 2 (bookkeeping): increment-count. retrieval prime = number(current-count).
+          (mtt:make-step-intent
+           :assignments `((,(%at "GOAL") ,(%at "COUNT") ,newcount))
+           :prime (list (%prime-pair session current-count))))))
       ((string= type "submit")
        ;; terminate-addition: LHS needs count=arg2, sum=answer, retrieval
-       ;; number=answer. Prime retrieval with the current sum (the answer).
+       ;; number=answer. Prime retrieval with the current sum (the answer),
+       ;; bundled on the intent's PRIME slot (server installs it).
        (let ((val (%action-value action)))
-         (%prime session (%goal-slot session "SUM"))
          (mtt:make-step-intent
           :assignments `((,(%at "GOAL") ,(%at "COUNT") nil)
-                         (,(%at "GOAL") ,(%at "SUM")   ,val)))))
+                         (,(%at "GOAL") ,(%at "SUM")   ,val))
+          :prime (list (%prime-pair session (%goal-slot session "SUM"))))))
       (t
        (error "mtt/addition-adapter: unknown action type ~a" type)))))
 
