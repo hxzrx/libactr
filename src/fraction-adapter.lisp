@@ -39,11 +39,6 @@ eq-hash buffer/slot lookups match the model."
     (when chunk
       (cdr (assoc (%frac slot-name) (mtt:chunk-slots chunk))))))
 
-(defun %prime (session chunk)
-  "Install CHUNK into SESSION's retrieval buffer (used by prepare-side-effect; for
-the prime slot we build (cons retrieval chunk) on the intent instead)."
-  (setf (mtt:buffer-chunk (mtt:session-state session) (%frac "RETRIEVAL")) chunk))
-
 (defun %fact-chunk (type-name &rest slot-plist)
   "Build a chunk isa=TYPE-NAME (string) with slots from SLOT-PLIST (:slot val ...).
 Slot names interned via %frac; values pass through (integers)."
@@ -60,15 +55,18 @@ Slot names interned via %frac; values pass through (integers)."
   "Parse \"a/b+c/d\" -> values num1 den1 num2 den2 (integers)."
   (let* ((s (princ-to-string problem-id))
          (plus (position #\+ s))
-         (slash1 (position #\/ s))
-         (slash2 (position #\/ s :start (1+ plus))))
-    (unless (and plus slash1 slash2)
+         (slash1 (position #\/ s)))
+    (unless (and plus slash1)
       (error "mtt/fraction-adapter: cannot parse problem-id ~a (expected \"a/b+c/d\")"
              problem-id))
-    (values (parse-integer (subseq s 0 slash1))
-            (parse-integer (subseq s (1+ slash1) plus))
-            (parse-integer (subseq s (1+ plus) slash2))
-            (parse-integer (subseq s (1+ slash2))))))
+    (let ((slash2 (position #\/ s :start (1+ plus))))
+      (unless slash2
+        (error "mtt/fraction-adapter: cannot parse problem-id ~a (expected \"a/b+c/d\")"
+               problem-id))
+      (values (parse-integer (subseq s 0 slash1))
+              (parse-integer (subseq s (1+ slash1) plus))
+              (parse-integer (subseq s (1+ plus) slash2))
+              (parse-integer (subseq s (1+ slash2)))))))
 
 (defun %action-int (action key)
   (parse-integer (cdr (assoc key action :test #'string=))))
@@ -116,7 +114,7 @@ the matching fact (lcm-fact / sum-fact / bug-fact). See spec §6."
                      (%fact-chunk "LCM-FACT" :d1 den1 :d2 den2 :lcm correct)))
            ((= student (* den1 den2))      ; use-product (only a bug when ≠ LCM)
             (%intent `((,(%frac "GOAL") ,(%frac "CDENOM") ,student))
-                     (%fact-chunk "BUG-FACT" :kind :use-product :num student)))
+                     (%fact-chunk "BUG-FACT" :kind :use-product :num student :denom 0)))
            (t                              ; unclassified: prime nothing
             (mtt:make-step-intent
              :assignments `((,(%frac "GOAL") ,(%frac "CDENOM") ,student)))))))

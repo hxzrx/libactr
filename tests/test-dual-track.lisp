@@ -185,8 +185,8 @@ the goal is set to a terminate-addition state."
 (test dual-track-fraction-find-common-denominator
   "Goal: 1/2 + 1/3 (cdenom nil).  Retrieval: lcm-fact d1=2 d2=3 lcm=6.  Both
    engines must agree that find-common-denominator MATCHES and add-fractions
-   does NOT.  diffs=nil = agreement; (LIST :error) = act-r rejected the model
-   (e.g. integer slots) — signal to switch to symbolic numbers per the brief."
+   does NOT.  diffs=nil = agreement; any non-nil diffs (including an act-r load
+   :error) FAIL the test — spec §13 is resolved (act-r accepts integer slots)."
   (let ((goal (mtt:make-chunk :isa 'frac-add
                               :slots '((num1 . 1) (den1 . 2)
                                        (num2 . 1) (den2 . 3) (cdenom . nil))))
@@ -194,8 +194,7 @@ the goal is set to a terminate-addition state."
                               :slots '((d1 . 2) (d2 . 3) (lcm . 6)))))
     ;; frac-add / lcm-fact intern in :mtt/test here; oracle compares by name.
     (let ((diffs (dual-track-check-with-retrieval (fraction-model-path) goal retr)))
-      (is (or (null diffs)
-              (and (= 1 (length diffs)) (eq :error (first diffs))))
+      (is (null diffs)
           "fraction find-common-denominator dual-track: ~A" diffs))))
 
 (test dual-track-fraction-add-fractions
@@ -207,6 +206,5 @@ the goal is set to a terminate-addition state."
         (retr (mtt:make-chunk :isa 'sum-fact
                               :slots '((cdenom . 6) (snum . 5) (sdenom . 6)))))
     (let ((diffs (dual-track-check-with-retrieval (fraction-model-path) goal retr)))
-      (is (or (null diffs)
-              (and (= 1 (length diffs)) (eq :error (first diffs))))
+      (is (null diffs)
           "fraction add-fractions dual-track: ~A" diffs))))
