@@ -118,3 +118,18 @@
 (asdf:defsystem "mtt/fraction-tutor-test"
   :depends-on ("mtt/fraction-tutor" "fiveam")
   :components ((:file "tests/test-fraction-tutor")))
+
+;;; Phase 7 Task 3 — reference fraction domain adapter (reuses mtt/fraction-tutor
+;;; model-load; implements the 3-method adapter protocol against the
+;;; tutor-server). The adapter is the domain brain: it computes correct answers,
+;;; detects 4 bug patterns, and primes retrieval so the matcher routes
+;;; on-path / off-path-buggy / off-path. mtt/fraction-adapter-test depends on
+;;; mtt/server-test because the test file joins the :mtt/server FiveAM suite
+;;; defined in test-server.lisp.
+(asdf:defsystem "mtt/fraction-adapter"
+  :depends-on ("mtt/server" "mtt/fraction-tutor")
+  :components ((:file "src/fraction-adapter")))
+
+(asdf:defsystem "mtt/fraction-adapter-test"
+  :depends-on ("mtt/fraction-adapter" "mtt/server-test" "fiveam")
+  :components ((:file "tests/test-fraction-adapter")))
