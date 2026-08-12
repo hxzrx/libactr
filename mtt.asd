@@ -107,3 +107,14 @@
 (asdf:defsystem "mtt/addition-adapter-test"
   :depends-on ("mtt/addition-adapter" "mtt/server-test" "fiveam")
   :components ((:file "tests/test-addition-adapter")))
+
+;;; Phase 7 — fraction domain (second adapter). Model file is a data file under
+;;; models/ (read by path); the tutor system loads+compiles it and appends the
+;;; buggy library.
+(asdf:defsystem "mtt/fraction-tutor"
+  :depends-on ("mtt")
+  :components ((:file "examples/fraction-tutor")))
+
+(asdf:defsystem "mtt/fraction-tutor-test"
+  :depends-on ("mtt/fraction-tutor" "fiveam")
+  :components ((:file "tests/test-fraction-tutor")))
