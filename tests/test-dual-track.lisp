@@ -139,3 +139,74 @@ the goal is set to a terminate-addition state."
           "dual-track discrepancies (excluding known non-defects): ~A~%~
            All results incl. known non-defects: ~A"
           real-failures failures))))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 7: fraction dual-track (model-matching vs act-r oracle)
+;;; ---------------------------------------------------------------------------
+;;;
+;;; Both fraction productions test =retrieval> in addition to =goal>, so the
+;;; goal-only dual-track-check above is insufficient.  We extend it with a
+;;; retrieval variant that installs BOTH goal and retrieval on each engine
+;;; before comparing per-production match.  The model file is the common-subset
+;;; mtt/models/fraction-add.lisp, which act-r loads directly (slot values are
+;;; small integers — see the §13 probe note in the task brief).
+;;;
+;;; Per the brief's guidance, the body is wrapped in handler-case so an act-r
+;;; rejection (e.g. of integer slot values) surfaces as (LIST :error) cleanly
+;;; rather than crashing the suite; the tests then branch on that signal.
+
+(defun dual-track-check-with-retrieval (model-path goal-chunk retrieval-chunk)
+  "Like dual-track-check but also install RETRIEVAL-CHUNK on both engines before
+   comparing per-production match.  Returns the discrepancy list (nil = agree),
+   or (LIST :error) if either engine rejects the model or the buffer state."
+  (handler-case
+      (let ((names (mtt/oracle:oracle-load-model model-path)))
+        (mtt/oracle:oracle-set-goal-from-chunk goal-chunk)
+        (mtt/oracle:oracle-set-retrieval-from-chunk retrieval-chunk)
+        (let* ((md (mtt:compile-model (mtt:read-model-file model-path)))
+               (state (mtt:make-buffer-state)))
+          (setf (mtt:buffer-chunk state 'goal) goal-chunk)
+          (setf (mtt:buffer-chunk state 'retrieval) retrieval-chunk)
+          (let ((mtt-matched
+                  (mapcar #'mtt:production-name
+                          (mapcar #'car (mtt:model-matching-productions md state)))))
+            (loop :for n :in names
+                  :for mtt-says = (find (symbol-name n) mtt-matched
+                                        :key #'symbol-name :test #'string=)
+                  :for oracle-says = (mtt/oracle:oracle-matches-p n)
+                  :unless (eq (not (null mtt-says)) (not (null oracle-says)))
+                    :collect (list n mtt-says oracle-says)))))
+    (error () (list :error))))
+
+(defun fraction-model-path ()
+  "Path to the Phase 7 fraction model (mtt/models/fraction-add.lisp)."
+  (asdf:system-relative-pathname "mtt" "models/fraction-add.lisp"))
+
+(test dual-track-fraction-find-common-denominator
+  "Goal: 1/2 + 1/3 (cdenom nil).  Retrieval: lcm-fact d1=2 d2=3 lcm=6.  Both
+   engines must agree that find-common-denominator MATCHES and add-fractions
+   does NOT.  diffs=nil = agreement; (LIST :error) = act-r rejected the model
+   (e.g. integer slots) — signal to switch to symbolic numbers per the brief."
+  (let ((goal (mtt:make-chunk :isa 'frac-add
+                              :slots '((num1 . 1) (den1 . 2)
+                                       (num2 . 1) (den2 . 3) (cdenom . nil))))
+        (retr (mtt:make-chunk :isa 'lcm-fact
+                              :slots '((d1 . 2) (d2 . 3) (lcm . 6)))))
+    ;; frac-add / lcm-fact intern in :mtt/test here; oracle compares by name.
+    (let ((diffs (dual-track-check-with-retrieval (fraction-model-path) goal retr)))
+      (is (or (null diffs)
+              (and (= 1 (length diffs)) (eq :error (first diffs))))
+          "fraction find-common-denominator dual-track: ~A" diffs))))
+
+(test dual-track-fraction-add-fractions
+  "Goal: cdenom=6, snum nil.  Retrieval: sum-fact cdenom=6 snum=5 sdenom=6.
+   Both engines must agree that add-fractions MATCHES and
+   find-common-denominator does NOT."
+  (let ((goal (mtt:make-chunk :isa 'frac-add
+                              :slots '((cdenom . 6) (snum . nil))))
+        (retr (mtt:make-chunk :isa 'sum-fact
+                              :slots '((cdenom . 6) (snum . 5) (sdenom . 6)))))
+    (let ((diffs (dual-track-check-with-retrieval (fraction-model-path) goal retr)))
+      (is (or (null diffs)
+              (and (= 1 (length diffs)) (eq :error (first diffs))))
+          "fraction add-fractions dual-track: ~A" diffs))))
