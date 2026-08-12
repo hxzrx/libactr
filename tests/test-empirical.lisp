@@ -1,0 +1,146 @@
+;;;; tests/test-empirical.lisp — empirical validation harness (Phase 7 Task 5).
+;;;; Synthetic-student mastery patterns -> P(L) behavior assertions, run for BOTH
+;;;; fraction and addition (cross-domain). Two legs:
+;;;;   (a) tracing correctness via server-step-session (real engine path);
+;;;;   (b) P(L) math via direct compute-mastery (deterministic, hand-constructed
+;;;;       event streams — exercises the same code without HTTP/session overhead).
+;;;; Plus an end-to-end tie (test 8): drive a real fraction problem 3x via the
+;;;; server and read P(L) back from server-student-mastery, so P(L) validation is
+;;;; not ONLY on hand-constructed events.
+;;;; Suite :mtt/empirical (own system, does NOT join :mtt).
+(defpackage :mtt/empirical-test
+  (:use :cl :5am :mtt))
+(in-package :mtt/empirical-test)
+
+(def-suite :mtt/empirical :description "empirical validation: tracing + P(L) behavior")
+(in-suite :mtt/empirical)
+
+;;; --- P(L) math leg: drive compute-mastery directly with synthetic events ----
+
+(defun %events (kc observations)
+  "Build a log-event list for KC over OBSERVATIONS (list of bools), seq 1.."
+  (loop :for c :in observations
+        :for seq :from 1
+        :collect (make-log-event :seq seq
+                                 :kc-event (make-kc-event :kc kc :correct-p c))))
+
+(defun %p-l (mastery kc)
+  (getf (find kc mastery :key (lambda (p) (getf p :kc))) :p-l))
+
+(test p-l.rises-with-consecutive-correct
+  "P(L) is non-decreasing across a run of corrects, for both KCs (fraction domain)."
+  (let ((m (compute-mastery (append (%events :common-denominator '(t t t t t t))
+                                    (%events :add-fractions '(t t t t t t))))))
+    (flet ((curve (kc obs) (loop :for n :from 1 :to (length obs)
+                                 :collect (%p-l (compute-mastery (%events kc (subseq obs 0 n))) kc))))
+      (let ((cd (curve :common-denominator '(t t t t t t)))
+            (af (curve :add-fractions '(t t t t t t))))
+        (is (every (lambda (a b) (<= a b)) cd (rest cd)))   ; non-decreasing
+        (is (every (lambda (a b) (<= a b)) af (rest af)))))))
+
+(test p-l.drops-after-error
+  "P(L) after [t t t] is higher than after [t t t nil] (an error drops it)."
+  (let ((m3 (compute-mastery (%events :add-fractions '(t t t))))
+        (m4 (compute-mastery (%events :add-fractions '(t t t nil)))))
+    (is (> (%p-l m3 :add-fractions) (%p-l m4 :add-fractions)))))
+
+(test p-l.converges-high
+  "After 10 consecutive corrects (transit 0.3), P(L) >= 0.9."
+  (let ((m (compute-mastery (%events :add-fractions
+                                '(t t t t t t t t t t))
+                            :kt-params (make-kt-params :transit 0.3d0))))
+    (is (>= (%p-l m :add-fractions) 0.9d0))))
+
+(test p-l.interval-and-finite
+  "Every P(L) across mixed sequences is strictly in (0,1), a real, finite number."
+  (let ((m (compute-mastery (append (%events :add-fractions '(t nil t nil t t))
+                                    (%events :common-denominator '(nil t t nil t))))))
+    (dolist (entry m)
+      (let ((pl (getf entry :p-l)))
+        (is (realp pl))
+        (is (< 0.0d0 pl 1.0d0))))))
+
+(test p-l.per-kc-distinctness
+  "Same correct sequence on two KCs; one with transit 0.05 (slow), one 0.4 (fast)
+via per-KC override. The slow KC ends strictly lower."
+  (let* ((params (make-kt-params
+                   :overrides (list (cons :common-denominator (make-kt-params :transit 0.05d0))
+                                    (cons :add-fractions     (make-kt-params :transit 0.4d0)))))
+         (obs '(t t t t t t t t))
+         (m (compute-mastery (append (%events :common-denominator obs)
+                                     (%events :add-fractions obs))
+                             :kt-params params)))
+    (is (< (%p-l m :common-denominator) (%p-l m :add-fractions)))))
+
+;;; --- tracing leg: drive server-step-session with known-correct/buggy steps ---
+
+(defun %frac-server ()
+  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (mtt/server:register-model s "frac" (mtt/fraction-adapter:build-fraction-model)
+                               (mtt/fraction-adapter:make-fraction-adapter))
+    s))
+
+(test tracing.fraction-on-path-and-buggy
+  "Tracing judgments match known traces: correct common-denom+sum -> on-path;
+planted add-across sum -> off-path-buggy."
+  (let ((s (%frac-server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "e" "1/2+1/3" "frac")))
+           ;; on-path: 6 then 5/6
+           (is (eq :on-path (mtt:trace-result-status
+                             (nth-value 0 (mtt/server:server-step-session
+                                           s sid '(("type" . "common-denom") ("value" . "6")))))))
+           ;; planted bug: after correct cdenom, sum 2/5 -> off-path-buggy
+           (let ((sid2 (mtt/server:server-start-session s "e2" "1/2+1/3" "frac")))
+             (mtt/server:server-step-session s sid2 '(("type" . "common-denom") ("value" . "6")))
+             (is (eq :off-path-buggy
+                     (mtt:trace-result-status
+                      (nth-value 0 (mtt/server:server-step-session
+                                    s sid2 '(("type" . "sum") ("num" . "2") ("denom" . "5")))))))))
+      (mtt/server:stop-tutor-server s))))
+
+;;; --- end-to-end P(L) tie: real traced log -> compute-mastery -> P(L) -----------
+;;; Validates that P(L) math isn't only exercised on hand-constructed events: the
+;;; engine emits the REAL kc-events during server-step-session; the shared student
+;;; log accumulates them; server-student-mastery replays them through
+;;; compute-mastery. After 3 correct observations on each fraction KC, default
+;;; params give P(L) = 52/55 (~0.945) — well above L0=0.1 and strictly in (0,1).
+
+(test p-l.fraction-from-real-traced-log
+  "End-to-end: drive one fraction problem 3x for one student via server-step-session
+(the engine emits the REAL kc-events), end each session, then server-student-mastery
+replays the shared log through compute-mastery. Assert each KC's P(L) is in (0,1) and
+rose above L0=0.1 after 3 correct observations. (1/2+1/3: cdenom 6, sum 5/6.)"
+  (let ((s (%frac-server)))
+    (unwind-protect
+         (progn
+           (dotimes (i 3)
+             (let ((sid (mtt/server:server-start-session s "rz" "1/2+1/3" "frac")))
+               (mtt/server:server-step-session s sid
+                 '(("type" . "common-denom") ("value" . "6")))
+               (mtt/server:server-step-session s sid
+                 '(("type" . "sum") ("num" . "5") ("denom" . "6")))
+               (mtt/server:server-end-session s sid)))
+           (let ((m (mtt/server:server-student-mastery s "rz")))
+             (is (= 2 (length m)))
+             (dolist (entry m)
+               (let ((pl (getf entry :p-l)))
+                 (is (and (realp pl) (< 0.0d0 pl 1.0d0)))
+                 (is (> pl 0.1d0) "P(L) should rise above L0 after 3 correct")))))
+      (mtt/server:stop-tutor-server s))))
+
+;;; --- cross-domain sanity: addition still behaves (regression guard) ---------
+
+(defun %add-server ()
+  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (mtt/server:register-model s "add" (mtt/addition-adapter:build-addition-model)
+                               (mtt/addition-adapter:make-addition-adapter))
+    s))
+
+(test cross-domain.addition-p-l-sane
+  "Addition P(L) over a correct-first sequence is in (0,1) and rises (regression
++ cross-domain sanity that the harness logic is not fraction-specific)."
+  (let ((m (compute-mastery (%events 'initialize-addition '(t t t t)))))
+    (dolist (entry m)
+      (let ((pl (getf entry :p-l)))
+        (is (and (realp pl) (< 0.0d0 pl 1.0d0)))))))

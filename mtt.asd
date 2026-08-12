@@ -133,3 +133,13 @@
 (asdf:defsystem "mtt/fraction-adapter-test"
   :depends-on ("mtt/fraction-adapter" "mtt/server-test" "fiveam")
   :components ((:file "tests/test-fraction-adapter")))
+
+;;; Phase 7 Task 5 — empirical validation harness. Synthetic-student traces drive
+;;; the engine; assertions check tracing correctness + P(L) monotonicity/
+;;; convergence/interval + per-KC distinctness. Cross-domain: fraction + addition.
+;;; Own suite :mtt/empirical (does NOT join :mtt — pure engine validation, not a
+;;; regression of core internals). Two legs: tracing correctness via
+;;; server-step-session; P(L) math via direct compute-mastery (deterministic).
+(asdf:defsystem "mtt/empirical-test"
+  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter" "fiveam")
+  :components ((:file "tests/test-empirical")))
