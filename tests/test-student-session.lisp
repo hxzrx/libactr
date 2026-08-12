@@ -70,3 +70,20 @@ on a correct-first sequence."
            (pl-hi (getf (first m-hi-guess) :p-l)))
       (is (approx pl-default 31/40))         ; [t t] default = 0.775
       (is (< pl-hi pl-default)))))           ; higher guess → more skeptical → lower P(L)
+
+(test compute-mastery.per-kc-override
+  "compute-mastery folds each KC with its own override. Two KCs each [t t];
+:common-denominator has transit 0.01 (slower) -> lower P(L) than :add-fractions
+(default transit 0.1)."
+  (flet ((ev (kc correct)
+           (make-log-event :seq 0 :kc-event (make-kc-event :kc kc :correct-p correct))))
+    (let* ((events (list (ev :common-denominator t) (ev :common-denominator t)
+                         (ev :add-fractions t) (ev :add-fractions t)))
+           (params (make-kt-params
+                     :overrides (list (cons :common-denominator
+                                            (make-kt-params :transit 0.01d0)))))
+           (m (compute-mastery events :kt-params params))
+           (cd (find :common-denominator m :key (lambda (p) (getf p :kc))))
+           (af (find :add-fractions m :key (lambda (p) (getf p :kc)))))
+      (is (and cd af))
+      (is (< (getf cd :p-l) (getf af :p-l))))))

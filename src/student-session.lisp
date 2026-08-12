@@ -62,7 +62,8 @@ defaults to (make-kt-params); pass a custom set to tune L0/T/G/S."
                                :accuracy (if (zerop total)
                                              0.0d0
                                              (coerce (/ correct total) 'double-float))
-                               :p-l (kt-posterior (nreverse rev-obs) kt-params))
+                               :p-l (kt-posterior (nreverse rev-obs)
+                                                  (kt-params-for kc kt-params)))
                          result)))
                buckets)
       (sort result #'string< :key (lambda (p) (princ-to-string (getf p :kc)))))))

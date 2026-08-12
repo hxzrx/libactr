@@ -68,9 +68,11 @@
            #:register-cognitive-session
            #:compute-mastery
            ;; Phase 6: knowledge tracing (Bayesian 4-parameter BKT)
+           ;; Phase 7: per-KC override (overrides slot + kt-params-for)
            #:kt-params #:kt-params-p #:make-kt-params
            #:kt-params-l0 #:kt-params-transit #:kt-params-guess #:kt-params-slip
-           #:kt-update #:kt-posterior
+           #:kt-params-overrides
+           #:kt-update #:kt-posterior #:kt-params-for
            ;; Phase 5: Redis durable event-log backend (mtt/redis-store system)
            #:redis-event-log #:redis-event-log-p
            #:make-redis-event-log #:redis-event-log-connection

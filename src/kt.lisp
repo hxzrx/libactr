@@ -11,12 +11,22 @@
 (defstruct kt-params
   "Four BKT parameters. Defaults L0=0.1, transit=0.1, guess=0.2, slip=0.1
 (G+S=0.3<1, the non-deceptive-region invariant). defstruct auto-generates
-make-kt-params (&key l0 transit guess slip) with these initforms as defaults —
-NO separate defun, NO defvar."
+make-kt-params (&key l0 transit guess slip overrides) with these initforms as
+defaults — NO separate defun, NO defvar. OVERRIDES (Phase 7): an alist
+(kc . kt-params) giving per-KC parameter sets; kt-params-for falls back to
+these base params when a kc has no override. Nesting is not supported."
   (l0      0.1d0 :type double-float)   ; prior P(known) before any observation
   (transit 0.1d0 :type double-float)   ; P(learn) per opportunity
   (guess   0.2d0 :type double-float)   ; P(correct | not known)
-  (slip   0.1d0 :type double-float))   ; P(incorrect | known)
+  (slip   0.1d0 :type double-float)    ; P(incorrect | known)
+  (overrides nil))                     ; alist (kc . kt-params); per-KC, fallback=self
+
+(defun kt-params-for (kc params)
+  "Return the kt-params to fold for KC: its override in PARAMS if present, else
+PARAMS itself (the base defaults). OVERRIDES is an alist (kc . kt-params); kc
+keys are compared by eql (assoc default) — use keyword or symbol kc ids. No
+nesting: overrides live only on the top-level PARAMS."
+  (or (cdr (assoc kc (kt-params-overrides params))) params))
 
 (defun kt-update (p-l correct-p params)
   "One BKT step. Equation (b) [correct] or (c) [incorrect] gives the posterior
