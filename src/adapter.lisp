@@ -30,3 +30,72 @@ complete the problem? Returns a boolean."))
   ()
   (:documentation "Mixin/tag for domain adapters. Subclass this and implement
 the three protocol generics (prepare-session, adapt-action, step-done?)."))
+
+;;; ===========================================================================
+;;; Phase 8: reusable adapter base — the default plumbing every adapter duplicates.
+;;; Holds the two pieces of per-domain config (model symbol package, terminal
+;;; production name) and factors out intern / goal-slot / fact-chunk / prime /
+;;; intent construction + a default step-done?. NO global mutable state.
+
+(defclass standard-domain-adapter (domain-adapter)
+  ((model-package       :initarg :model-package       :reader adapter-model-package
+                        :documentation "PACKAGE object where this domain's model
+symbols live, e.g. (find-package :mtt/fraction-tutor). adapter-intern interns here.")
+   (terminal-production :initarg :terminal-production :reader adapter-terminal-production
+                        :documentation "Name (string) of the production whose on-path
+fire marks the problem done, e.g. \"ADD-FRACTIONS\". Compared by symbol-name
+(package-agnostic) by the default step-done? method."))
+  (:documentation "Reusable base for domain adapters. Holds the two pieces of
+per-domain config every adapter needs and inherits default plumbing helpers +
+a default step-done?. A subclass sets :model-package and :terminal-production
+and implements prepare-session (parse + adapter-set-goal) and adapt-action (the
+domain brain, using the adapter-* helpers)."))
+
+(declaim (inline adapter-intern))
+(defun adapter-intern (adapter name)
+  "Intern NAME (string designator) in ADAPTER's model-package. Replaces %frac/%at."
+  (intern name (adapter-model-package adapter)))
+
+(defun adapter-goal-slot (adapter session slot-name)
+  "Read SLOT-NAME (string) from SESSION's goal buffer chunk; nil if absent/empty.
+Replaces the per-adapter %goal-slot."
+  (let ((chunk (buffer-chunk (session-state session) (adapter-intern adapter "GOAL"))))
+    (when chunk
+      (cdr (assoc (adapter-intern adapter slot-name) (chunk-slots chunk))))))
+
+(defun adapter-fact (adapter isa-name &rest slot-plist)
+  "Build a chunk isa=ISA-NAME (interned in model-package) with slots from
+SLOT-PLIST (:slot val ...). Slot keys interned; values pass through. PURE: no
+buffer mutation. Replaces %fact-chunk / %number-chunk construction — callers
+compute any lookups (e.g. dm-next) and pass results in via the plist."
+  (let (slots)
+    (loop :for (k v) :on slot-plist :by #'cddr
+          :do (push (cons (adapter-intern adapter (string k)) v) slots))
+    (make-chunk :isa (adapter-intern adapter isa-name) :slots (nreverse slots))))
+
+(defun adapter-set-goal (adapter session isa-name &rest slot-plist)
+  "Write SESSION's goal buffer with a fresh chunk (isa=ISA-NAME, slots from
+PLIST). Returns SESSION. The shared tail of prepare-session."
+  (setf (buffer-chunk (session-state session) (adapter-intern adapter "GOAL"))
+        (apply #'adapter-fact adapter isa-name slot-plist))
+  session)
+
+(defun adapter-prime-pair (adapter chunk)
+  "The (RETRIEVAL . chunk) pair for a step-intent's PRIME slot. Replaces %prime-pair."
+  (cons (adapter-intern adapter "RETRIEVAL") chunk))
+
+(defun adapter-primed-intent (adapter assignments prime-chunk)
+  "A step-intent with ASSIGNMENTS and a single retrieval prime of PRIME-CHUNK.
+Replaces %intent. Multi-intent adapters build a list of these."
+  (make-step-intent :assignments assignments
+                    :prime (list (adapter-prime-pair adapter prime-chunk))))
+
+(defmethod step-done? ((adapter standard-domain-adapter) trace-result session)
+  "Default termination: an on-path step whose production name matches the
+adapter's terminal-production (by symbol-name). Replaces the per-adapter
+step-done? methods."
+  (declare (ignore session))
+  (and (eq :on-path (trace-result-status trace-result))
+       (let ((p (trace-result-production trace-result)))
+         (and p (string= (adapter-terminal-production adapter)
+                         (symbol-name (production-name p)))))))

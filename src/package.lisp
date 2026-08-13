@@ -82,6 +82,11 @@
            #:domain-adapter
            #:prepare-session #:adapt-action #:step-done?
            ;; Phase 8: authoring support (core utility; base class in mtt/server)
-           #:apply-kc-map))
+           #:apply-kc-map
+           ;; Phase 8: reusable adapter base (mtt/server; symbols live in :mtt)
+           #:standard-domain-adapter
+           #:adapter-model-package #:adapter-terminal-production
+           #:adapter-intern #:adapter-goal-slot #:adapter-fact
+           #:adapter-set-goal #:adapter-prime-pair #:adapter-primed-intent))
 
 (in-package :mtt)

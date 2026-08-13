@@ -96,7 +96,8 @@
   ;;   adapter (not just the stub). No cycle: mtt/addition-adapter (library)
   ;;   depends on mtt/server + mtt/addition-tutor only — not on any test system.
   :depends-on ("mtt/server" "mtt/addition-adapter" "fiveam" "dexador")
-  :components ((:file "tests/test-server")))
+  :components ((:file "tests/test-server")
+               (:file "tests/test-adapter-base")))
 
 ;;; Phase 5 Task 5 — reference addition domain adapter (reuses mtt/addition-tutor
 ;;; model-load + dm priming; implements the 3-method adapter protocol against the
