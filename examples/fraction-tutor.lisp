@@ -53,15 +53,13 @@ buggy library. Model symbols land in :mtt/fraction-tutor (*PACKAGE* binding)."
     (let ((md (mtt:compile-model
                (mtt:read-model-file
                 (asdf:system-relative-pathname "mtt" "models/fraction-add.lisp")))))
-      ;; Attribute correct productions to their skill KC (keyword symbols).
-      (dolist (p (mtt:model-definition-productions md))
-        (setf (mtt:production-kc p)
-              (cond
-                ((string= (symbol-name (mtt:production-name p)) "FIND-COMMON-DENOMINATOR")
-                 :common-denominator)
-                ((string= (symbol-name (mtt:production-name p)) "ADD-FRACTIONS")
-                 :add-fractions)
-                (t (mtt:production-kc p)))))
+      ;; Attribute correct productions to their skill KC (keyword symbols) via the
+      ;; pure declarative kc-map (src/authoring.lisp). Applied before appending the
+      ;; buggy library, which already carries its own kc.
+      (mtt:apply-kc-map
+       md
+       '((find-common-denominator . :common-denominator)
+         (add-fractions          . :add-fractions)))
       (setf (mtt:model-definition-productions md)
             (append (mtt:model-definition-productions md) (buggy-rules)))
       md)))
