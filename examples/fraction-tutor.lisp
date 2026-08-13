@@ -2,8 +2,8 @@
 ;;;; Mirrors examples/addition-tutor.lisp: load-fraction-model binds *PACKAGE* so
 ;;;; all model symbols (FRAC-ADD, NUM1, FIND-COMMON-DENOMINATOR, ...) land in
 ;;;; :mtt/fraction-tutor. Buggy rules are appended (mtt-only). KC attribution is
-;;;; set post-load via (setf production-kc) so correct+buggy group into 2 skill
-;;;; KCs. NO global mutable state in this file.
+;;;; applied post-load via the declarative apply-kc-map utility (src/authoring.lisp)
+;;;; so correct+buggy group into 2 skill KCs. NO global mutable state in this file.
 (defpackage :mtt/fraction-tutor
   (:use :cl)
   (:nicknames :fraction-tutor)

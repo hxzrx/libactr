@@ -16,7 +16,7 @@
 ;;;; student-facing visible step). Both steps are logged and feed mastery. The
 ;;;; MANDATORY ordering (sum before count — increment-sum's LHS guards
 ;;;; -arg2=count, which fails once count reaches arg2) is preserved by list
-;;;; order. Mirrors examples/addition-tutor.lisp tutor_step :next-total +
+;;;; order. Mirrors examples/addition-tutor.lisp tutor-step :next-total +
 ;;;; advance-count! exactly (prime-sum -> step-sum -> prime-count -> step-count),
 ;;;; now unified server-side instead of split across adapt-action/server.
 ;;;;

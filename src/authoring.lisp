@@ -5,7 +5,7 @@
 
 (defun apply-kc-map (model-definition kc-map)
   "Attribute production-kc on MODEL-DEFINITION's productions per KC-MAP.
-KC-MAP is an alist (production-name-designator . kc); each key is matched
+KC-MAP is an alist (production-name (a symbol) . kc); each key is matched
 against a production's name by SYMBOL-NAME (package-agnostic: the map is
 authored in the tutor package, production names live in the model package).
 Mutates MODEL-DEFINITION's productions in place (like compile-model) and
