@@ -80,6 +80,8 @@
            ;; Phase 5: domain-adapter protocol (mtt/server system; lives in :mtt
            ;; because adapters reference it alongside step-intent / trace-result).
            #:domain-adapter
-           #:prepare-session #:adapt-action #:step-done?))
+           #:prepare-session #:adapt-action #:step-done?
+           ;; Phase 8: authoring support (core utility; base class in mtt/server)
+           #:apply-kc-map))
 
 (in-package :mtt)

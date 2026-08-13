@@ -16,7 +16,8 @@
                (:file "src/session")
                (:file "src/checkpoint")
                (:file "src/kt")
-               (:file "src/student-session"))
+               (:file "src/student-session")
+               (:file "src/authoring"))
   :in-order-to ((test-op (test-op "mtt/test"))))
 
 ;;; act-r/ dual-track oracle — dev-time only, pulls in act-r.
@@ -38,7 +39,8 @@
                (:file "tests/test-session")
                (:file "tests/test-checkpoint")
                (:file "tests/test-kt")
-               (:file "tests/test-student-session")))
+               (:file "tests/test-student-session")
+               (:file "tests/test-authoring")))
 
 ;;; Dual-track regression — needs act-r via oracle.
 (asdf:defsystem "mtt/dual"
