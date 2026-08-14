@@ -165,16 +165,16 @@ and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
                  (is (string= "add-fractions"
                               (cdr (assoc "production" resp :test #'string=))))
                  (is (eq t (cdr (assoc "done" resp :test #'string=)))))
-               ;; mastery: 2 KCs present. NOTE: the mastery endpoint encodes
-               ;; per-KC entries as JSON arrays (a list of plists round-tripped
-               ;; through yason:encode-plist becomes a JSON array of arrays, not
-               ;; array of objects), so each parsed entry is a flat list
-               ;; ("kc" <NAME> "correct" N "total" N ...) — the KC name is at
-               ;; index 1 (cadr), not behind an alist cons.
+               ;; mastery: 2 KCs present. The mastery endpoint encodes per-KC
+               ;; entries as JSON OBJECTS (Phase 9 recursive json-encode:
+               ;; plists -> objects, list-of-plists -> array-of-objects), so
+               ;; each parsed entry is an alist (("kc" . <NAME>) ("correct" . N)
+               ;; ...) and the KC name is behind the "kc" alist cons.
                (multiple-value-bind (body status)
                    (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=flo" port))
                  (is (= 200 status))
-                 (let ((kcs (mapcar #'second
+                 (let ((kcs (mapcar (lambda (entry)
+                                      (cdr (assoc "kc" entry :test #'string=)))
                                     (cdr (assoc "kc" (yason:parse body :object-as :alist)
                                                 :test #'string=)))))
                    (is (= 2 (length kcs)))

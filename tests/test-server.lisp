@@ -466,6 +466,56 @@ counter keys (delegating to server-health)."
              (is (eql 1 (getf resp :students)))))
       (stop-tutor-server server))))
 
+;;; --- Phase 9: recursive json-encode (nested plists -> objects) ----------------
+;;;
+;;; json-encode previously delegated to yason:encode-plist, which encodes only
+;;; the TOP-level plist as a JSON object and FLATTENS any nested plist into an
+;;; array of atoms (yason does not recurse on plists). The step response's
+;;; :mastery and the mastery response's :kc are LISTS OF PLISTS (one per KC);
+;;; real consumers expect [{"kc":"...","correct":3,...}, ...] but got
+;;; array-of-arrays. The recursive encoder (plist -> hash-table/object,
+;;; list-of-plists -> array-of-objects) fixes both at the single chokepoint.
+
+(test http.json-encode-nested-mastery-is-array-of-objects
+  "json-encode must serialize :mastery (a list of per-KC plists) as a JSON array
+of OBJECTS, not yason's flat array-of-arrays. This is the consumer-facing
+defect."
+  (let* ((resp (list :status :on-path
+                     :mastery (list (list :kc "add-fractions"
+                                          :correct 3 :total 5 :accuracy 0.6 :p_l 2/5))))
+         (json (mtt/server::json-encode resp))
+         (parsed (yason:parse json :object-as :alist)))
+    (is (string= "on-path" (cdr (assoc "status" parsed :test #'string=))))
+    (let ((mastery (cdr (assoc "mastery" parsed :test #'string=))))
+      (is (listp mastery))
+      (is (= 1 (length mastery)))
+      (let ((entry (first mastery)))
+        ;; entry must be an OBJECT (alist with string keys), not a flat array
+        ;; of atoms.
+        (is (string= "add-fractions" (cdr (assoc "kc" entry :test #'string=))))
+        (is (eql 3 (cdr (assoc "correct" entry :test #'string=))))
+        (is (eql 5 (cdr (assoc "total" entry :test #'string=))))))))
+
+(test http.json-encode-scalar-and-null-handling
+  "Top-level keyword keys are lowercased; keyword values become lowercase
+strings; t -> true; nil -> null; numbers/strings pass through."
+  ;; NOTE: the brief's verbatim test used the keyword :kw-val (hyphen) but
+  ;; asserted the JSON key \"kw_val\" (underscore). The brief's own reference
+  ;; %jsonify does (string-downcase (symbol-name k)), which preserves hyphens,
+  ;; and EVERY real response key in this codebase uses underscores literally
+  ;; (:session_id, :student_id, :active_sessions, :p_l). The brief's test as
+  ;; written could not pass under the brief's own implementation. Resolved to
+  ;; :kw_val to match the codebase convention + the brief's implementation;
+  ;; the value :on-path (hyphen, like every real status value) is unchanged.
+  (let ((parsed (yason:parse (mtt/server::json-encode
+                              (list :kw_val :on-path :flag t :absent nil :n 7 :s "x"))
+                             :object-as :alist)))
+    (is (string= "on-path" (cdr (assoc "kw_val" parsed :test #'string=))))
+    (is (eql t (cdr (assoc "flag" parsed :test #'string=))))
+    (is (null (cdr (assoc "absent" parsed :test #'string=))))
+    (is (eql 7 (cdr (assoc "n" parsed :test #'string=))))
+    (is (string= "x" (cdr (assoc "s" parsed :test #'string=))))))
+
 ;;; --- Phase 5 Task 6: real-HTTP smoke + concurrency isolation -----------------
 ;;;
 ;;; Tasks 3-4 unit-tested the PURE handler logic (handle-*) and the programmatic

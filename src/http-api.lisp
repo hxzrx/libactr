@@ -35,17 +35,44 @@
   (let ((yason:*parse-object-as* :alist))
     (yason:parse string)))
 
+(defun plist-like-p (x)
+  "True when X is a non-empty proper list whose every even-index element is a
+keyword — i.e. a plist to encode as a JSON object (vs a list → JSON array)."
+  (and (consp x)
+       (loop :for (k v) :on x :by #'cddr
+             :always (keywordp k))))
+
+(defun %jsonify (x)
+  "Recursively convert a plist tree to JSON-ready data: plists -> hash-tables
+(JSON objects), other lists -> lists (JSON arrays), symbol values -> lowercase
+strings (covers both keyword values like :ON-PATH and non-keyword symbols like
+production names interned in a model's package), t -> t, nil -> nil (yason
+emits null). Atoms (numbers, strings, ratios) pass through. yason:encode then
+serializes the root hash-table as a recursively-nested JSON object — unlike
+yason:encode-plist, which flattens nested plists into arrays of atoms."
+  (cond
+    ((null x) nil)
+    ((eq x t) t)
+    ((symbolp x) (string-downcase (symbol-name x)))
+    ((plist-like-p x)
+     (let ((h (make-hash-table :test 'equal)))
+       (loop :for (k v) :on x :by #'cddr
+             :do (setf (gethash (string-downcase (symbol-name k)) h)
+                       (%jsonify v)))
+       h))
+    ((listp x) (mapcar #'%jsonify x))
+    (t x)))
+
 (defun json-encode (plist)
-  "Encode PLIST (with keyword or string keys) as a JSON object string. Keyword
-keys are lowercased (e.g. :SESSION_ID -> \"session_id\"); keyword values are
-likewise stringified and lowercased (e.g. :ON-PATH -> \"on-path\"). nil values
-become JSON null; t becomes JSON true."
-  (let ((yason:*symbol-key-encoder*
-          (lambda (k) (string-downcase (symbol-name k))))
-        (yason:*symbol-encoder*
-          (lambda (s) (string-downcase (symbol-name s)))))
-    (with-output-to-string (s)
-      (yason:encode-plist plist s))))
+  "Encode PLIST (with keyword or string keys, possibly nested plists and lists
+of plists) as a JSON object string. Nested plists become JSON objects; lists of
+plists become arrays of objects; keyword keys/values lowercase to strings
+(e.g. :SESSION_ID -> \"session_id\", :ON-PATH -> \"on-path\"); nil -> null, t ->
+true. Replaces the non-recursive yason:encode-plist, which flattened nested
+plists into arrays of atoms (the per-KC :mastery/:kc entries became
+array-of-arrays instead of array-of-objects)."
+  (with-output-to-string (s)
+    (yason:encode (%jsonify plist) s)))
 
 (defun kc->json (kc)
   "Stringify a KC symbol at the data boundary. princ-to-string is used (rather
