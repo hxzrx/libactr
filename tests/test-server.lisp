@@ -695,11 +695,17 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                  (declare (ignore resp))
                  (is (= 200 status)))
                ;; mastery for lea — the shared student log has aggregated the
-               ;; kc-events from this session; assert it returns kc data.
+               ;; kc-events from this session. Mirror fraction.e2e: confirm the
+               ;; per-KC entries are JSON OBJECTS (each yields a KC name via the
+               ;; "kc" cons) and that a known addition KC (increment-sum) appears.
                (multiple-value-bind (body status)
                    (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=lea" port))
                  (is (= 200 status))
-                 (is (assoc "kc" (yason:parse body :object-as :alist) :test #'string=)))
+                 (let ((kcs (mapcar (lambda (entry)
+                                      (cdr (assoc "kc" entry :test #'string=)))
+                                    (cdr (assoc "kc" (yason:parse body :object-as :alist)
+                                                :test #'string=)))))
+                   (is (find "INCREMENT-SUM" kcs :test #'string=))))
                ;; end
                (multiple-value-bind (body status)
                    (post "/session/end" (format nil "{\"session_id\":\"~a\"}" sid))

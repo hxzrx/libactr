@@ -22,13 +22,13 @@
 ;;;
 ;;; yason's default *symbol-key-encoder* is ENCODE-SYMBOL-KEY-ERROR, which
 ;;; signals on any symbol key (regular keyword like :session_id OR a barred
-;;; keyword like :|session_id|). redis-store.lisp sidesteps this by using plain
-;;; STRING keys. Here we keep keyword keys in the response plists (so tests can
-;;; use (getf resp :session_id)) and bind both *symbol-key-encoder* (for keys)
-;;; and *symbol-encoder* (for symbol values like the :on-path status keyword)
-;;; to a lowercase-name converter inside json-encode. This produces JSON keys
-;;; matching the snake_case / lowercase conventions of the response shape and
-;;; JSON string values for status symbols.
+;;; keyword like :|session_id|). So json-encode avoids yason's symbol encoders
+;;; entirely: it pre-converts the response plist tree via %jsonify (recursive:
+;;; plist -> hash-table object, list-of-plists -> array-of-objects, symbol
+;;; value -> lowercase string, nil -> null, t -> true) and hands the root
+;;; hash-table to yason:encode. Keyword keys are downcased as they enter each
+;;; table (:SESSION_ID -> "session_id"). redis-store.lisp sidesteps this by
+;;; using plain STRING keys.
 
 (defun json-decode (string)
   "Parse STRING (a JSON document) into an alist with string keys."
