@@ -706,3 +706,69 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                  (declare (ignore body))
                  (is (= 200 status))))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 9 Task 2: tutor-server configurable kt-params ----------------------
+;;;
+;;; compute-mastery already accepts &key (kt-params (make-kt-params)) (Phase 6)
+;;; with per-KC overrides (Phase 7 kt-params-for), but the service layer called it
+;;; WITHOUT kt-params in two places — server-student-mastery (server.lisp) and
+;;; trace-result->response-plist (http-api.lisp, called by handle-step). So per-KC
+;;; Bayesian overrides never reached HTTP mastery. These tests prove the
+;;; per-server kt-params slot threads through to BOTH compute-mastery call sites:
+;;; the GET /student/mastery path (test 1) and the inline :mastery in the step
+;;; response (test 2). The stub's on-path step produces an initialize-addition KC
+;;; (name-fallback, interned in :mtt/server-test); the tests key the override on
+;;; 'initialize-addition (same package symbol -> eql match in kt-params-for).
+
+(test server.kt-params-override-reaches-mastery
+  "A tutor-server built with :kt-params carrying a per-KC override yields mastery
+P(L) that reflects the override (proves the slot threads through to
+compute-mastery via server-student-mastery). The stub's on-path step produces an
+initialize-addition KC (name-fallback, interned in :mtt/server-test)."
+  (flet ((master-p-l (server)
+           (getf (first (server-student-mastery server "alice")) :p-l)))
+    (let ((default-server (start-tutor-server :port 0 :start-acceptor-p nil))
+          (override-server
+            (start-tutor-server
+             :port 0 :start-acceptor-p nil
+             :kt-params (make-kt-params
+                         :overrides (list (cons 'initialize-addition
+                                                (make-kt-params :transit 0.01d0)))))))
+      (unwind-protect
+           (progn
+             (dolist (s (list default-server override-server))
+               (multiple-value-bind (md adapter) (%stub-model+adapter)
+                 (register-model s "add" md adapter))
+               (let ((sid (server-start-session s "alice" "5+2" "add")))
+                 (server-step-session s sid '((type . start)))
+                 (server-end-session s sid)))
+             ;; default transit 0.1 -> [t] = 2/5 = 0.4
+             (is (< (abs (- (master-p-l default-server) 2/5)) 1e-6))
+             ;; override transit 0.01 climbs slower -> strictly lower P(L)
+             (is (< (master-p-l override-server) (master-p-l default-server))))
+        (stop-tutor-server default-server)
+        (stop-tutor-server override-server)))))
+
+(test server.kt-params-override-reaches-step-response
+  "The step response's inline :mastery also reflects the server's kt-params
+(proves trace-result->response-plist threads kt-params via handle-step)."
+  (let ((s (start-tutor-server
+            :port 0 :start-acceptor-p nil
+            :kt-params (make-kt-params
+                        :overrides (list (cons 'initialize-addition
+                                               (make-kt-params :transit 0.01d0)))))))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model s "add" md adapter))
+           (let ((sid (server-start-session s "alice" "5+2" "add")))
+             (multiple-value-bind (resp status)
+                 (mtt/server::handle-step s `(("session_id" . ,sid)
+                                              ("action" ((type . start)))))
+               (is (= 200 status))
+               (let ((mastery (getf resp :mastery)))
+                 (is (listp mastery))
+                 ;; with transit 0.01 the single [t] P(L) is strictly below the
+                 ;; default 2/5, proving the override reached this computation.
+                 (is (< (getf (first mastery) :p_l) 2/5))))))
+      (stop-tutor-server s))))

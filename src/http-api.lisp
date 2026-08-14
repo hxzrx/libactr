@@ -79,13 +79,16 @@ array-of-arrays instead of array-of-objects)."
 than symbol-name) so that future non-symbol KCs (e.g. strings) are handled."
   (princ-to-string kc))
 
-(defun trace-result->response-plist (result adapter session)
+(defun trace-result->response-plist (result adapter session kt-params)
   "Build the step-response plist from a trace-result plus its adapter/session
 context. Includes the KC of the first event (the step's KC), aggregate mastery
-from the student's full event log, and the domain-specific done flag."
+from the student's full event log, and the domain-specific done flag.
+KT-PARAMS (Phase 9 Task 2) is the server's kt-params instance, threaded to
+compute-mastery so per-KC BKT overrides reach the inline :mastery."
   (let* ((kc-event (first (mtt:trace-result-events result)))
          (mastery (mtt:compute-mastery
-                   (mtt:log-all-events (mtt:session-log session)))))
+                   (mtt:log-all-events (mtt:session-log session))
+                   :kt-params kt-params)))
     (list :status (mtt:trace-result-status result)
           :production (let ((p (mtt:trace-result-production result)))
                         (and p (mtt:production-name p)))
@@ -151,7 +154,8 @@ failure). See the contract note above."
         ((eq adapter :conflict)
          (values (list :error "session ended") 409))
         (t
-         (values (trace-result->response-plist result adapter session) 200))))))
+         (values (trace-result->response-plist result adapter session
+                                                 (server-kt-params server)) 200))))))
 
 (defun handle-end (server body)
   "End a session. BODY is the decoded alist: session_id. Returns:

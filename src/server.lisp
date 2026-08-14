@@ -20,6 +20,8 @@
            #:server-acceptor #:server-port
            #:server-students #:server-sessions #:server-models
            #:server-redis-config
+           ;; Phase 9 Task 2 — per-server kt-params (per-KC BKT overrides)
+           #:server-kt-params
            ;; Task 4 — per-instance HTTP dispatch (subclass of easy-acceptor)
            #:tutor-acceptor #:tutor-acceptor-dispatch-table))
 (in-package :mtt/server)
@@ -88,7 +90,14 @@ The cognitive-session itself (mtt core) holds no lock slot."))
    (students-lock  :reader   server-students-lock  :initform (bt:make-lock "tutor-server.students"))
    (sessions       :accessor server-sessions       :initform (make-hash-table :test #'equal))
    (models         :accessor server-models         :initform (make-hash-table :test #'equal))
-   (redis-config   :reader   server-redis-config   :initarg :redis-config :initform nil))
+   (redis-config   :reader   server-redis-config   :initarg :redis-config :initform nil)
+   ;; Phase 9 Task 2: per-server kt-params (one kt-params instance carrying per-KC
+   ;; overrides; works across multiple models via compute-mastery's per-KC lookup).
+   ;; Initform gives a fresh default when :kt-params is not supplied; start-tutor-
+   ;; server uses (or kt-params (mtt:make-kt-params)) so an explicitly-nil key still
+   ;; yields a real kt-params (avoids overriding the initform with nil).
+   (kt-params      :reader   server-kt-params      :initarg :kt-params
+                   :initform (mtt:make-kt-params)))
   (:documentation "Infrastructure-state container. Each instance owns its own
 acceptor, registries, and per-student event logs. Multiple tutor-servers can
 coexist (no global mutable state) — the multi-user-safety invariant is
@@ -123,14 +132,24 @@ which case the deployment is expected to have loaded mtt/redis-store."
                                   :host (getf rc :host) :port (getf rc :port))
         (mtt:make-event-log))))
 
-(defun start-tutor-server (&key (port 0) (start-acceptor-p t) redis-config)
+(defun start-tutor-server (&key (port 0) (start-acceptor-p t) redis-config kt-params)
   "Create a tutor-server. When START-ACCEPTOR-P is true (the default), create
 and start a Hunchentoot easy-acceptor (one-thread-per-connection taskmaster).
 PORT 0 lets the OS assign a free port. REDIS-CONFIG, when supplied as a plist
-\(:host :port), makes per-student event logs durable via redis-event-log. The
-HTTP dispatch table is wired in Task 4 (http-api); we still start the acceptor
+\(:host :port), makes per-student event logs durable via redis-event-log.
+KT-PARAMS (Phase 9 Task 2), when supplied as a mtt:kt-params instance, threads
+through to both compute-mastery call sites (server-student-mastery and the
+inline :mastery in handle-step) so per-KC BKT overrides reach HTTP mastery.
+Omitting it yields a fresh (make-kt-params) — identical to 期8 behavior. The
+\(or kt-params (mtt:make-kt-params)) guard is essential: make-instance with
+:kt-params nil would OVERRIDE the slot's initform with nil (yielding a nil
+kt-params -> wrong-type bug downstream in compute-mastery); the guard ensures
+an explicitly-nil key still gets a real default.
+The HTTP dispatch table is wired in Task 4 (http-api); we still start the acceptor
 if requested so Task 4 can install handlers into a running server."
-  (let ((server (make-instance 'tutor-server :port port :redis-config redis-config)))
+  (let ((server (make-instance 'tutor-server
+                                :port port :redis-config redis-config
+                                :kt-params (or kt-params (mtt:make-kt-params)))))
     (when start-acceptor-p
       (setf (server-acceptor server)
             (make-instance 'tutor-acceptor :port port
@@ -295,11 +314,14 @@ Serialized by the session-handle's lock."
   "Aggregate mastery for STUDENT-ID across all of that student's cognitive-
 sessions by replaying the shared student log through compute-mastery. Returns a
 list of plists ((:kc <kc> :correct <n> :total <n> :accuracy <float>) ...), or
-  (values nil :not-found)   ; unknown student-id"
+  (values nil :not-found)   ; unknown student-id
+Threads the server's kt-params (Phase 9 Task 2) so per-KC BKT overrides reach
+the mastery computation."
   (let ((ss (gethash student-id (server-students server))))
     (unless ss
       (return-from server-student-mastery (values nil :not-found)))
-    (mtt:compute-mastery (mtt:log-all-events (mtt:student-session-log ss)))))
+    (mtt:compute-mastery (mtt:log-all-events (mtt:student-session-log ss))
+                         :kt-params (server-kt-params server))))
 
 (defun server-health (server)
   "Return a shallow health plist: liveness plus counter shape. (The HTTP layer
