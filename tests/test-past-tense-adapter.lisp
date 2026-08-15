@@ -122,3 +122,80 @@ logs an :irregular-retrieval kc-event, walk/walked an :regular-inflection one
              (is (find :irregular-retrieval m :key (lambda (e) (getf e :kc))))
              (is (find :regular-inflection m :key (lambda (e) (getf e :kc))))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 10 Task 4: full-problem e2e over real HTTP -------------------
+;;; Mirrors fraction.e2e-full-problem: drive two single-step problems (go/went
+;;; irregular + walk/walked regular) for one student over real HTTP, then GET
+;;; /student/mastery and assert 2 KCs. Also asserts the Phase 9 recursive
+;;; json-encode wire shape on SYMBOL slot values: production names arrive as
+;;; lowercase strings and mastery entries as JSON objects in an array.
+
+(defun %find-free-port ()
+  (let ((sock (usocket:socket-listen "127.0.0.1" 0 :reuse-address t)))
+    (unwind-protect (usocket:get-local-port sock)
+      (usocket:socket-close sock))))
+
+(test past-tense.e2e-full-problem
+  "Two past-tense problems over real HTTP: answer went (irregular) and walked
+(regular) -> both 200 on-path with the visible productions as lowercase JSON
+strings, done=true on the single step, and /student/mastery returning BOTH KCs
+as array-of-objects."
+  (let* ((port (%find-free-port))
+         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+    (unwind-protect
+         (progn
+           (mtt/server:register-model s "pt"
+                                      (mtt/past-tense-adapter:build-past-tense-model)
+                                      (mtt/past-tense-adapter:make-past-tense-adapter))
+           (sleep 0.3)
+           (labels ((post (path json)
+                      (multiple-value-bind (body status)
+                          (dex:post (format nil "http://127.0.0.1:~a~a" port path) :content json)
+                        (values (yason:parse body :object-as :alist) status))))
+             (labels ((answer (verb value)
+                        ;; DEVIATION from the brief's helper (step-only): the
+                        ;; brief never ends the first problem's session, but
+                        ;; /session/start is idempotent on a student's ACTIVE
+                        ;; session, so the second start would return the go
+                        ;; session's sid and trace "walked" against VERB=GO
+                        ;; (off-path unclassified — observed as 5 FAILs on the
+                        ;; verbatim first run). Ending each single-step problem
+                        ;; makes the second start create a fresh walk session;
+                        ;; the shared student event log (and thus mastery) is
+                        ;; unaffected. Same fix as the %answer helper above
+                        ;; (Task 3 deviation) and tests/test-empirical.lisp.
+                        (let ((sid (cdr (assoc "session_id"
+                                               (post "/session/start"
+                                                     (format nil "{\"student_id\":\"pto\",\"problem_id\":\"~a\",\"model_id\":\"pt\"}" verb))
+                                               :test #'string=))))
+                          (multiple-value-prog1
+                              (post "/session/step"
+                                    (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"answer\",\"value\":\"~a\"}}"
+                                            sid value))
+                            (post "/session/end"
+                                  (format nil "{\"session_id\":\"~a\"}" sid))))))
+               ;; go -> went: on-path, retrieve-irregular (lowercase wire symbol), done
+               (multiple-value-bind (resp status) (answer "go" "went")
+                 (is (= 200 status))
+                 (is (string= "on-path" (cdr (assoc "status" resp :test #'string=))))
+                 (is (string= "retrieve-irregular"
+                              (cdr (assoc "production" resp :test #'string=))))
+                 (is (eq t (cdr (assoc "done" resp :test #'string=)))))
+               ;; walk -> walked: on-path, apply-regular
+               (multiple-value-bind (resp status) (answer "walk" "walked")
+                 (is (= 200 status))
+                 (is (string= "on-path" (cdr (assoc "status" resp :test #'string=))))
+                 (is (string= "apply-regular"
+                              (cdr (assoc "production" resp :test #'string=))))
+                 (is (eq t (cdr (assoc "done" resp :test #'string=)))))
+               ;; mastery: BOTH KCs, entries as objects (Phase 9 recursive encode)
+               (multiple-value-bind (body status)
+                   (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=pto" port))
+                 (is (= 200 status))
+                 (let ((kcs (mapcar (lambda (entry) (cdr (assoc "kc" entry :test #'string=)))
+                                    (cdr (assoc "kc" (yason:parse body :object-as :alist)
+                                                :test #'string=)))))
+                   (is (= 2 (length kcs)))
+                   (is (find "IRREGULAR-RETRIEVAL" kcs :test #'string=))
+                   (is (find "REGULAR-INFLECTION" kcs :test #'string=)))))))
+      (mtt/server:stop-tutor-server s))))
