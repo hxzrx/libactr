@@ -2,7 +2,8 @@
 ;;;; Implements the 3-method adapter protocol for the past-tense model. The
 ;;;; ADAPTER IS THE DOMAIN BRAIN: it looks up the verb class + correct form,
 ;;;; detects the bug pattern, and primes retrieval with the matching fact
-;;;; (word-fact / rule-fact / bug-fact). Single-step: one "answer" action per
+;;;; (verb-fact with the discriminating class slot / bug-fact). Single-step:
+;;;; one "answer" action per
 ;;;; problem; both correct productions are terminal (base list support, Task 2).
 ;;;; Stateless: all state lives on the session. NO global variables.
 (defpackage :mtt/past-tense-adapter
@@ -57,12 +58,17 @@ off-path-buggy / off-path. See spec §5's 6-branch table."
                   (mtt:adapter-fact a "BUG-FACT" :kind kind
                                     :verb verb-sym :past answer-sym))))
             (cond
-              ;; 1-2 correct: regular -> rule-fact, irregular -> word-fact
+              ;; 1-2 correct: verb-fact whose class slot literal routes the
+              ;; production (regular -> apply-regular, irregular ->
+              ;; retrieve-irregular); spec §3 amended (isa is not tested by
+              ;; act-r in buffer conditions, class IS in both engines).
               ((and correct (string= answer correct))
                (mtt:adapter-primed-intent
                 a (intent)
-                (mtt:adapter-fact a (if regular-p "RULE-FACT" "WORD-FACT")
-                                  :verb verb-sym :past answer-sym)))
+                (mtt:adapter-fact a "VERB-FACT"
+                                  :verb verb-sym
+                                  :class (gi (if regular-p "REGULAR" "IRREGULAR"))
+                                  :past answer-sym)))
               ;; 3 bug: over-regularize (verb+ED on an irregular verb)
               ((and (not regular-p) correct
                     (string= answer (concatenate 'string verb "ED")))
