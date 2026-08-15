@@ -148,6 +148,19 @@
   :depends-on ("mtt/past-tense-tutor" "fiveam")
   :components ((:file "tests/test-past-tense-tutor")))
 
+;;; Phase 10 Task 3 — third domain adapter (past-tense). Reuses
+;;; mtt/past-tense-tutor model-load; the adapter is the domain brain (lexicon
+;;; lookup, bug detection, retrieval priming). mtt/past-tense-adapter-test
+;;; depends on mtt/server-test because the test file joins the :mtt/server
+;;; FiveAM suite defined in test-server.lisp (mirrors fraction-adapter).
+(asdf:defsystem "mtt/past-tense-adapter"
+  :depends-on ("mtt/server" "mtt/past-tense-tutor")
+  :components ((:file "src/past-tense-adapter")))
+
+(asdf:defsystem "mtt/past-tense-adapter-test"
+  :depends-on ("mtt/past-tense-adapter" "mtt/server-test" "fiveam")
+  :components ((:file "tests/test-past-tense-adapter")))
+
 ;;; Phase 7 Task 5 — empirical validation harness. Synthetic-student traces drive
 ;;; the engine; assertions check tracing correctness + P(L) monotonicity/
 ;;; convergence/interval + per-KC distinctness. Cross-domain: fraction + addition.
