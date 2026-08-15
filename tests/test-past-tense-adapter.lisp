@@ -62,8 +62,9 @@ answers two problems as one student)."
       (mtt/server:stop-tutor-server s))))
 
 (test past-tense-adapter.on-path-no-change-irregular
-  "put -> put: no-change irregular takes the WORD-FACT path (correct form =
-stem), NOT the no-ed bug (that is regular-only). Regression guard for spec §11.3."
+  "put -> put: no-change irregular (verb-fact class=irregular) goes through
+RETRIEVE-IRREGULAR (correct form = stem), NOT the no-ed bug (that is
+regular-only). Regression guard for spec §11.3."
   (let ((s (%server)))
     (unwind-protect
          (multiple-value-bind (status name) (%answer s "p3" "put" "put")
