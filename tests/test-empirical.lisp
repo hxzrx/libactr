@@ -144,3 +144,61 @@ rose above L0=0.1 after 3 correct observations. (1/2+1/3: cdenom 6, sum 5/6.)"
     (dolist (entry m)
       (let ((pl (getf entry :p-l)))
         (is (and (realp pl) (< 0.0d0 pl 1.0d0)))))))
+
+;;; --- Phase 10: third domain (past-tense) — KC routing by problem variable ---
+
+(defun %pt-server ()
+  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (mtt/server:register-model s "pt" (mtt/past-tense-adapter:build-past-tense-model)
+                               (mtt/past-tense-adapter:make-past-tense-adapter))
+    s))
+
+(defun %pt-answer-correct (s student)
+  (let ((sid (mtt/server:server-start-session s student "go" "pt")))
+    (mtt/server:server-step-session s sid '(("type" . "answer") ("value" . "went")))
+    (mtt/server:server-end-session s sid)))
+
+(defun %pt-answer-buggy (s student)
+  (let ((sid (mtt/server:server-start-session s student "go" "pt")))
+    (mtt/server:server-step-session s sid '(("type" . "answer") ("value" . "goed")))
+    (mtt/server:server-end-session s sid)))
+
+(test p-l.past-tense-kc-routes-by-problem-variable
+  "KC-routing evidence (spec §9.5): one student answers the IRREGULAR verb 'go'
+correctly 3x -> the shared log holds ONLY :irregular-retrieval events (mastery
+has 1 entry, P(L) above L0). The SAME action type would have logged
+:regular-inflection on a regular verb — attribution follows the problem's verb
+class, not the step type."
+  (let ((s (%pt-server)))
+    (unwind-protect
+         (progn
+           (dotimes (i 3) (%pt-answer-correct s "kcr"))
+           (let ((m (mtt/server:server-student-mastery s "kcr")))
+             (is (= 1 (length m)))
+             (is (eq :irregular-retrieval (getf (first m) :kc)))
+             (is (> (getf (first m) :p-l) 0.1d0))
+             (is (< (getf (first m) :p-l) 1.0d0))))
+      (mtt/server:stop-tutor-server s))))
+
+(test p-l.past-tense-buggy-lower-than-correct
+  "Over-regularizing (go->goed, 3x) yields a strictly LOWER P(L) on
+:irregular-retrieval than answering correctly (go->went, 3x) — the traced
+kc-event stream feeds KT with correct-p=nil on buggy steps."
+  (let ((s (%pt-server)))
+    (unwind-protect
+         (progn
+           (dotimes (i 3) (%pt-answer-correct s "kcc"))
+           (dotimes (i 3) (%pt-answer-buggy s "kcb"))
+           (flet ((pl (student)
+                    (getf (first (mtt/server:server-student-mastery s student)) :p-l)))
+             (is (< (pl "kcb") (pl "kcc")))))
+      (mtt/server:stop-tutor-server s))))
+
+(test p-l.past-tense-third-domain-sanity
+  "Cross-domain harness now spans THREE domains (addition / fraction /
+past-tense); past-tense P(L) over a correct sequence behaves like the others:
+in (0,1)."
+  (let ((m (compute-mastery (%events :irregular-retrieval '(t t t t)))))
+    (dolist (entry m)
+      (let ((pl (getf entry :p-l)))
+        (is (and (realp pl) (< 0.0d0 pl 1.0d0)))))))

@@ -70,7 +70,10 @@
   :in-order-to ((test-op (test-op "mtt/redis-store-test"))))
 
 (asdf:defsystem "mtt/redis-store-test"
-  :depends-on ("mtt/redis-store" "fiveam")
+  ;; mtt/past-tense-tutor: Phase 10 symbol specialization test interns
+  ;; model-package symbols (:mtt/past-tense-tutor) for summary round-trip —
+  ;; light system (depends on mtt only), no server stack pulled in.
+  :depends-on ("mtt/redis-store" "mtt/past-tense-tutor" "fiveam")
   :components ((:file "tests/test-redis-store")))
 
 ;;; Phase 5 service layer — Hunchentoot + bordeaux-threads (domain-agnostic engine).
@@ -168,5 +171,5 @@
 ;;; regression of core internals). Two legs: tracing correctness via
 ;;; server-step-session; P(L) math via direct compute-mastery (deterministic).
 (asdf:defsystem "mtt/empirical-test"
-  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter" "fiveam")
+  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter" "mtt/past-tense-adapter" "fiveam")
   :components ((:file "tests/test-empirical")))
