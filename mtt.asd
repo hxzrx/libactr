@@ -137,6 +137,17 @@
   :depends-on ("mtt/fraction-adapter" "mtt/server-test" "fiveam")
   :components ((:file "tests/test-fraction-adapter")))
 
+;;; Phase 10 — past-tense domain (third adapter: retrieval-heavy, symbol slot
+;;; values, single-step). Model file under models/; tutor system loads+compiles
+;;; it and appends the buggy library.
+(asdf:defsystem "mtt/past-tense-tutor"
+  :depends-on ("mtt")
+  :components ((:file "examples/past-tense-tutor")))
+
+(asdf:defsystem "mtt/past-tense-tutor-test"
+  :depends-on ("mtt/past-tense-tutor" "fiveam")
+  :components ((:file "tests/test-past-tense-tutor")))
+
 ;;; Phase 7 Task 5 — empirical validation harness. Synthetic-student traces drive
 ;;; the engine; assertions check tracing correctness + P(L) monotonicity/
 ;;; convergence/interval + per-KC distinctness. Cross-domain: fraction + addition.
