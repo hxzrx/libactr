@@ -208,3 +208,55 @@ the goal is set to a terminate-addition state."
     (let ((diffs (dual-track-check-with-retrieval (fraction-model-path) goal retr)))
       (is (null diffs)
           "fraction add-fractions dual-track: ~A" diffs))))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 10: past-tense dual-track (model-matching vs act-r oracle)
+;;; ---------------------------------------------------------------------------
+;;; Third domain: SYMBOL slot values (go/went/walked), unlike fraction's
+;;; integers. Model file mtt/models/past-tense.lisp is loaded directly by
+;;; act-r. Three cases: irregular-class match, regular-class match, and
+;;; negative agreement (class literal mismatch -> the wrong production does
+;;; not match in EITHER engine). The two correct productions discriminate on
+;;; the retrieval CLASS slot literal, NOT isa: Task 5 empirically showed
+;;; ACT-R does not test isa in buffer conditions (procedural.lisp's own
+;;; "isa that provides no tests" warning; chunks carry no type at run time),
+;;; so spec §3 was amended to verb-fact + class (same idiom as bug-fact's
+;;; kind). Buggy productions are mtt-loader-only (appended post-load, like
+;;; fraction), so no buggy dual case — spec §9.4 (amended).
+
+(defun past-tense-model-path ()
+  "Path to the Phase 10 past-tense model (mtt/models/past-tense.lisp)."
+  (asdf:system-relative-pathname "mtt" "models/past-tense.lisp"))
+
+(test dual-track-past-tense-retrieve-irregular
+  "Goal: verb=go past=nil. Retrieval: verb-fact verb=go class=irregular
+past=went. Both engines must agree RETRIEVE-IRREGULAR matches and
+APPLY-REGULAR does not (class literal irregular vs required regular)."
+  (let ((goal (mtt:make-chunk :isa 'past-tense-task :slots '((verb . go) (past . nil))))
+        (retr (mtt:make-chunk :isa 'verb-fact
+                              :slots '((verb . go) (class . irregular) (past . went)))))
+    ;; past-tense-task / verb-fact intern in :mtt/test here; oracle compares by name.
+    (let ((diffs (dual-track-check-with-retrieval (past-tense-model-path) goal retr)))
+      (is (null diffs) "past-tense retrieve-irregular dual-track: ~A" diffs))))
+
+(test dual-track-past-tense-apply-regular
+  "Goal: verb=walk past=nil. Retrieval: verb-fact verb=walk class=regular
+past=walked. Both engines must agree APPLY-REGULAR matches and
+RETRIEVE-IRREGULAR does not."
+  (let ((goal (mtt:make-chunk :isa 'past-tense-task :slots '((verb . walk) (past . nil))))
+        (retr (mtt:make-chunk :isa 'verb-fact
+                              :slots '((verb . walk) (class . regular) (past . walked)))))
+    (let ((diffs (dual-track-check-with-retrieval (past-tense-model-path) goal retr)))
+      (is (null diffs) "past-tense apply-regular dual-track: ~A" diffs))))
+
+(test dual-track-past-tense-mismatch-agrees
+  "Negative agreement: goal verb=go (irregular) but retrieval holds a
+REGULAR-class fact (the over-regularizer's belief: go -> goed). Both engines
+must agree APPLY-REGULAR matches (class regular, verb =v binds go) and
+RETRIEVE-IRREGULAR does NOT (class literal irregular vs regular). Guards the
+class-literal discrimination path both ways."
+  (let ((goal (mtt:make-chunk :isa 'past-tense-task :slots '((verb . go) (past . nil))))
+        (retr (mtt:make-chunk :isa 'verb-fact
+                              :slots '((verb . go) (class . regular) (past . goed)))))
+    (let ((diffs (dual-track-check-with-retrieval (past-tense-model-path) goal retr)))
+      (is (null diffs) "past-tense mismatch dual-track: ~A" diffs))))

@@ -70,7 +70,10 @@
   :in-order-to ((test-op (test-op "mtt/redis-store-test"))))
 
 (asdf:defsystem "mtt/redis-store-test"
-  :depends-on ("mtt/redis-store" "fiveam")
+  ;; mtt/past-tense-tutor: Phase 10 symbol specialization test interns
+  ;; model-package symbols (:mtt/past-tense-tutor) for summary round-trip —
+  ;; light system (depends on mtt only), no server stack pulled in.
+  :depends-on ("mtt/redis-store" "mtt/past-tense-tutor" "fiveam")
   :components ((:file "tests/test-redis-store")))
 
 ;;; Phase 5 service layer — Hunchentoot + bordeaux-threads (domain-agnostic engine).
@@ -137,6 +140,30 @@
   :depends-on ("mtt/fraction-adapter" "mtt/server-test" "fiveam")
   :components ((:file "tests/test-fraction-adapter")))
 
+;;; Phase 10 — past-tense domain (third adapter: retrieval-heavy, symbol slot
+;;; values, single-step). Model file under models/; tutor system loads+compiles
+;;; it and appends the buggy library.
+(asdf:defsystem "mtt/past-tense-tutor"
+  :depends-on ("mtt")
+  :components ((:file "examples/past-tense-tutor")))
+
+(asdf:defsystem "mtt/past-tense-tutor-test"
+  :depends-on ("mtt/past-tense-tutor" "fiveam")
+  :components ((:file "tests/test-past-tense-tutor")))
+
+;;; Phase 10 Task 3 — third domain adapter (past-tense). Reuses
+;;; mtt/past-tense-tutor model-load; the adapter is the domain brain (lexicon
+;;; lookup, bug detection, retrieval priming). mtt/past-tense-adapter-test
+;;; depends on mtt/server-test because the test file joins the :mtt/server
+;;; FiveAM suite defined in test-server.lisp (mirrors fraction-adapter).
+(asdf:defsystem "mtt/past-tense-adapter"
+  :depends-on ("mtt/server" "mtt/past-tense-tutor")
+  :components ((:file "src/past-tense-adapter")))
+
+(asdf:defsystem "mtt/past-tense-adapter-test"
+  :depends-on ("mtt/past-tense-adapter" "mtt/server-test" "fiveam")
+  :components ((:file "tests/test-past-tense-adapter")))
+
 ;;; Phase 7 Task 5 — empirical validation harness. Synthetic-student traces drive
 ;;; the engine; assertions check tracing correctness + P(L) monotonicity/
 ;;; convergence/interval + per-KC distinctness. Cross-domain: fraction + addition.
@@ -144,5 +171,5 @@
 ;;; regression of core internals). Two legs: tracing correctness via
 ;;; server-step-session; P(L) math via direct compute-mastery (deterministic).
 (asdf:defsystem "mtt/empirical-test"
-  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter" "fiveam")
+  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter" "mtt/past-tense-adapter" "fiveam")
   :components ((:file "tests/test-empirical")))

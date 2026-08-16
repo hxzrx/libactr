@@ -222,3 +222,65 @@ recompute' guarantee). Also validates B4 (kc identity must match for bucketing).
         (is (< (abs (- (getf (first m-redis) :p-l)
                        (getf (first m-mem) :p-l)))
                1e-9))))))
+
+(test redis-event-log.past-tense-symbol-summaries-round-trip
+  "Phase 10 symbol specialization: log-events whose intent-summary carries
+MODEL-PACKAGE symbol slot values from student answers — e.g. ((goal past
+GOED) (goal verb GO)) with GOED interned in :mtt/past-tense-tutor, arbitrary
+student strings rather than a fixed number-word vocabulary — round-trip
+through the redis JSON backend, and mastery recomputed from the redis log
+equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
+  :skipped-if (lambda () (null (%redis-server-binary)))
+  (with-test-redis (conn port)
+    (let* ((kc :irregular-retrieval)
+           (mk (lambda (seq correct)
+                 (make-log-event
+                  :seq seq :student-id "pts" :problem-id "go"
+                  :kc-event (make-kc-event :kc kc :correct-p correct)
+                  :intent-summary `((goal past ,(intern "GOED" :mtt/past-tense-tutor))
+                                    (goal verb ,(intern "GO" :mtt/past-tense-tutor)))
+                  :result-summary (list (if correct :on-path :off-path-buggy)
+                                        (intern (if correct "RETRIEVE-IRREGULAR"
+                                                    "BUGGY-OVER-REGULARIZE")
+                                                :mtt/past-tense-tutor)
+                                        "feedback" 0))))
+           (events (list (funcall mk 1 t) (funcall mk 2 nil) (funcall mk 3 t))))
+      ;; memory fold
+      (let* ((mem (make-event-log))
+             (_ (dolist (e events) (log-append mem e)))
+             (mem-mastery (mtt:compute-mastery (log-all-events mem))))
+        (let ((rlog (make-redis-event-log :key "mtt:test:pt-symbols"
+                                          :host "127.0.0.1" :port port)))
+          (unwind-protect
+               (progn
+                 (dolist (e events) (log-append rlog e))
+                 (is (= 3 (log-last-seq rlog)))
+                 ;; JSON wire: the model-package symbols encode without crashing
+                 ;; (lowercase-name converter) and their names are on the wire.
+                 (let* ((raw (let ((redis:*connection* conn))
+                               (redis:red-lrange (redis-event-log-key rlog) 0 -1)))
+                        (raw2 (second raw)))
+                   (is (= 3 (length raw)))
+                   (is (and (search "\"goed\"" raw2) t))
+                   (is (and (search "\"buggy-over-regularize\"" raw2) t)))
+                 ;; kc round-trips with package identity (B4). Summaries come
+                 ;; back NON-NIL carrying the content, but NOT as symbols (or
+                 ;; even strings): %coerce-to-list maps over every vector,
+                 ;; including strings, so each name decodes as a char list —
+                 ;; the shape B2 shipped; symbol/string-level summary fidelity
+                 ;; is the known deferred backlog item (CLAUDE.md 后续推后项).
+                 (let ((e2 (second (log-all-events rlog))))
+                   (is (eq :irregular-retrieval
+                           (kc-event-kc (log-event-kc-event e2))))
+                   (is (string= "goed"
+                                (coerce (third (first (log-event-intent-summary e2)))
+                                        'string)))
+                   (is (string= "off-path-buggy"
+                                (coerce (first (log-event-result-summary e2))
+                                        'string))))
+                 ;; KT replay equals in-memory fold (spec §9.6: recompute
+                 ;; mastery losslessly) — bit-identical because kc carries its
+                 ;; package through kc_package and P(L) folds the same doubles.
+                 (is (equal mem-mastery
+                            (mtt:compute-mastery (log-all-events rlog)))))
+            (disconnect-log rlog)))))))

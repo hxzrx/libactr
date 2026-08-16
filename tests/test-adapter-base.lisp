@@ -69,3 +69,23 @@
          (tr (make-trace-result :status :off-path
                :production (make-production 'done nil nil nil :correct nil))))
     (is (null (step-done? a tr (%fake-session (make-buffer-state)))))))
+
+(test adapter-terminal-production.string-normalized-to-list
+  "Phase 10: a bare-string terminal-production is normalized to a one-element
+list; a list passes through unchanged."
+  (is (equal '("DONE") (adapter-terminal-production (make-test-adapter))))
+  (is (equal '("RETRIEVE-IRREGULAR" "APPLY-REGULAR")
+             (adapter-terminal-production (make-test-adapter
+                                           '("RETRIEVE-IRREGULAR" "APPLY-REGULAR"))))))
+
+(test step-done.default-matches-any-terminal-in-list
+  "Phase 10: with a multi-name terminal list, the default step-done? accepts an
+on-path production matching ANY listed name, and still rejects others."
+  (let* ((a (make-test-adapter '("RETRIEVE-IRREGULAR" "APPLY-REGULAR")))
+         (mk (lambda (name)
+               (make-trace-result :status :on-path
+                 :production (make-production name nil nil nil :correct nil))))
+         (s (%fake-session (make-buffer-state))))
+    (is (step-done? a (funcall mk 'retrieve-irregular) s))
+    (is (step-done? a (funcall mk 'apply-regular) s))
+    (is (null (step-done? a (funcall mk 'some-other) s)))))
