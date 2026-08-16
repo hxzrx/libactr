@@ -260,3 +260,98 @@ class-literal discrimination path both ways."
                               :slots '((verb . go) (class . regular) (past . goed)))))
     (let ((diffs (dual-track-check-with-retrieval (past-tense-model-path) goal retr)))
       (is (null diffs) "past-tense mismatch dual-track: ~A" diffs))))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 11: subtraction dual-track (model-matching vs act-r oracle)
+;;; ---------------------------------------------------------------------------
+;;; Fourth domain: MIXED slot values (integer digits + symbol stage), unlike
+;;; fraction (pure integers) and past-tense (pure symbols). Model file
+;;; mtt/models/subtraction.lisp is loaded directly by act-r. Five cases: the
+;;; four correct productions each match with their priming fact (ones-direct /
+;;; ones-borrow / propagate / tens-direct), plus one negative agreement (a
+;;; kind=propagate fact against a stage=ones goal -> NO correct production
+;;; matches in EITHER engine). Buggy productions are mtt-loader-only (appended
+;;; post-load, like fraction/past-tense), so no buggy dual case.
+
+(defun subtraction-model-path ()
+  "Path to the Phase 11 subtraction model (mtt/models/subtraction.lisp)."
+  (asdf:system-relative-pathname "mtt" "models/subtraction.lisp"))
+
+(test dual-track-subtraction-ones-direct
+  "Goal: stage=ones res-ones nil top-ones 7 bot-ones 5. Retrieval: col-fact
+kind=direct top 7 bot 5 diff 2. Both engines must agree SUBTRACT-ONES-DIRECT
+matches and the other three correct productions do not."
+  (let ((goal (mtt:make-chunk :isa 'sub2
+                              :slots '((stage . ones) (res-ones . nil)
+                                       (top-ones . 7) (bot-ones . 5)
+                                       (top-tens . 4) (bot-tens . 2)
+                                       (res-tens . nil))))
+        (retr (mtt:make-chunk :isa 'col-fact
+                              :slots '((kind . direct) (top . 7) (bot . 5)
+                                       (diff . 2)))))
+    ;; sub2 / col-fact intern in :mtt/test here; oracle compares by name.
+    (let ((diffs (dual-track-check-with-retrieval (subtraction-model-path) goal retr)))
+      (is (null diffs) "subtraction ones-direct dual-track: ~A" diffs))))
+
+(test dual-track-subtraction-ones-borrow
+  "Goal: stage=ones res-ones nil top-ones 2 bot-ones 8. Retrieval: col-fact
+kind=borrow top 2 bot 8 diff 4. Both engines must agree SUBTRACT-ONES-BORROW
+matches and SUBTRACT-ONES-DIRECT does not (kind literal)."
+  (let ((goal (mtt:make-chunk :isa 'sub2
+                              :slots '((stage . ones) (res-ones . nil)
+                                       (top-ones . 2) (bot-ones . 8)
+                                       (top-tens . 5) (bot-tens . 1)
+                                       (res-tens . nil))))
+        (retr (mtt:make-chunk :isa 'col-fact
+                              :slots '((kind . borrow) (top . 2) (bot . 8)
+                                       (diff . 4)))))
+    (let ((diffs (dual-track-check-with-retrieval (subtraction-model-path) goal retr)))
+      (is (null diffs) "subtraction ones-borrow dual-track: ~A" diffs))))
+
+(test dual-track-subtraction-propagate
+  "Goal: stage=propagate top-tens 5. Retrieval: col-fact kind=propagate
+old-top 5 new-top 4. Both engines must agree PROPAGATE-BORROW matches (the
+old-top variable unifies with the goal's current tens digit — the
+double-entry check) and no other production does."
+  (let ((goal (mtt:make-chunk :isa 'sub2
+                              :slots '((stage . propagate) (top-tens . 5)
+                                       (top-ones . 2) (bot-ones . 8)
+                                       (bot-tens . 1) (res-ones . 4)
+                                       (res-tens . nil))))
+        (retr (mtt:make-chunk :isa 'col-fact
+                              :slots '((kind . propagate) (old-top . 5)
+                                       (new-top . 4)))))
+    (let ((diffs (dual-track-check-with-retrieval (subtraction-model-path) goal retr)))
+      (is (null diffs) "subtraction propagate dual-track: ~A" diffs))))
+
+(test dual-track-subtraction-tens-direct
+  "Goal: stage=tens res-tens nil top-tens 4 bot-tens 1. Retrieval: col-fact
+kind=direct top 4 bot 1 diff 3. Both engines must agree SUBTRACT-TENS-DIRECT
+matches (the decremented tens value written by propagate unifies with the
+fact's top) and no other production does."
+  (let ((goal (mtt:make-chunk :isa 'sub2
+                              :slots '((stage . tens) (res-tens . nil)
+                                       (top-tens . 4) (bot-tens . 1)
+                                       (top-ones . 2) (bot-ones . 8)
+                                       (res-ones . 4))))
+        (retr (mtt:make-chunk :isa 'col-fact
+                              :slots '((kind . direct) (top . 4) (bot . 1)
+                                       (diff . 3)))))
+    (let ((diffs (dual-track-check-with-retrieval (subtraction-model-path) goal retr)))
+      (is (null diffs) "subtraction tens-direct dual-track: ~A" diffs))))
+
+(test dual-track-subtraction-mismatch-agrees
+  "Negative agreement: goal stage=ones but retrieval holds a kind=PROPAGATE
+fact -> NO correct production matches in EITHER engine (ones-* need kind
+direct/borrow, propagate needs stage=propagate, tens needs stage=tens). Guards
+the kind/stage literal discrimination paths both ways."
+  (let ((goal (mtt:make-chunk :isa 'sub2
+                              :slots '((stage . ones) (res-ones . nil)
+                                       (top-ones . 7) (bot-ones . 5)
+                                       (top-tens . 4) (bot-tens . 2)
+                                       (res-tens . nil))))
+        (retr (mtt:make-chunk :isa 'col-fact
+                              :slots '((kind . propagate) (old-top . 4)
+                                       (new-top . 3)))))
+    (let ((diffs (dual-track-check-with-retrieval (subtraction-model-path) goal retr)))
+      (is (null diffs) "subtraction mismatch dual-track: ~A" diffs))))

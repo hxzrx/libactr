@@ -202,3 +202,82 @@ in (0,1)."
     (dolist (entry m)
       (let ((pl (getf entry :p-l)))
         (is (and (realp pl) (< 0.0d0 pl 1.0d0)))))))
+
+;;; --- Phase 11: fourth domain (subtraction) — KC divergence by problem mix ---
+
+(defun %sub-server ()
+  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (mtt/server:register-model s "sub"
+                               (mtt/subtraction-adapter:build-subtraction-model)
+                               (mtt/subtraction-adapter:make-subtraction-adapter))
+    s))
+
+(defun %sub-solve-no-borrow (s student)
+  "One full no-borrow problem (47-25: ones 2, tens 2), start->steps->end closed."
+  (let ((sid (mtt/server:server-start-session s student "47-25" "sub")))
+    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "2")))
+    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "2")))
+    (mtt/server:server-end-session s sid)))
+
+(defun %sub-solve-borrow (s student)
+  "One full borrow problem (52-18: ones 4, tens 3), start->steps->end closed."
+  (let ((sid (mtt/server:server-start-session s student "52-18" "sub")))
+    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "4")))
+    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "3")))
+    (mtt/server:server-end-session s sid)))
+
+(defun %sub-planted-borrow-ignore (s student)
+  "One borrow problem with a planted borrow-ignore step (43-27: ones 4 = the
+mirror), then end without retry — the buggy kc-event is what feeds KT."
+  (let ((sid (mtt/server:server-start-session s student "43-27" "sub")))
+    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "4")))
+    (mtt/server:server-end-session s sid)))
+
+(test p-l.subtraction-kc-divergence-by-problem-mix
+  "Per-KC divergence (spec §8.3): a student solving only NO-BORROW problems
+accumulates :column-subtract events alone (mastery has 1 entry, P(L) above
+L0); a student solving only BORROW problems exercises both KCs (the borrow
+pair logs 2 :borrow events per problem). Attribution follows whether the
+column needed a borrow — the arithmetic-domain analogue of past-tense's
+route-by-problem-variable evidence."
+  (let ((s (%sub-server)))
+    (unwind-protect
+         (progn
+           (dotimes (i 3) (%sub-solve-no-borrow s "sa"))
+           (let ((m (mtt/server:server-student-mastery s "sa")))
+             (is (= 1 (length m)))
+             (is (eq :column-subtract (getf (first m) :kc)))
+             (is (> (getf (first m) :p-l) 0.1d0)))
+           (dotimes (i 3) (%sub-solve-borrow s "sb"))
+           (let ((m (mtt/server:server-student-mastery s "sb")))
+             (is (= 2 (length m)))
+             (is (> (getf (find :borrow m :key (lambda (e) (getf e :kc))) :p-l)
+                    0.1d0))
+             (is (< (getf (find :borrow m :key (lambda (e) (getf e :kc))) :p-l)
+                    1.0d0))))
+      (mtt/server:stop-tutor-server s))))
+
+(test p-l.subtraction-buggy-lower-than-correct
+  "Planting borrow-ignore (43-27 ones=4, 3x, no retry) yields a strictly LOWER
+P(L) on :borrow than solving borrow problems correctly (52-18, 3x) — the
+traced kc-event stream feeds KT with correct-p=nil on buggy steps."
+  (let ((s (%sub-server)))
+    (unwind-protect
+         (progn
+           (dotimes (i 3) (%sub-solve-borrow s "sc"))
+           (dotimes (i 3) (%sub-planted-borrow-ignore s "sd"))
+           (flet ((pl (student)
+                    (getf (find :borrow (mtt/server:server-student-mastery s student)
+                                :key (lambda (e) (getf e :kc)))
+                          :p-l)))
+             (is (< (pl "sd") (pl "sc")))))
+      (mtt/server:stop-tutor-server s))))
+
+(test p-l.subtraction-fourth-domain-sanity
+  "Cross-domain harness now spans FOUR domains (addition / fraction /
+past-tense / subtraction); subtraction P(L) over a correct sequence behaves
+like the others: in (0,1)."
+  (let ((m (compute-mastery (%events :borrow '(t t t t)))))
+    (dolist (entry m)
+      (let ((pl (getf entry :p-l)))
+        (is (and (realp pl) (< 0.0d0 pl 1.0d0)))))))

@@ -164,6 +164,33 @@
   :depends-on ("mtt/past-tense-adapter" "mtt/server-test" "fiveam")
   :components ((:file "tests/test-past-tense-adapter")))
 
+;;; Phase 11 — subtraction domain (second arithmetic adapter: 2-digit column
+;;; subtraction with borrowing, conditional multi-step borrow columns). Model
+;;; file under models/; tutor system loads+compiles it and appends the buggy
+;;; library.
+(asdf:defsystem "mtt/subtraction-tutor"
+  :depends-on ("mtt")
+  :components ((:file "examples/subtraction-tutor")))
+
+(asdf:defsystem "mtt/subtraction-tutor-test"
+  :depends-on ("mtt/subtraction-tutor" "fiveam")
+  :components ((:file "tests/test-subtraction-tutor")))
+
+;;; Phase 11 Task 2 — second arithmetic domain adapter (subtraction). Reuses
+;;; mtt/subtraction-tutor model-load; the adapter is the domain brain (column
+;;; arithmetic, bug detection, retrieval priming) and returns CONDITIONAL
+;;; intent lists: a borrow column = 2 intents (visible subtract-ones-borrow,
+;;; hidden propagate-borrow), other columns = 1. mtt/subtraction-adapter-test
+;;; depends on mtt/server-test because the test file joins the :mtt/server
+;;; FiveAM suite defined in test-server.lisp (mirrors the other adapters).
+(asdf:defsystem "mtt/subtraction-adapter"
+  :depends-on ("mtt/server" "mtt/subtraction-tutor")
+  :components ((:file "src/subtraction-adapter")))
+
+(asdf:defsystem "mtt/subtraction-adapter-test"
+  :depends-on ("mtt/subtraction-adapter" "mtt/server-test" "fiveam")
+  :components ((:file "tests/test-subtraction-adapter")))
+
 ;;; Phase 7 Task 5 — empirical validation harness. Synthetic-student traces drive
 ;;; the engine; assertions check tracing correctness + P(L) monotonicity/
 ;;; convergence/interval + per-KC distinctness. Cross-domain: fraction + addition.
@@ -171,5 +198,6 @@
 ;;; regression of core internals). Two legs: tracing correctness via
 ;;; server-step-session; P(L) math via direct compute-mastery (deterministic).
 (asdf:defsystem "mtt/empirical-test"
-  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter" "mtt/past-tense-adapter" "fiveam")
+  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter"
+               "mtt/past-tense-adapter" "mtt/subtraction-adapter" "fiveam")
   :components ((:file "tests/test-empirical")))
