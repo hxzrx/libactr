@@ -176,6 +176,21 @@
   :depends-on ("mtt/subtraction-tutor" "fiveam")
   :components ((:file "tests/test-subtraction-tutor")))
 
+;;; Phase 11 Task 2 — second arithmetic domain adapter (subtraction). Reuses
+;;; mtt/subtraction-tutor model-load; the adapter is the domain brain (column
+;;; arithmetic, bug detection, retrieval priming) and returns CONDITIONAL
+;;; intent lists: a borrow column = 2 intents (visible subtract-ones-borrow,
+;;; hidden propagate-borrow), other columns = 1. mtt/subtraction-adapter-test
+;;; depends on mtt/server-test because the test file joins the :mtt/server
+;;; FiveAM suite defined in test-server.lisp (mirrors the other adapters).
+(asdf:defsystem "mtt/subtraction-adapter"
+  :depends-on ("mtt/server" "mtt/subtraction-tutor")
+  :components ((:file "src/subtraction-adapter")))
+
+(asdf:defsystem "mtt/subtraction-adapter-test"
+  :depends-on ("mtt/subtraction-adapter" "mtt/server-test" "fiveam")
+  :components ((:file "tests/test-subtraction-adapter")))
+
 ;;; Phase 7 Task 5 — empirical validation harness. Synthetic-student traces drive
 ;;; the engine; assertions check tracing correctness + P(L) monotonicity/
 ;;; convergence/interval + per-KC distinctness. Cross-domain: fraction + addition.
