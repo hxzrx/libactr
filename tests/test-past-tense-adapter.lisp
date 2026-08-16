@@ -101,12 +101,22 @@ regular-only). Regression guard for spec §11.3."
 
 (test past-tense-adapter.unclassified-off-path
   "go -> wented (matches no bug table): :off-path. Also: go -> go (unchanged
-irregular) is unclassified per spec §4."
+irregular) is unclassified per spec §4; go -> \"nil\" exercises the
+nil-designator guard (verb missing from the analogy table); and wug -> wugged
+routes an UNKNOWN verb (whole lexicon-miss subpath) end-to-end to :off-path —
+previously only verb-info unit-tested the unknown case."
   (let ((s (%server)))
     (unwind-protect
          (progn
            (is (eq :off-path (%answer s "p7" "go" "wented")))
-           (is (eq :off-path (%answer s "p8" "go" "go"))))
+           (is (eq :off-path (%answer s "p8" "go" "go")))
+           ;; nil-designator guard: GO is not in the analogy table, so the raw
+           ;; (string= answer (cdr (assoc ...))) form would compare "NIL" to
+           ;; nil-as-"NIL" and misroute a literal "nil" answer to vowel-analogy.
+           (is (eq :off-path (%answer s "p10" "go" "nil")))
+           ;; unknown verb: verb-info returns (values nil nil), no bug branch
+           ;; can fire (correct/analogy all nil) -> bare intent, no prime.
+           (is (eq :off-path (%answer s "p11" "wug" "wugged"))))
       (mtt/server:stop-tutor-server s))))
 
 (test past-tense-adapter.kc-routes-by-verb-class

@@ -45,7 +45,14 @@ off-path-buggy / off-path. See spec §5's 6-branch table."
     (let* ((type (cdr (assoc "type" action :test #'string=)))
            (answer (string-upcase (cdr (assoc "value" action :test #'string=))))
            (verb-sym (mtt:adapter-goal-slot a session "VERB"))
-           (verb (and verb-sym (symbol-name verb-sym))))
+           (verb (and verb-sym (symbol-name verb-sym)))
+           ;; assoc-then-test guard: a MISSING analogy entry's cdr is nil,
+           ;; itself a valid string designator reading "NIL", so feeding it
+           ;; straight to string= would misroute a literal "nil" answer into
+           ;; branch 5. Bind the table value once, compare only when bound.
+           (analogy (and verb
+                         (cdr (assoc verb (mtt/past-tense-tutor:analogy-bugs)
+                                     :test #'string=)))))
       (unless (string= type "answer")
         (error "mtt/past-tense-adapter: unknown action type ~a" type))
       (multiple-value-bind (regular-p correct) (mtt/past-tense-tutor:verb-info verb)
@@ -76,9 +83,9 @@ off-path-buggy / off-path. See spec §5's 6-branch table."
               ;; 4 bug: no-ed (unchanged regular verb)
               ((and regular-p (string= answer verb))
                (bug :no-ed))
-              ;; 5 bug: vowel analogy (lookup table)
-              ((string= answer (cdr (assoc verb (mtt/past-tense-tutor:analogy-bugs)
-                                           :test #'string=)))
+              ;; 5 bug: vowel analogy (lookup table; ANALOGY is nil when the
+              ;; verb has no entry — guarded above, see the let* comment)
+              ((and analogy (string= answer analogy))
                (bug :vowel-analogy))
               ;; 6 unclassified (incl. unknown verbs): bare intent, no prime
               (t (mtt:make-step-intent :assignments (intent))))))))))
