@@ -198,5 +198,6 @@
 ;;; regression of core internals). Two legs: tracing correctness via
 ;;; server-step-session; P(L) math via direct compute-mastery (deterministic).
 (asdf:defsystem "mtt/empirical-test"
-  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter" "mtt/past-tense-adapter" "fiveam")
+  :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter"
+               "mtt/past-tense-adapter" "mtt/subtraction-adapter" "fiveam")
   :components ((:file "tests/test-empirical")))
