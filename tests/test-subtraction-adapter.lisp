@@ -164,3 +164,76 @@ problems stay out of the bug-path corpus."
              (is (string= "SUBTRACT-ONES-BORROW" name)))
            (is (eq :off-path (mtt:trace-result-status (%step s sid 4)))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 11 Task 3: full-problem e2e over real HTTP -------------------
+;;; Mirrors fraction.e2e-full-problem: drive a complete 52-18 borrow problem
+;;; (start -> digit 4 -> digit 3 -> GET /student/mastery -> end) over real
+;;; HTTP. Asserts 200s, on-path traces with the visible lowercase wire
+;;; production symbols, done=false after the borrow column and true after the
+;;; tens column, and mastery returning 2 KCs (BORROW + COLUMN-SUBTRACT —
+;;; kc->json is princ-to-string, keyword names print WITHOUT the colon,
+;;; verified 2026-08-16). %find-free-port is defined locally here (mirrors
+;;; test-fraction-adapter.lisp); usocket is a transitive dep via hunchentoot.
+
+(defun %find-free-port ()
+  (let ((sock (usocket:socket-listen "127.0.0.1" 0 :reuse-address t)))
+    (unwind-protect (usocket:get-local-port sock)
+      (usocket:socket-close sock))))
+
+(test subtraction.e2e-full-problem
+  "Full 52-18 borrow problem over real HTTP: start -> digit 4 -> digit 3 ->
+GET /student/mastery -> end. Asserts 200s, on-path, the visible productions,
+done=false then true, and both KCs in mastery (array-of-objects wire shape)."
+  (let* ((port (%find-free-port))
+         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+    (unwind-protect
+         (progn
+           (mtt/server:register-model s "sub"
+                                      (mtt/subtraction-adapter:build-subtraction-model)
+                                      (mtt/subtraction-adapter:make-subtraction-adapter))
+           (sleep 0.3)
+           (labels ((post (path json)
+                      (multiple-value-bind (body status)
+                          (dex:post (format nil "http://127.0.0.1:~a~a" port path)
+                                    :content json)
+                        (values (yason:parse body :object-as :alist) status))))
+             (let ((sid (cdr (assoc "session_id"
+                                    (post "/session/start"
+                                          "{\"student_id\":\"suo\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+                                    :test #'string=))))
+               ;; ones 4 -> subtract-ones-borrow (on-path, NOT done)
+               (multiple-value-bind (resp status)
+                   (post "/session/step"
+                         (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}" sid))
+                 (is (= 200 status))
+                 (is (string= "on-path" (cdr (assoc "status" resp :test #'string=))))
+                 (is (string= "subtract-ones-borrow"
+                              (cdr (assoc "production" resp :test #'string=))))
+                 (is (null (cdr (assoc "done" resp :test #'string=)))))
+               ;; tens 3 -> subtract-tens-direct (on-path, done)
+               (multiple-value-bind (resp status)
+                   (post "/session/step"
+                         (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"3\"}}" sid))
+                 (is (= 200 status))
+                 (is (string= "on-path" (cdr (assoc "status" resp :test #'string=))))
+                 (is (string= "subtract-tens-direct"
+                              (cdr (assoc "production" resp :test #'string=))))
+                 (is (eq t (cdr (assoc "done" resp :test #'string=)))))
+               ;; mastery: both KCs, entries as objects (Phase 9 recursive encode)
+               (multiple-value-bind (body status)
+                   (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=suo"
+                                    port))
+                 (is (= 200 status))
+                 (let ((kcs (mapcar (lambda (entry)
+                                      (cdr (assoc "kc" entry :test #'string=)))
+                                    (cdr (assoc "kc" (yason:parse body :object-as :alist)
+                                                :test #'string=)))))
+                   (is (= 2 (length kcs)))
+                   (is (find "BORROW" kcs :test #'string=))
+                   (is (find "COLUMN-SUBTRACT" kcs :test #'string=))))
+               ;; end
+               (multiple-value-bind (body status)
+                   (post "/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
+                 (declare (ignore body))
+                 (is (= 200 status))))))
+      (mtt/server:stop-tutor-server s))))
