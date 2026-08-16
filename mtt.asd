@@ -164,6 +164,18 @@
   :depends-on ("mtt/past-tense-adapter" "mtt/server-test" "fiveam")
   :components ((:file "tests/test-past-tense-adapter")))
 
+;;; Phase 11 — subtraction domain (second arithmetic adapter: 2-digit column
+;;; subtraction with borrowing, conditional multi-step borrow columns). Model
+;;; file under models/; tutor system loads+compiles it and appends the buggy
+;;; library.
+(asdf:defsystem "mtt/subtraction-tutor"
+  :depends-on ("mtt")
+  :components ((:file "examples/subtraction-tutor")))
+
+(asdf:defsystem "mtt/subtraction-tutor-test"
+  :depends-on ("mtt/subtraction-tutor" "fiveam")
+  :components ((:file "tests/test-subtraction-tutor")))
+
 ;;; Phase 7 Task 5 — empirical validation harness. Synthetic-student traces drive
 ;;; the engine; assertions check tracing correctness + P(L) monotonicity/
 ;;; convergence/interval + per-KC distinctness. Cross-domain: fraction + addition.
