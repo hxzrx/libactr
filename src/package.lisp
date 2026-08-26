@@ -93,6 +93,7 @@
            #:bug-spec-name #:bug-spec-kind #:bug-spec-kc #:bug-spec-feedback
            #:bug-spec-goal-type #:bug-spec-goal-guard #:bug-spec-answers
            #:bug-spec-fact-slots #:bug-spec-when
-           #:bug-answer-env #:eval-bug-form))
+           #:bug-answer-env #:eval-bug-form
+           #:bug-production #:detect-bug))
 
 (in-package :mtt)

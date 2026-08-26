@@ -97,3 +97,76 @@ Returns a generalized boolean."
                        (apply fn (mapcar #'ev args)))))))
                (t f))))
     (ev form)))
+
+(defun %fact-slot-name (fs) (first fs))
+(defun %fact-slot-from (fs) (getf (rest fs) :from))
+(defun %fact-slot-literal (fs) (getf (rest fs) :literal))
+
+(defun bug-production (spec)
+  "Build the buggy production from SPEC — the exact structural shape the four
+domains' hand-written bug flets produced. ONE intentional deviation: a
+:literal fact slot becomes a literal slot-test instead of the old dummy
+variable (use-product's denom 0) — same acceptance set against the facts the
+adapter primes. Goal pattern: :goal-guard literal tests + an automatic
+(slot nil) test per answer slot. Retrieval pattern: isa BUG-FACT with the
+KIND keyword literal + one VARIABLE test per :from fact slot, numbered =v1,
+=v2, ... in fact-slots declaration order (skipping :literal slots). RHS:
+one (slot . =vN) pair per answer, N = the variable of the fact slot sourcing
+that answer. All GENERATED symbols (GOAL/RETRIEVAL/BUG-FACT/KIND/=vN) intern
+in the package of the spec's NAME (= the model package): authoring.lisp's
+own 'goal would be MTT::GOAL and silently never match a model-package
+buffer."
+  (let* ((name (bug-spec-name spec))
+         (pkg (symbol-package name))
+         (goal-buf (intern "GOAL" pkg))
+         (retr-buf (intern "RETRIEVAL" pkg))
+         (fact-isa (intern "BUG-FACT" pkg))
+         (kind-slot (intern "KIND" pkg))
+         (var-of (make-hash-table :test #'eq))
+         (n 0))
+    (dolist (fs (bug-spec-fact-slots spec))
+      (when (%fact-slot-from fs)
+        (incf n)
+        (setf (gethash (%fact-slot-name fs) var-of)
+              (intern (format nil "=V~d" n) pkg))))
+    (flet ((answer-var (i)
+             (loop :for fs :in (bug-spec-fact-slots spec)
+                   :when (equal (%fact-slot-from fs) (list :answer i))
+                     :return (gethash (%fact-slot-name fs) var-of))))
+      (make-production
+       name
+       (list
+        (make-buffer-pattern
+         goal-buf := (bug-spec-goal-type spec)
+         (append
+          (loop :for (slot literal) :in (bug-spec-goal-guard spec)
+                :collect (make-slot-test slot :literal literal))
+          (loop :for entry :in (bug-spec-answers spec)
+                :collect (make-slot-test (getf entry :slot) :literal nil))))
+        (make-buffer-pattern
+         retr-buf := fact-isa
+         (cons (make-slot-test kind-slot :literal (bug-spec-kind spec))
+               (loop :for fs :in (bug-spec-fact-slots spec)
+                     :for nm := (%fact-slot-name fs)
+                     :collect (if (%fact-slot-from fs)
+                                  (make-slot-test nm :variable (gethash nm var-of))
+                                  (make-slot-test nm :literal (%fact-slot-literal fs)))))))
+       (list
+        (make-action ':= goal-buf
+                     (loop :for entry :in (bug-spec-answers spec)
+                           :for i :from 0
+                           :collect (cons (getf entry :slot) (answer-var i)))))
+       (bug-spec-kc spec) :buggy (bug-spec-feedback spec)))))
+
+(defun detect-bug (specs answers env &key (predicates nil))
+  "First bug-spec in SPECS whose :when form evaluates true; nil when none
+matches. SPECS list order IS the detection order (per-domain collision
+analysis lives in that order — phase 11 §6.3). ANSWERS are the parsed student
+values in spec-answers order; they are prepended to ENV (shadowing unwritten
+goal slots). PREDICATES: the caller-supplied named-predicate alist for
+non-builtin operators (zero global registry)."
+  (loop :for spec :in specs
+        :when (eval-bug-form (bug-spec-when spec)
+                             (append (bug-answer-env spec answers) env)
+                             :predicates predicates)
+          :return spec))

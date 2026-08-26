@@ -105,3 +105,112 @@ operator errors."
                                                      (lambda (&rest a) (equal a '(5 8)))))))
         "args are evaluated: (* top 4) -> 8")
     (signals error (eval-bug-form '(nope-p x) '((x . 1)) :predicates preds))))
+
+;;; --- Phase 12 Task 2: bug-production generator + detect-bug driver ----------
+
+(defun %defbug-fixture-package ()
+  (or (find-package :mtt/defbug-fixture)
+      (make-package :mtt/defbug-fixture)))
+
+(test bug-production.gold-shape-single-answer
+  "The generator reproduces the hand-written subtraction buggy production
+field-for-field (equalp: structures are eq under equal): goal-guard literal
++ auto (slot nil) answer test, KIND keyword literal, variable =V1 numbered
+from fact-slots order, RHS (slot . =V1), kc/:buggy/feedback. All GENERATED
+symbols (GOAL/RETRIEVAL/BUG-FACT/KIND/=V1) intern in the spec-name's
+package."
+  (let* ((pkg (%defbug-fixture-package))
+         (spec (make-bug-spec
+                :name (intern "BUGGY-BORROW-IGNORE" pkg)
+                :kind :borrow-ignore :kc :borrow :feedback "fb"
+                :goal-type (intern "SUB2" pkg)
+                :goal-guard (list (list (intern "STAGE" pkg) (intern "ONES" pkg)))
+                :answers (list (list :action "value"
+                                     :slot (intern "RES-ONES" pkg)
+                                     :as (intern "DIGIT" pkg)))
+                :fact-slots (list (list (intern "DIGIT" pkg) :from (list :answer 0)))
+                :when '(= digit 1)))
+         (p (bug-production spec)))
+    (is (eq (intern "BUGGY-BORROW-IGNORE" pkg) (production-name p)))
+    (is (eq :buggy (production-kind p)))
+    (is (eq :borrow (production-kc p)))
+    (is (equal "fb" (production-feedback p)))
+    (is (equalp (make-buffer-pattern (intern "GOAL" pkg) := (intern "SUB2" pkg)
+                  (list (make-slot-test (intern "STAGE" pkg) :literal
+                                        (intern "ONES" pkg))
+                        (make-slot-test (intern "RES-ONES" pkg) :literal nil)))
+                (first (production-lhs p))))
+    (is (equalp (make-buffer-pattern (intern "RETRIEVAL" pkg) := (intern "BUG-FACT" pkg)
+                  (list (make-slot-test (intern "KIND" pkg) :literal :borrow-ignore)
+                        (make-slot-test (intern "DIGIT" pkg) :variable
+                                        (intern "=V1" pkg))))
+                (second (production-lhs p))))
+    (is (equalp (list (make-action ':= (intern "GOAL" pkg)
+                                   (list (cons (intern "RES-ONES" pkg)
+                                               (intern "=V1" pkg)))))
+                (production-rhs p)))))
+
+(test bug-production.gold-shape-goal-source-literal-two-slots
+  "Variable numbering spans fact-slots order (VERB=V1 from :goal, PAST=V2
+from :answer 0 — the past-tense shape); RHS uses the ANSWER's variable only;
+a :literal fact slot becomes a literal test (use-product denom-0 shape);
+no goal-guard -> only the auto answer-nil test."
+  (let* ((pkg (%defbug-fixture-package))
+         (pt (make-bug-spec
+              :name (intern "BUGGY-OVER" pkg) :kind :over :kc :irr
+              :feedback "f2" :goal-type (intern "TASK" pkg)
+              :answers (list (list :action "value" :slot (intern "PAST" pkg)
+                                   :as (intern "ANSWER" pkg)))
+              :fact-slots (list (list (intern "VERB" pkg) :from
+                                      (list :goal (intern "VERB" pkg)))
+                                (list (intern "PAST" pkg) :from (list :answer 0)))
+              :when '(answer)))
+         (up (make-bug-spec
+              :name (intern "BUGGY-USE" pkg) :kind :use :kc :cd
+              :feedback "f3" :goal-type (intern "FRAC" pkg)
+              :answers (list (list :action "value" :slot (intern "CD" pkg)))
+              :fact-slots (list (list (intern "NUM" pkg) :from (list :answer 0))
+                                (list (intern "DENOM" pkg) :literal 0))
+              :when '(cd))))
+    (let ((p (bug-production pt)))
+      (is (equalp (list (make-slot-test (intern "KIND" pkg) :literal :over)
+                        (make-slot-test (intern "VERB" pkg) :variable
+                                        (intern "=V1" pkg))
+                        (make-slot-test (intern "PAST" pkg) :variable
+                                        (intern "=V2" pkg)))
+                  (buffer-pattern-slot-tests (second (production-lhs p)))))
+      (is (equalp (list (make-action ':= (intern "GOAL" pkg)
+                                     (list (cons (intern "PAST" pkg)
+                                                 (intern "=V2" pkg)))))
+                  (production-rhs p))))
+    (let ((p (bug-production up)))
+      (is (equalp (list (make-slot-test (intern "KIND" pkg) :literal :use)
+                        (make-slot-test (intern "NUM" pkg) :variable
+                                        (intern "=V1" pkg))
+                        (make-slot-test (intern "DENOM" pkg) :literal 0))
+                  (buffer-pattern-slot-tests (second (production-lhs p)))))
+      (is (equalp (list (make-slot-test (intern "CD" pkg) :literal nil))
+                  (buffer-pattern-slot-tests (first (production-lhs p))))))))
+
+(defun %mini-spec (name when)
+  (make-bug-spec :name name :kind name :kc :k :feedback "f"
+                 :goal-type 'task
+                 :answers (list (list :action "value" :slot 'res :as 'digit))
+                 :fact-slots (list (list 'digit :from (list :answer 0)))
+                 :when when))
+
+(test detect-bug.first-match-in-declared-order
+  "detect-bug returns the FIRST spec whose :when holds (list order = detection
+order), nil when none; the answer env shadows same-named goal slots. With
+top-ones=4 BOTH mirror (8-4=4) and also (= digit 4) match — the assertion
+genuinely exercises declared-order priority."
+  (let ((env '((top-ones . 4) (bot-ones . 8) (res . nil))))
+    (is (eq 'mirror
+            (bug-spec-name (detect-bug (list (%mini-spec 'wrong '(= digit 99))
+                                             (%mini-spec 'mirror '(= digit (- bot-ones top-ones)))
+                                             (%mini-spec 'also '(= digit 4)))
+                                       '(4) env))))
+    (is (null (detect-bug (list (%mini-spec 'nope '(= digit 0))) '(4) env)))
+    ;; shadowing: goal res=nil, answer digit=4 -> (= digit 4) true via ANSWER env
+    (is (eq 'hit (bug-spec-name (detect-bug (list (%mini-spec 'hit '(= digit 4)))
+                                            '(4) env))))))
