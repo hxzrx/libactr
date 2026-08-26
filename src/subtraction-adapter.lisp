@@ -20,6 +20,7 @@
 ;;;; correct -> borrow-ignore (mirror; never collides with correct±1 since
 ;;;; 2(bot-top) ∈ {9,11} is impossible) -> always-borrow (value >= 10, only at
 ;;;; no-borrow columns) -> off-by-one (borrow columns only) -> unclassified.
+;;;; The bug branch is now driven by the phase-12 bug-DSL (bug-specs list order).
 ;;;; The tens column only does correct / unclassified (spec §2.1: detection is
 ;;;; defined at ones; degenerate b-t=5 problems stay out of the bug corpus).
 ;;;; Stateless: all state lives on the session. NO global variables.
@@ -144,27 +145,18 @@ stage-driven column routing. Returns the intent(s) for server-step-session."
                   (,(gi "GOAL") ,(gi "STAGE") ,(gi "TENS")))
                 (mtt:adapter-fact a "COL-FACT" :kind (gi "PROPAGATE")
                                   :old-top top-tens :new-top (- top-tens 1)))))
-             ;; bug: borrow-ignore (smaller-from-larger mirror)
-             ((and (< top-ones bot-ones) (= d (- bot-ones top-ones)))
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "RES-ONES") ,d))
-               (mtt:adapter-fact a "BUG-FACT" :kind :borrow-ignore :digit d)))
-             ;; bug: always-borrow (borrowed though not needed; value >= 10)
-             ((and (>= top-ones bot-ones) (= d (+ 10 top-ones (- bot-ones))))
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "RES-ONES") ,d))
-               (mtt:adapter-fact a "BUG-FACT" :kind :always-borrow :digit d)))
-             ;; bug: off-by-one on a borrow column
-             ((and (< top-ones bot-ones) (= 1 (abs (- d correct))))
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "RES-ONES") ,d))
-               (mtt:adapter-fact a "BUG-FACT" :kind :off-by-one :digit d)))
-             ;; unclassified: bare intent, no prime
-             (t (mtt:make-step-intent
-                 :assignments `((,(gi "GOAL") ,(gi "RES-ONES") ,d)))))))
+             ;; bug branch: one DSL declaration drives detection (list
+             ;; order), prime, and the buggy production (tutor side)
+             (t
+              (let* ((answers (list d))
+                     (spec (mtt:detect-bug
+                            (mtt/subtraction-tutor:bug-specs) answers
+                            (mtt:bug-goal-env a session))))
+                (if spec
+                    (mtt:bug-intent a session spec answers)
+                    ;; unclassified: bare intent, no prime
+                    (mtt:make-step-intent
+                     :assignments `((,(gi "GOAL") ,(gi "RES-ONES") ,d)))))))))
         ((string= "TENS" (and stage (symbol-name stage)))
          (let ((correct (- top-tens bot-tens)))
            (cond
