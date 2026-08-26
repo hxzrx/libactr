@@ -87,6 +87,12 @@
            #:standard-domain-adapter
            #:adapter-model-package #:adapter-terminal-production
            #:adapter-intern #:adapter-goal-slot #:adapter-fact
-           #:adapter-set-goal #:adapter-prime-pair #:adapter-primed-intent))
+           #:adapter-set-goal #:adapter-prime-pair #:adapter-primed-intent
+           ;; Phase 12: minimal bug-DSL (core half; runtime half in mtt/server)
+           #:bug-spec #:make-bug-spec #:bug-spec-p
+           #:bug-spec-name #:bug-spec-kind #:bug-spec-kc #:bug-spec-feedback
+           #:bug-spec-goal-type #:bug-spec-goal-guard #:bug-spec-answers
+           #:bug-spec-fact-slots #:bug-spec-when
+           #:bug-answer-env #:eval-bug-form))
 
 (in-package :mtt)
