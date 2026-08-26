@@ -125,15 +125,19 @@ compute-mastery so per-KC BKT overrides reach the inline :mastery."
 (defun handle-start (server body)
   "Start a session. BODY is the decoded alist: student_id, problem_id, model_id.
 Returns (values (:session_id sid :student_id sid) 200) on success, or
-(values (:error \"unknown model_id\") 404) when model-id is not registered."
+(values (:error \"unknown model_id\") 404) when model-id is not registered.
+A bad-tutor-request from the adapter's prepare-session (malformed/semantically invalid problem-id) maps to 400."
   (let ((student-id (cdr (assoc "student_id" body :test #'string=)))
         (problem-id (cdr (assoc "problem_id" body :test #'string=)))
         (model-id   (cdr (assoc "model_id"   body :test #'string=))))
     (cond
       ((null (gethash model-id (server-models server)))
        (values (list :error "unknown model_id") 404))
-      (t (let ((sid (server-start-session server student-id problem-id model-id)))
-           (values (list :session_id sid :student_id student-id) 200))))))
+      (t (handler-case
+             (let ((sid (server-start-session server student-id problem-id model-id)))
+               (values (list :session_id sid :student_id student-id) 200))
+           (bad-tutor-request (c)
+             (values (list :error (bad-tutor-request-message c)) 400)))))))
 
 (defun handle-step (server body)
   "Trace one student step. BODY is the decoded alist: session_id, action.
@@ -143,11 +147,15 @@ Returns:
   (values (:error \"session ended\")    409) when the session has ended
 The success/error dispatch inspects the SECOND return value of
 server-step-session (the adapter slot, which carries the sentinel keyword on
-failure). See the contract note above."
+failure). See the contract note above.
+A bad-tutor-request from adapt-action (malformed action / unexpected state) maps to 400."
   (let* ((session-id (cdr (assoc "session_id" body :test #'string=)))
          (action     (cdr (assoc "action"    body :test #'string=))))
     (multiple-value-bind (result adapter session)
-        (server-step-session server session-id action)
+        (handler-case (server-step-session server session-id action)
+          (bad-tutor-request (c)
+            (return-from handle-step
+              (values (list :error (bad-tutor-request-message c)) 400))))
       (cond
         ((eq adapter :not-found)
          (values (list :error "unknown session_id") 404))
