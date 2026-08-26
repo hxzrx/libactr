@@ -94,6 +94,9 @@
            #:bug-spec-goal-type #:bug-spec-goal-guard #:bug-spec-answers
            #:bug-spec-fact-slots #:bug-spec-when
            #:bug-answer-env #:eval-bug-form
-           #:bug-production #:detect-bug))
+           #:bug-production #:detect-bug
+           ;; Phase 12: bug-DSL runtime half + malformed-input condition
+           #:bad-tutor-request #:bad-tutor-request-message #:signal-bad-request
+           #:bug-goal-env #:bug-intent))
 
 (in-package :mtt)
