@@ -210,3 +210,17 @@ as array-of-objects."
                    (is (find "IRREGULAR-RETRIEVAL" kcs :test #'string=))
                    (is (find "REGULAR-INFLECTION" kcs :test #'string=)))))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 12 Task 5: malformed-action 400 (no semantic problem validation) --
+
+(test past-tense.unknown-action-type-is-400
+  "past-tense adds NO semantic problem validation (unknown verbs are
+intentionally unclassified — design behavior, not a defect); only the
+unknown action type exit is signalled (phase 12 debt #2)."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "px" "go" "pt")))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session
+              s sid '(("type" . "wat") ("value" . "went")))))
+      (mtt/server:stop-tutor-server s))))

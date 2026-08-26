@@ -54,7 +54,7 @@ off-path-buggy / off-path. See spec §5's 6-branch table."
                          (cdr (assoc verb (mtt/past-tense-tutor:analogy-bugs)
                                      :test #'string=)))))
       (unless (string= type "answer")
-        (error "mtt/past-tense-adapter: unknown action type ~a" type))
+        (mtt:signal-bad-request "mtt/past-tense-adapter: unknown action type ~a" type))
       (multiple-value-bind (regular-p correct) (mtt/past-tense-tutor:verb-info verb)
         (let ((answer-sym (mtt:adapter-intern a answer)))
           (labels

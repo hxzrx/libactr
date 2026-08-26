@@ -30,24 +30,41 @@ standard-domain-adapter for reusable plumbing (spec §3)."))
 (defun %lcm (a b) (/ (* a b) (%gcd a b)))
 
 (defun %parse-problem (problem-id)
-  "Parse \"a/b+c/d\" -> values num1 den1 num2 den2 (integers)."
-  (let* ((s (princ-to-string problem-id))
-         (plus (position #\+ s))
-         (slash1 (position #\/ s)))
-    (unless (and plus slash1)
-      (error "mtt/fraction-adapter: cannot parse problem-id ~a (expected \"a/b+c/d\")"
+  "Parse \"a/b+c/d\" -> values num1 den1 num2 den2 (integers). Semantic
+constraint (phase 12 debt #1): positive denominators — \"1/0+…\" used to
+reach %lcm and crash with a division by zero. All failures signal
+bad-tutor-request (400 over HTTP)."
+  (flet ((bad ()
+           (mtt:signal-bad-request
+            "mtt/fraction-adapter: cannot parse problem-id ~a (expected \"a/b+c/d\")"
+            problem-id))
+         (int (part)
+           (handler-case (parse-integer part)
+             (parse-error () (bad)))))
+    (let* ((s (princ-to-string problem-id))
+           (plus (position #\+ s))
+           (slash1 (position #\/ s)))
+      (unless (and plus slash1) (bad))
+      (let ((slash2 (position #\/ s :start (1+ plus))))
+        (unless slash2 (bad))
+        (let ((num1 (int (subseq s 0 slash1)))
+              (den1 (int (subseq s (1+ slash1) plus)))
+              (num2 (int (subseq s (1+ plus) slash2)))
+              (den2 (int (subseq s (1+ slash2)))))
+          (unless (and (> den1 0) (> den2 0))
+            (mtt:signal-bad-request
+             "mtt/fraction-adapter: denominators must be positive in problem-id ~a"
              problem-id))
-    (let ((slash2 (position #\/ s :start (1+ plus))))
-      (unless slash2
-        (error "mtt/fraction-adapter: cannot parse problem-id ~a (expected \"a/b+c/d\")"
-               problem-id))
-      (values (parse-integer (subseq s 0 slash1))
-              (parse-integer (subseq s (1+ slash1) plus))
-              (parse-integer (subseq s (1+ plus) slash2))
-              (parse-integer (subseq s (1+ slash2)))))))
+          (values num1 den1 num2 den2))))))
 
 (defun %action-int (action key)
-  (parse-integer (cdr (assoc key action :test #'string=))))
+  "The student's integer answer for KEY; a non-integer signals
+bad-tutor-request."
+  (let ((raw (cdr (assoc key action :test #'string=))))
+    (handler-case (parse-integer raw)
+      (parse-error ()
+        (mtt:signal-bad-request
+         "mtt/fraction-adapter: action ~a must be an integer, got ~s" key raw)))))
 
 ;;; --- adapter protocol ---
 
@@ -126,4 +143,4 @@ the matching fact (lcm-fact / sum-fact / bug-fact). See spec §6."
                :assignments `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
                               (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom)))))))
         (t
-         (error "mtt/fraction-adapter: unknown action type ~a" type))))))
+         (mtt:signal-bad-request "mtt/fraction-adapter: unknown action type ~a" type))))))

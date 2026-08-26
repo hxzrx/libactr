@@ -49,15 +49,27 @@ mtt/subtraction-tutor)."
 ;;; --- domain helpers (plumbing comes from standard-domain-adapter) ---
 
 (defun %parse-problem (problem-id)
-  "Parse \"52-18\" -> values top bot (integers; top > bot is the domain
-constraint — 2-digit minuend/subtrahend, positive result)."
-  (let* ((s (princ-to-string problem-id))
-         (dash (position #\- s)))
-    (unless dash
-      (error "mtt/subtraction-adapter: cannot parse problem-id ~a (expected \"NN-MM\")"
-             problem-id))
-    (values (parse-integer (subseq s 0 dash))
-            (parse-integer (subseq s (1+ dash))))))
+  "Parse \"52-18\" -> values top bot (integers). Semantic constraint (phase 12
+debt #1): top > bot (positive result) — a structure-only parse used to accept
+\"5-18\" and produce negative intermediates. All failures signal
+bad-tutor-request (400 over HTTP)."
+  (flet ((bad ()
+           (mtt:signal-bad-request
+            "mtt/subtraction-adapter: cannot parse problem-id ~a (expected \"NN-MM\")"
+            problem-id))
+         (int (part)
+           (handler-case (parse-integer part)
+             (parse-error () (bad)))))
+    (let* ((s (princ-to-string problem-id))
+           (dash (position #\- s)))
+      (unless dash (bad))
+      (let ((top (int (subseq s 0 dash)))
+            (bot (int (subseq s (1+ dash)))))
+        (unless (> top bot)
+          (mtt:signal-bad-request
+           "mtt/subtraction-adapter: problem must have a positive answer (top > bot): ~a"
+           problem-id))
+        (values top bot)))))
 
 (defun %digit (n pos)
   "POS-th digit of integer N (0 = ones, 1 = tens)."
@@ -65,8 +77,12 @@ constraint — 2-digit minuend/subtrahend, positive result)."
 
 (defun %action-int (action)
   "The student's reported value (an integer digit; always-borrow answers may
-be two-digit, e.g. 13)."
-  (parse-integer (cdr (assoc "value" action :test #'string=))))
+be two-digit, e.g. 13). A non-integer value signals bad-tutor-request."
+  (let ((raw (cdr (assoc "value" action :test #'string=))))
+    (handler-case (parse-integer raw)
+      (parse-error ()
+        (mtt:signal-bad-request
+         "mtt/subtraction-adapter: action value must be an integer, got ~s" raw)))))
 
 ;;; --- adapter protocol ---
 
@@ -97,7 +113,7 @@ stage-driven column routing. Returns the intent(s) for server-step-session."
            (top-tens (mtt:adapter-goal-slot a session "TOP-TENS"))
            (bot-tens (mtt:adapter-goal-slot a session "BOT-TENS")))
       (unless (string= type "digit")
-        (error "mtt/subtraction-adapter: unknown action type ~a" type))
+        (mtt:signal-bad-request "mtt/subtraction-adapter: unknown action type ~a" type))
       (cond
         ((string= "ONES" (and stage (symbol-name stage)))
          (let ((correct (if (< top-ones bot-ones)
@@ -163,4 +179,6 @@ stage-driven column routing. Returns the intent(s) for server-step-session."
              (t (mtt:make-step-intent
                  :assignments `((,(gi "GOAL") ,(gi "RES-TENS") ,d)))))))
         (t
-         (error "mtt/subtraction-adapter: unexpected goal stage ~a" stage))))))
+         (mtt:signal-bad-request
+          "mtt/subtraction-adapter: no column active (stage ~a) — the problem may already be done"
+          stage))))))

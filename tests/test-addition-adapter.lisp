@@ -79,3 +79,24 @@ submit completes (terminate-addition observed via step-done?)."
                            (mtt:production-name (mtt:trace-result-production r)))))
              (is (mtt:step-done? (mtt/addition-adapter:make-addition-adapter) r nil))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 12 Task 5: semantic problem validation + malformed-action 400 -----
+
+(test addition.bad-problem-and-action-are-400
+  "\"12+3\" (multi-digit addend, outside the 0-9 number chain) is a semantic
+violation; an unknown action type is malformed — both 400 (phase 12
+debt #1/#2)."
+  (let ((s (%server)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (r status)
+               (mtt/server::handle-start s `(("student_id" . "ax")
+                                             ("problem_id" . "12+3")
+                                             ("model_id" . "add")))
+             (is (= 400 status))
+             (is (search "single digits" (getf r :error))))
+           (let ((sid (mtt/server:server-start-session s "ay" "5+2" "add")))
+             (signals mtt:bad-tutor-request
+               (mtt/server:server-step-session
+                s sid '(("type" . "wat") ("value" . "5"))))))
+      (mtt/server:stop-tutor-server s))))
