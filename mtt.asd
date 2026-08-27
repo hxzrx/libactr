@@ -201,3 +201,23 @@
   :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter"
                "mtt/past-tense-adapter" "mtt/subtraction-adapter" "fiveam")
   :components ((:file "tests/test-empirical")))
+
+;;; Phase 13 — multi-worker orchestration (complete orchestration layer).
+;;; cluster.lisp: cluster-manager CLOS (join/heartbeat/scan/takeover ticks +
+;;; checkpoint-store protocol + redis impl). proxy.lisp: the thin front proxy
+;;; (routes by student_id/session_id from the redis routing table, forwards
+;;; via dexador, one re-resolve retry on transport failure; /student/mastery
+;;; is served from redis directly — location-free). Same package :mtt/cluster
+;;; across both files (mirrors mtt/server's server.lisp + http-api.lisp).
+(asdf:defsystem "mtt/cluster"
+  :depends-on ("mtt/server" "mtt/redis-store" "dexador" "yason")
+  :components ((:file "src/cluster")
+               (:file "src/proxy")))
+
+(asdf:defsystem "mtt/cluster-test"
+  ;; Suite :mtt/cluster (the 10th, merge-gate suite). Self-starts redis-server
+  ;; (skip if absent); the e2e file additionally spawns SBCL worker
+  ;; subprocesses via examples/cluster-worker.lisp.
+  :depends-on ("mtt/cluster" "mtt/subtraction-adapter" "fiveam" "dexador")
+  :components ((:file "tests/test-cluster")
+               (:file "tests/test-cluster-e2e")))
