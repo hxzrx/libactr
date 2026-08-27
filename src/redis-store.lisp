@@ -47,6 +47,58 @@ rebind it to nil so each log opens its own independent connection."
 ;; to a lowercase-name converter (mirrors src/http-api.lisp's json-encode).
 ;; Without this, the first real (non-nil-summary) event crashes encoding with
 ;; "No policy for symbols as keys defined".
+;; --- Phase 13: symbol-tagging codec (shared with mtt/cluster checkpoints) ---
+;; Wire format upgrade (spec §7): summaries' symbols used to encode as
+;; downcased strings (package lost). Now every symbol in an intent/result
+;; summary encodes as a tagged object {"sym": NAME, "pkg": PACKAGE} with
+;; EXACT case; decode interns it back (package missing -> degrade to the name
+;; string, never an error). Legacy rows (plain strings) pass through decoded
+;; as strings — backward compatible. nil/t are NOT tagged (JSON null/true).
+
+(defun tag-symbols (tree)
+  "Recursively convert every SYMBOL in TREE to a yason-encodable tagged
+hash-table {\"sym\": NAME (exact case), \"pkg\": PACKAGE-NAME}. nil and t pass
+through untagged; other atoms pass through; lists map recursively. Inverse:
+untag-symbols. Shared with the phase-13 cluster checkpoint store."
+  (cond
+    ((or (null tree) (eq tree t)) tree)
+    ((symbolp tree)
+     (let ((h (make-hash-table :test 'equal)))
+       (setf (gethash "sym" h) (symbol-name tree)
+             (gethash "pkg" h) (and (symbol-package tree)
+                                    (package-name (symbol-package tree))))
+       h))
+    ((consp tree) (mapcar #'tag-symbols tree))
+    (t tree)))
+
+(defun %sym-tag-p (x)
+  "True when X is a yason-parsed object (alist form) carrying exactly the
+symbol-tag keys — the decode image of tag-symbols' hash-tables."
+  (and (consp x)
+       (consp (first x)) (stringp (caar x))
+       (= 2 (length x))
+       (assoc "pkg" x :test #'string=)
+       (assoc "sym" x :test #'string=)
+       t))
+
+(defun untag-symbols (tree)
+  "Inverse of tag-symbols over a yason-parsed tree (objects parsed as alists):
+tagged alists intern back to symbols in their package; a missing package
+degrades that entry to the symbol-NAME STRING (never an error). Vectors map
+recursively to lists; every other atom (strings included) passes through —
+legacy rows decode exactly as before. NOTE: unlike the old %coerce-to-list,
+STRINGS pass through as strings (a string IS a vector; mapping over it
+produced the phase-10 char-list tree)."
+  (cond
+    ((and (consp tree) (%sym-tag-p tree))
+     (let* ((sym (cdr (assoc "sym" tree :test #'string=)))
+            (pkg (find-package (cdr (assoc "pkg" tree :test #'string=)))))
+       (if (and pkg sym) (intern sym pkg) sym)))
+    ((stringp tree) tree)                       ; strings pass through (string IS a vector)
+    ((vectorp tree) (map 'list #'untag-symbols tree))
+    ((consp tree) (mapcar #'untag-symbols tree))
+    (t tree)))
+
 (defun log-event-to-json (e)
   (let ((yason:*symbol-key-encoder*
           (lambda (k) (string-downcase (symbol-name k))))
@@ -62,16 +114,9 @@ rebind it to nil so each log opens its own independent connection."
                "kc" (and kc (princ-to-string kc))
                "kc_package" (and kc (symbol-package kc) (package-name (symbol-package kc)))
                "correct" (and ke (kc-event-correct-p ke))
-               "intent" (log-event-intent-summary e)
-               "result" (log-event-result-summary e))
+               "intent" (tag-symbols (log-event-intent-summary e))
+               "result" (tag-symbols (log-event-result-summary e)))
          s)))))
-
-(defun %coerce-to-list (x)
-  "Recursively coerce yason-parsed vectors to lists (intent/result summaries)."
-  (typecase x
-    (vector (map 'list #'%coerce-to-list x))
-    (list   (mapcar #'%coerce-to-list x))
-    (otherwise x)))
 
 (defun json-to-log-event (json-string)
   (let* ((a (let ((yason:*parse-object-as* :alist)) (yason:parse json-string)))
@@ -85,8 +130,8 @@ rebind it to nil so each log opens its own independent connection."
      :problem-id (cdr (assoc "problem_id" a :test #'string=))
      :kc-event (when kc (make-kc-event :kc (intern kc pkg)
                                        :correct-p (cdr (assoc "correct" a :test #'string=))))
-     :intent-summary (%coerce-to-list (cdr (assoc "intent" a :test #'string=)))
-     :result-summary (%coerce-to-list (cdr (assoc "result" a :test #'string=))))))
+     :intent-summary (untag-symbols (cdr (assoc "intent" a :test #'string=)))
+     :result-summary (untag-symbols (cdr (assoc "result" a :test #'string=))))))
 
 ;; --- protocol specializations ------------------------------------------------
 (defmethod log-append ((log redis-event-log) (event log-event))

@@ -77,6 +77,8 @@
            #:redis-event-log #:redis-event-log-p
            #:make-redis-event-log #:redis-event-log-connection
            #:redis-event-log-key #:redis-event-log-host #:redis-event-log-port
+           ;; Phase 13: symbol-tagging codec (summaries wire + cluster checkpoints)
+           #:tag-symbols #:untag-symbols
            ;; Phase 5: domain-adapter protocol (mtt/server system; lives in :mtt
            ;; because adapters reference it alongside step-intent / trace-result).
            #:domain-adapter

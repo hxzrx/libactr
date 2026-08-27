@@ -255,32 +255,114 @@ equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
                (progn
                  (dolist (e events) (log-append rlog e))
                  (is (= 3 (log-last-seq rlog)))
-                 ;; JSON wire: the model-package symbols encode without crashing
-                 ;; (lowercase-name converter) and their names are on the wire.
+                 ;; JSON wire: the model-package symbols encode as tagged
+                 ;; objects {"sym": NAME, "pkg": PACKAGE} with EXACT case.
                  (let* ((raw (let ((redis:*connection* conn))
                                (redis:red-lrange (redis-event-log-key rlog) 0 -1)))
                         (raw2 (second raw)))
                    (is (= 3 (length raw)))
-                   (is (and (search "\"goed\"" raw2) t))
-                   (is (and (search "\"buggy-over-regularize\"" raw2) t)))
+                   (is (and (search "\"GOED\"" raw2) t))
+                   (is (and (search "\"MTT/PAST-TENSE-TUTOR\"" raw2) t)))
                  ;; kc round-trips with package identity (B4). Summaries come
-                 ;; back NON-NIL carrying the content, but NOT as symbols (or
-                 ;; even strings): %coerce-to-list maps over every vector,
-                 ;; including strings, so each name decodes as a char list —
-                 ;; the shape B2 shipped; symbol/string-level summary fidelity
-                 ;; is the known deferred backlog item (CLAUDE.md 后续推后项).
+                 ;; back as THE SAME symbols (eq, name+package) — the phase-13
+                 ;; tagged codec closed the deferred symbol-fidelity gap.
                  (let ((e2 (second (log-all-events rlog))))
                    (is (eq :irregular-retrieval
                            (kc-event-kc (log-event-kc-event e2))))
-                   (is (string= "goed"
-                                (coerce (third (first (log-event-intent-summary e2)))
-                                        'string)))
-                   (is (string= "off-path-buggy"
-                                (coerce (first (log-event-result-summary e2))
-                                        'string))))
+                   (is (eq (intern "GOED" :mtt/past-tense-tutor)
+                           (third (first (log-event-intent-summary e2)))))
+                   (is (eq :off-path-buggy
+                           (first (log-event-result-summary e2)))))
                  ;; KT replay equals in-memory fold (spec §9.6: recompute
                  ;; mastery losslessly) — bit-identical because kc carries its
                  ;; package through kc_package and P(L) folds the same doubles.
                  (is (equal mem-mastery
                             (mtt:compute-mastery (log-all-events rlog)))))
             (disconnect-log rlog)))))))
+
+(test redis-event-log.symbol-summaries-round-trip-eq
+  "Phase 13 tagged codec: intent/result summaries carrying model-package
+symbols round-trip as THE SAME symbols (name+package, eq) — not strings, not
+char lists. Status keyword :on-path comes back as the keyword itself."
+  (with-test-redis (conn port)
+    (let* ((rlog (make-redis-event-log :key "mtt:test:symrt" :host "127.0.0.1" :port port))
+           (sym-goed (intern "GOED" :mtt/past-tense-tutor))
+           (sym-verb (intern "GO" :mtt/past-tense-tutor))
+           (sym-prod (intern "RETRIEVE-IRREGULAR" :mtt/past-tense-tutor))
+           (ev (make-log-event :student-id "s1" :session-id "sess-1" :problem-id "go"
+                               :kc-event (make-kc-event :kc :irregular-retrieval :correct-p t)
+                               :intent-summary `((goal past ,sym-goed) (goal verb ,sym-verb))
+                               :result-summary (list :on-path sym-prod "feedback text" 0))))
+      (log-append rlog ev)
+      (let* ((e (first (log-all-events rlog)))
+             (int-sum (log-event-intent-summary e))
+             (res-sum (log-event-result-summary e)))
+        ;; symbol-level fidelity: eq on every symbol leaf
+        (is (eq sym-goed (third (first int-sum))))
+        (is (eq sym-verb (third (second int-sum))))
+        (is (eq :on-path (first res-sum)))
+        (is (eq sym-prod (second res-sum)))
+        ;; strings stay strings (not char lists — the %coerce-to-list fix)
+        (is (and (stringp (third res-sum)) (string= "feedback text" (third res-sum))))))))
+
+(test redis-event-log.legacy-json-still-decodes
+  "Backward compatibility: a row stored in the OLD wire format (symbols as
+plain downcase strings) — e.g. by an older deployment sharing this redis —
+decodes without error; summaries come back as plain strings, mastery replay
+still works."
+  (with-test-redis (conn port)
+    (let ((key "mtt:test:legacy")
+          (legacy-json (concatenate 'string
+                        "{\"student_id\":\"s1\",\"session_id\":\"sess-1\","
+                        "\"problem_id\":\"5+2\",\"kc\":\"ADD\","
+                        "\"kc_package\":\"MTT/REDIS-STORE-TEST\",\"correct\":true,"
+                        "\"intent\":[[\"goal\",\"sum\",\"five\"]],"
+                        "\"result\":[\"on-path\",\"initialize-addition\",null,0]}")))
+      (let ((redis:*connection* conn))
+        (redis:red-rpush key legacy-json))
+      (let* ((rlog (make-redis-event-log :key key :host "127.0.0.1" :port port))
+             (all (log-all-events rlog))
+             (e (first all)))
+        (is (= 1 (length all)))
+        (is (eq 'add (kc-event-kc (log-event-kc-event e))))
+        ;; old rows: plain strings, preserved verbatim
+        (is (equal '(("goal" "sum" "five")) (log-event-intent-summary e)))
+        (is (equal '("on-path" "initialize-addition" nil 0) (log-event-result-summary e)))
+        ;; KT replay over the legacy row works
+        (is (= 1 (getf (first (compute-mastery all)) :total)))))))
+
+(test redis-event-log.mixed-old-and-new-rows
+  "A log holding BOTH an old-format row (RPUSHed raw) and a new-format row
+(log-append) reads back as one sequence; each row decodes in its own format."
+  (with-test-redis (conn port)
+    (let ((key "mtt:test:mixed")
+          (legacy "{\"student_id\":\"s1\",\"kc\":\"ADD\",\"kc_package\":\"MTT/REDIS-STORE-TEST\",\"correct\":false,\"intent\":[[\"goal\",\"sum\",\"five\"]],\"result\":[\"on-path\",\"initialize-addition\",null,0]}"))
+      (let ((redis:*connection* conn)) (redis:red-rpush key legacy))
+      (let ((rlog (make-redis-event-log :key key :host "127.0.0.1" :port port)))
+        (log-append rlog (make-log-event
+                          :student-id "s1"
+                          :kc-event (make-kc-event :kc :add-fractions :correct-p t)
+                          :intent-summary '((goal snum 5))
+                          :result-summary (list :on-path 'add-fractions nil 0)))
+        (let ((all (log-all-events rlog)))
+          (is (= 2 (length all)))
+          (is (equal '(1 2) (mapcar #'log-event-seq all)))
+          (is (equal '(("goal" "sum" "five"))         ; legacy row: strings
+                     (log-event-intent-summary (first all))))
+          (is (eq 'add-fractions                        ; new row: tagged→symbol
+                  (second (log-event-result-summary (second all))))))))))
+
+(test redis-event-log.tagged-symbol-missing-package-degrades
+  "A tagged symbol whose package is NOT loaded degrades to its name STRING."
+  (with-test-redis (conn port)
+    (let* ((pkg (make-package (gensym "MTT/MISSING-")))
+           (sym (intern "WIDGET" pkg))
+           (rlog (make-redis-event-log :key "mtt:test:misspkg" :host "127.0.0.1" :port port))
+           (ev (make-log-event :student-id "s1"
+                               :kc-event (make-kc-event :kc 'add :correct-p t)
+                               :intent-summary `((goal widget ,sym))
+                               :result-summary (list :on-path 'p nil 0))))
+      (delete-package pkg)                              ; package gone before decode
+      (log-append rlog ev)                              ; encode happens with sym still valid
+      (let ((e (first (log-all-events rlog))))
+        (is (string= "WIDGET" (third (first (log-event-intent-summary e)))))))))
