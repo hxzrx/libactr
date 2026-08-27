@@ -233,12 +233,35 @@ would silently get (slot . nil)), duplicate answer :slot or :as names (env
 shadowing), malformed goal-guard entries, unresolvable names in :when, unknown
 operators, and builtin arity violations. WARNINGS hold constructor-undecidable
 notes (e.g. non-string feedback). PREDICATES is the caller's named-predicate
-alist (the same one detect-bug receives); EXTRA-ENV-NAMES are names the
-adapter adds to the detection env beyond goal slots (e.g. past-tense's
-regular-p / known-p). Pure: never signals, never mutates the spec."
-  (let ((errors nil) (warnings nil))
+alist (the same one detect-bug receives); EXTRA-ENV-NAMES is the catch-all
+for every :when name not derivable from the spec itself — adapter-added env
+names (e.g. past-tense's regular-p / known-p) AND plain goal-slot names (the
+validator has no chunk-type knowledge, so real specs' top-ones / bot-ones /
+verb ... must be declared here). Robust to any spec shape: malformed
+collections or entries degrade to collected errors. Pure: never signals,
+never mutates the spec."
+  (let* ((answers (bug-spec-answers spec))
+         (fact-slots (bug-spec-fact-slots spec))
+         (goal-guard (bug-spec-goal-guard spec))
+         (errors nil) (warnings nil))
     (flet ((err (fmt &rest args) (push (apply #'format nil fmt args) errors))
-           (note (fmt &rest args) (push (apply #'format nil fmt args) warnings)))
+           (note (fmt &rest args) (push (apply #'format nil fmt args) warnings))
+           (proper-list-p (x) (and (listp x) (null (cdr (last x))))))
+      ;; 0. collection shape — the purity contract (never signal) holds for
+      ;;    ANY spec shape: a collection that is not a proper list degrades
+      ;;    to a collected error + an empty LOCAL (the spec is never
+      ;;    mutated). make-bug-spec's :type list lets improper lists through
+      ;;    (any cons is a LIST), and a port without defstruct type checking
+      ;;    would let atoms through too.
+      (unless (proper-list-p answers)
+        (err ":answers is not a proper list (~s) — treated as empty" answers)
+        (setf answers nil))
+      (unless (proper-list-p fact-slots)
+        (err ":fact-slots is not a proper list (~s) — treated as empty" fact-slots)
+        (setf fact-slots nil))
+      (unless (proper-list-p goal-guard)
+        (err ":goal-guard is not a proper list (~s) — treated as empty" goal-guard)
+        (setf goal-guard nil))
       ;; 1. required fields (nil IS a symbol in CL and the defstruct default,
       ;;    so the check is non-nil-symbol, not bare symbolp)
       (unless (and (symbolp (bug-spec-name spec)) (bug-spec-name spec))
@@ -249,22 +272,25 @@ regular-p / known-p). Pure: never signals, never mutates the spec."
         (err "missing required field kc"))
       (unless (and (symbolp (bug-spec-goal-type spec)) (bug-spec-goal-type spec))
         (err "missing required field goal-type"))
-      ;; 2. answers shape + duplicate :slot / :as
+      ;; 2. answers shape + duplicate :slot / :as (an atom ENTRY would make
+      ;;    getf signal — listp-check it first and skip its dup tracking)
       (let ((slots-seen nil) (as-seen nil))
-        (dolist (entry (bug-spec-answers spec))
-          (unless (and (stringp (getf entry :action))
+        (dolist (entry answers)
+          (unless (and (listp entry)
+                       (stringp (getf entry :action))
                        (symbolp (getf entry :slot)))
             (err "malformed answer entry ~s (need :action string + :slot symbol)" entry))
-          (let ((slot (getf entry :slot))
-                (as (or (getf entry :as) (getf entry :slot))))
-            (when (member slot slots-seen)
-              (err "duplicate answer :slot ~a" slot))
-            (when (member as as-seen)
-              (err "duplicate answer :as name ~a (env shadowing)" as))
-            (push slot slots-seen) (push as as-seen))))
+          (when (listp entry)
+            (let ((slot (getf entry :slot))
+                  (as (or (getf entry :as) (getf entry :slot))))
+              (when (member slot slots-seen)
+                (err "duplicate answer :slot ~a" slot))
+              (when (member as as-seen)
+                (err "duplicate answer :as name ~a (env shadowing)" as))
+              (push slot slots-seen) (push as as-seen)))))
       ;; 3. fact-slots shape + index range (:literal presence via plist keys —
       ;;    getf cannot distinguish absent from nil-valued)
-      (dolist (fs (bug-spec-fact-slots spec))
+      (dolist (fs fact-slots)
         (if (not (and (consp fs) (symbolp (first fs))))
             (err "malformed fact-slot entry ~s (need (name ...))" fs)
             (let ((from (getf (rest fs) :from))
@@ -280,30 +306,36 @@ regular-p / known-p). Pure: never signals, never mutates the spec."
                    (err "malformed :from ~s on fact-slot ~a" from (first fs)))
                  (when (and (listp from) (eq (first from) :answer)
                             (integerp (second from)))
-                   (unless (< -1 (second from) (length (bug-spec-answers spec)))
+                   (unless (< -1 (second from) (length answers))
                      (err "fact-slot ~a references (:answer ~d) — out of range for ~d answers"
-                          (first fs) (second from) (length (bug-spec-answers spec))))))
+                          (first fs) (second from) (length answers)))))
                 ((not literal-present-p)
                  (err "fact-slot ~a has neither :from nor :literal (degrades to literal nil at runtime)"
                       (first fs)))))))
       ;; 4. goal-guard shape
-      (dolist (pair (bug-spec-goal-guard spec))
+      (dolist (pair goal-guard)
         (unless (and (listp pair) (= 2 (length pair)) (symbolp (first pair)))
           (err "malformed goal-guard entry ~s (need (slot literal))" pair)))
       ;; 5. answer <-> fact-slot cross reference (the headline check)
-      (loop :for i :from 0 :below (length (bug-spec-answers spec))
+      (loop :for i :from 0 :below (length answers)
             :unless (some (lambda (fs)
                             (and (consp fs)
                                  (equal (getf (rest fs) :from) (list :answer i))))
-                          (bug-spec-fact-slots spec))
+                          fact-slots)
               :do (err "answer ~d has no fact slot (:answer ~d) — RHS would silently get (slot . nil)"
                        i i))
       ;; 6. :when walk (names resolvable = answer :as + fact names + goal-guard
-      ;;    slots + extra-env-names, matched by symbol-name like apply-kc-map)
-      (let* ((as-names (mapcar (lambda (e) (or (getf e :as) (getf e :slot)))
-                               (bug-spec-answers spec)))
-             (fact-names (mapcar #'first (bug-spec-fact-slots spec)))
-             (guard-names (mapcar #'first (bug-spec-goal-guard spec)))
+      ;;    slots + extra-env-names, matched by symbol-name like apply-kc-map).
+      ;;    The mapcars guard entry shape: (first atom) / (getf atom ...) on
+      ;;    a malformed entry would signal — the entry is already diagnosed
+      ;;    by steps 2-4; here it just contributes no name.
+      (let* ((as-names (mapcar (lambda (e) (and (listp e)
+                                                (or (getf e :as) (getf e :slot))))
+                               answers))
+             (fact-names (mapcar (lambda (fs) (if (consp fs) (first fs) nil))
+                                 fact-slots))
+             (guard-names (mapcar (lambda (p) (if (consp p) (first p) nil))
+                                  goal-guard))
              (resolvable (append as-names fact-names guard-names extra-env-names))
              (resolvable-p (lambda (n)
                              (and (symbolp n)

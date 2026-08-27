@@ -386,3 +386,69 @@ errors; a predicate supplied via :predicates resolves; extra-env-names resolves.
         (validate-bug-spec spec)
       (declare (ignore warnings))
       (is (and (search "goal-guard" (first errors)) t)))))
+
+;;; --- Phase 13 fix round 1: the purity contract (never signal) must hold
+;;; --- for malformed-beyond-entry shapes too, not just well-typed entries.
+
+(test validate-bug-spec.never-signals-atom-fact-slot-entry
+  "Purity contract: an ATOM fact-slot entry (missing parens, e.g. (digit))
+must COLLECT the malformed-entry error, not signal — step 6's fact-names
+mapcar used to crash on (first 'digit) after step 3 had already diagnosed
+the entry."
+  (let ((spec (make-bug-spec
+               :name 'b8 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '((:action "value" :slot s :as s))
+               :fact-slots '(digit)                 ; atom entry — missing parens
+               :when '(= s 1))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 2 (length errors)))   ; malformed entry + unsourced answer 0
+      (is (and (search "malformed fact-slot" (first errors)) t)))))
+
+(test validate-bug-spec.never-signals-atom-goal-guard-pair
+  "Same contract for ATOM goal-guard pairs (:goal-guard '(stage ones)): step
+4 collects two malformed-entry errors; step 6's guard-names mapcar used to
+crash on (first 'stage)."
+  (let ((spec (make-bug-spec
+               :name 'b9 :kind :k :kc :kc1 :goal-type 'gt
+               :goal-guard '(stage ones)            ; atom entries — missing parens
+               :answers '((:action "value" :slot r :as d))
+               :fact-slots '((digit :from (:answer 0)))
+               :when '(= d 1))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 2 (length errors)))
+      (is (and (search "goal-guard" (first errors)) t)))))
+
+(test validate-bug-spec.never-signals-atom-answer-entry
+  "Same contract for an ATOM :answers entry (a non-plist): step 2's getf used
+to signal before the shape check could run. (A non-list :answers VALUE cannot
+be constructed on SBCL — make-bug-spec's :type list fires first — so the atom
+ENTRY is the reachable form of this path.)"
+  (let ((spec (make-bug-spec
+               :name 'b10 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '(42)                       ; atom entry — not a plist
+               :fact-slots '((f :from (:answer 0)))
+               :when t)))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 1 (length errors)))
+      (is (and (search "malformed answer" (first errors)) t)))))
+
+(test validate-bug-spec.never-signals-improper-answers-list
+  "Same contract for an IMPROPER :answers list — it PASSES make-bug-spec's
+:type list check (any cons is a LIST) but used to crash the step-2 dolist;
+the collection now degrades to one collected error."
+  (let ((spec (make-bug-spec
+               :name 'b11 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '(1 . 2)
+               :fact-slots '((f :literal 0))
+               :when t)))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 1 (length errors)))
+      (is (and (search ":answers" (first errors)) t)))))
