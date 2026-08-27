@@ -8,38 +8,42 @@
 (defpackage :mtt/subtraction-tutor
   (:use :cl)
   (:nicknames :subtraction-tutor)
-  (:export #:load-subtraction-model))
+  (:export #:load-subtraction-model #:bug-specs))
 (in-package :mtt/subtraction-tutor)
 
-(defun buggy-rules ()
-  "Three buggy rules for 2-digit column subtraction (all detected at the ONES
-column, spec §4). :kind is a KEYWORD discriminant (compared as a literal in each
-production's =retrieval> bug-fact test — keywords are package-independent so
-the adapter in another package can prime a matching bug-fact). :kc attributes
-each bug to the skill it misapplies: borrow-ignore / always-borrow misuse the
-BORROW skill; off-by-one sets up the borrow correctly but slips the subtraction
-fact (column-subtract skill). bug-fact digit carries the student's wrong
-answer."
-  (flet ((bug (name kind kc feedback)
-           (mtt:make-production
-            name
-            (list (mtt:make-buffer-pattern
-                   'goal := 'sub2
-                   (list (mtt:make-slot-test 'stage :literal 'ones)
-                         (mtt:make-slot-test 'res-ones :literal nil)))
-                  (mtt:make-buffer-pattern
-                   'retrieval := 'bug-fact
-                   (list (mtt:make-slot-test 'kind :literal kind)
-                         (mtt:make-slot-test 'digit :variable '=v1))))
-            (list (mtt:make-action ':= 'goal (list (cons 'res-ones '=v1))))
-            kc :buggy feedback)))
-    (list
-     (bug 'buggy-borrow-ignore :borrow-ignore :borrow
-          "The ones digit was too small — you needed to borrow from the tens. Subtracting the small from the large ignores the borrow.")
-     (bug 'buggy-always-borrow :always-borrow :borrow
-          "You borrowed in a column that didn't need it — the top digit was already big enough.")
-     (bug 'buggy-off-by-one :off-by-one :column-subtract
-          "You set up the borrow correctly but slipped on the subtraction fact."))))
+(defun bug-specs ()
+  "Three bug declarations for 2-digit column subtraction (all detected at the
+ONES column, phase 11 spec §4; phase 12 spec §2.2). ONE declaration -> THREE
+artifacts (buggy production / detection predicate / prime) via the phase-12
+bug-DSL. List order IS the detection order (phase 11 mutual-exclusion proof:
+correct -> borrow-ignore -> always-borrow -> off-by-one); off-by-one inlines
+the borrow-column correct value (10+top-bot) — within its (< top bot) guard
+that IS correct. Symbols land in :mtt/subtraction-tutor (this file's
+package = the model package)."
+  (list
+   (mtt:make-bug-spec
+    :name 'buggy-borrow-ignore :kind :borrow-ignore :kc :borrow
+    :feedback "The ones digit was too small — you needed to borrow from the tens. Subtracting the small from the large ignores the borrow."
+    :goal-type 'sub2 :goal-guard '((stage ones))
+    :answers '((:action "value" :slot res-ones :as digit))
+    :fact-slots '((digit :from (:answer 0)))
+    :when '(and (< top-ones bot-ones) (= digit (- bot-ones top-ones))))
+   (mtt:make-bug-spec
+    :name 'buggy-always-borrow :kind :always-borrow :kc :borrow
+    :feedback "You borrowed in a column that didn't need it — the top digit was already big enough."
+    :goal-type 'sub2 :goal-guard '((stage ones))
+    :answers '((:action "value" :slot res-ones :as digit))
+    :fact-slots '((digit :from (:answer 0)))
+    :when '(and (>= top-ones bot-ones)
+                (= digit (- (+ 10 top-ones) bot-ones))))
+   (mtt:make-bug-spec
+    :name 'buggy-off-by-one :kind :off-by-one :kc :column-subtract
+    :feedback "You set up the borrow correctly but slipped on the subtraction fact."
+    :goal-type 'sub2 :goal-guard '((stage ones))
+    :answers '((:action "value" :slot res-ones :as digit))
+    :fact-slots '((digit :from (:answer 0)))
+    :when '(and (< top-ones bot-ones)
+                (= 1 (abs (- digit (- (+ 10 top-ones) bot-ones))))))))
 
 (defun load-subtraction-model ()
   "Read+compile subtraction.lisp, attribute correct-production KCs, append the
@@ -58,5 +62,6 @@ direct columns share :column-subtract."
          (propagate-borrow      . :borrow)
          (subtract-tens-direct  . :column-subtract)))
       (setf (mtt:model-definition-productions md)
-            (append (mtt:model-definition-productions md) (buggy-rules)))
+            (append (mtt:model-definition-productions md)
+                    (mapcar #'mtt:bug-production (bug-specs))))
       md)))

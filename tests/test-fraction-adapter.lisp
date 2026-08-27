@@ -186,3 +186,27 @@ and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
                  (declare (ignore body))
                  (is (= 200 status))))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 12 Task 5: semantic problem validation + malformed-action 400 -----
+
+(test fraction.bad-problem-and-action-are-400
+  "\"1/0+2/3\" (zero denominator) previously crashed %lcm with a
+division-by-zero 500; a non-integer num is malformed — both now
+bad-tutor-request / 400 (phase 12 debt #1/#2)."
+  (let ((s (%server)))
+    (unwind-protect
+         (progn
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-start-session s "fx" "1/0+2/3" "frac"))
+           (multiple-value-bind (r status)
+               (mtt/server::handle-start s `(("student_id" . "fx")
+                                             ("problem_id" . "1/0+2/3")
+                                             ("model_id" . "frac")))
+             (is (= 400 status))
+             (is (search "denominators must be positive" (getf r :error))))
+           (let ((sid (mtt/server:server-start-session s "fy" "1/2+1/3" "frac")))
+             (%step s sid '(("type" . "common-denom") ("value" . "6")))
+             (signals mtt:bad-tutor-request
+               (mtt/server:server-step-session
+                s sid '(("type" . "sum") ("num" . "x") ("denom" . "5"))))))
+      (mtt/server:stop-tutor-server s))))

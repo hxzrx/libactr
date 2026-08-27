@@ -113,3 +113,55 @@ step-done? methods."
                         (adapter-terminal-production adapter)
                         :test #'string=)
               t))))
+
+;;; ===========================================================================
+;;; Phase 12: bug-DSL runtime helpers + the malformed-input condition.
+;;; bug-goal-env / bug-intent are the runtime half of the bug-DSL (the pure
+;;; generation half lives in src/authoring.lisp): they build the detection
+;;; environment and the primed intent from a bug-spec purely by CONSTRUCTION
+;;; (adapter-fact / adapter-primed-intent) — all arithmetic/lookups stay in
+;;; the spec's :when form / domain predicates (phase 8 §2.3 boundary).
+
+(define-condition bad-tutor-request (error)
+  ((message :initarg :message :reader bad-tutor-request-message))
+  (:documentation "A malformed student-supplied input (bad problem-id, bad
+action, unexpected action at the current state). Adapters signal it; the HTTP
+layer maps it to 400. Programmatic callers see the condition itself."))
+
+(defun signal-bad-request (format-control &rest args)
+  "Signal a bad-tutor-request with a formatted MESSAGE. Never returns."
+  (error 'bad-tutor-request :message (apply #'format nil format-control args)))
+
+(defun bug-goal-env (adapter session)
+  "The goal chunk's slots alist, verbatim — the goal half of a bug-detection
+environment (problem variables + prior-step state). nil when the goal buffer
+is empty. The adapter appends its own derived intermediates (e.g.
+past-tense's regular-p / known-p)."
+  (let ((chunk (buffer-chunk (session-state session)
+                             (adapter-intern adapter "GOAL"))))
+    (and chunk (chunk-slots chunk))))
+
+(defun bug-intent (adapter session spec answers)
+  "The primed step-intent for a detected bug SPEC: assignments write each
+answer to its goal slot; the prime installs a bug-fact chunk carrying the
+kind keyword + the spec's fact slots ((:answer i) -> parsed student value,
+(:goal s) -> current goal slot value, :literal v -> v). Pure construction
+via adapter-fact / adapter-primed-intent."
+  (let ((fact-args (list :kind (bug-spec-kind spec))))
+    (dolist (fs (bug-spec-fact-slots spec))
+      (let ((from (getf (rest fs) :from)))
+        (setf fact-args
+              (list* (intern (string (first fs)) :keyword)
+                     (if from
+                         (ecase (first from)
+                           (:answer (nth (second from) answers))
+                           (:goal (adapter-goal-slot adapter session
+                                                    (string (second from)))))
+                         (getf (rest fs) :literal))
+                     fact-args))))
+    (adapter-primed-intent
+     adapter
+     (loop :for entry :in (bug-spec-answers spec)
+           :for v :in answers
+           :collect (list (adapter-intern adapter "GOAL") (getf entry :slot) v))
+     (apply #'adapter-fact adapter "BUG-FACT" fact-args))))

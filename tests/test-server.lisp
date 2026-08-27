@@ -778,3 +778,54 @@ initialize-addition KC (name-fallback, interned in :mtt/server-test)."
                  ;; default 2/5, proving the override reached this computation.
                  (is (< (getf (first mastery) :p_l) 2/5))))))
       (stop-tutor-server s))))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 12 Task 4: malformed-input 400 mapping (debt #2).
+;;; ---------------------------------------------------------------------------
+
+(defclass bad-problem-adapter (stub-adapter) ()
+  (:documentation "Signals bad-tutor-request from prepare-session."))
+
+(defmethod prepare-session ((a bad-problem-adapter) session problem-id)
+  (declare (ignore session))
+  (signal-bad-request "stub: bad problem ~a" problem-id))
+
+(defclass bad-action-adapter (stub-adapter) ()
+  (:documentation "Signals bad-tutor-request from adapt-action (prepare-session
+inherited from the stub)."))
+
+(defmethod adapt-action ((a bad-action-adapter) action session)
+  (declare (ignore session))
+  (signal-bad-request "stub: bad action ~a" (cdr (assoc "type" action :test #'string=))))
+
+(test http.bad-request-maps-to-400
+  "bad-tutor-request from prepare-session (start) or adapt-action (step) maps
+to 400 + :error message; the programmatic layer still sees the condition;
+other conditions still propagate (500 semantics unchanged)."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (declare (ignore adapter))
+             (register-model server "bad-problem" md (make-instance 'bad-problem-adapter))
+             (register-model server "bad-action" md (make-instance 'bad-action-adapter)))
+           ;; start -> prepare-session signals -> 400
+           (multiple-value-bind (r s)
+               (mtt/server::handle-start server '(("student_id" . "a")
+                                                  ("problem_id" . "junk")
+                                                  ("model_id" . "bad-problem")))
+             (is (= 400 s))
+             (is (string= "stub: bad problem junk" (getf r :error))))
+           ;; programmatic start still sees the condition itself
+           (signals bad-tutor-request
+                    (server-start-session server "a" "junk" "bad-problem"))
+           ;; step -> adapt-action signals -> 400
+           (let ((sid (server-start-session server "b" "5+2" "bad-action")))
+             (multiple-value-bind (r s)
+                 (mtt/server::handle-step server `(("session_id" . ,sid)
+                                                   ("action" . (("type" . "x")))))
+               (is (= 400 s))
+               (is (string= "stub: bad action x" (getf r :error))))
+             (signals bad-tutor-request
+                      (server-step-session server sid '((type . x))))))
+      (stop-tutor-server server))))

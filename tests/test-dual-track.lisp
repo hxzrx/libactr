@@ -355,3 +355,66 @@ the kind/stage literal discrimination paths both ways."
                                        (new-top . 3)))))
     (let ((diffs (dual-track-check-with-retrieval (subtraction-model-path) goal retr)))
       (is (null diffs) "subtraction mismatch dual-track: ~A" diffs))))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 12 debt #3: sixth subtraction negative case (old-top != top-tens)
+;;; ---------------------------------------------------------------------------
+;;; The five phase-11 cases (and the brief's draft of this one) prove engine
+;;; AGREEMENT only.  Agreement alone cannot be discriminated by test-data
+;;; changes: both engines share the match semantics, so any legal data change
+;;; moves both verdicts together and the discrepancy list stays nil.  This
+;;; case therefore ALSO pins the DIRECTION of the agreement — the no-match
+;;; verdict per engine — via dual-track-production-matches, so the data probe
+;;; (top-tens 5 -> 4, making old-top agree) turns the test red in both pins.
+
+(defun dual-track-production-matches (model-path production-name goal-chunk
+                                       retrieval-chunk)
+  "Load MODEL-PATH on BOTH engines, install GOAL-CHUNK/RETRIEVAL-CHUNK, and
+   return two values: whether mtt's matcher matches PRODUCTION-NAME and
+   whether the act-r oracle does.  Mirrors dual-track-check-with-retrieval's
+   setup (same load/set order, same name-matching discipline); engine errors
+   surface as (VALUES :ERROR :ERROR) so callers' null-pins fail loudly."
+  (handler-case
+      (let ((names (mtt/oracle:oracle-load-model model-path)))
+        (declare (ignore names))
+        (mtt/oracle:oracle-set-goal-from-chunk goal-chunk)
+        (mtt/oracle:oracle-set-retrieval-from-chunk retrieval-chunk)
+        (let* ((md (mtt:compile-model (mtt:read-model-file model-path)))
+               (state (mtt:make-buffer-state)))
+          (setf (mtt:buffer-chunk state 'goal) goal-chunk)
+          (setf (mtt:buffer-chunk state 'retrieval) retrieval-chunk)
+          (let ((mtt-matched
+                  (mapcar #'mtt:production-name
+                          (mapcar #'car (mtt:model-matching-productions md state)))))
+            (values (not (null (member (symbol-name production-name) mtt-matched
+                                       :key #'symbol-name :test #'string=)))
+                    (mtt/oracle:oracle-matches-p production-name)))))
+    (error () (values :error :error))))
+
+(test dual-track-subtraction-old-top-mismatch-agrees
+  "Sixth negative case (phase 11 deferred, phase 12 debt #3): goal
+stage=propagate top-tens 5 vs fact kind=propagate old-top 4 — the
+cross-buffer variable unification (=ot bound from the goal, retrieval's
+old-top must agree) FAILS, so PROPAGATE-BORROW must NOT match in EITHER
+engine. Guards the double-entry check in the negative direction."
+  (let ((goal (mtt:make-chunk :isa 'sub2
+                              :slots '((stage . propagate) (top-tens . 5)
+                                       (top-ones . 2) (bot-ones . 8)
+                                       (bot-tens . 1) (res-ones . 4)
+                                       (res-tens . nil))))
+        (retr (mtt:make-chunk :isa 'col-fact
+                              :slots '((kind . propagate) (old-top . 4)
+                                       (new-top . 3)))))
+    ;; Agreement across all four productions (as in the five phase-11 cases)...
+    (let ((diffs (dual-track-check-with-retrieval (subtraction-model-path) goal retr)))
+      (is (null diffs) "subtraction old-top-mismatch dual-track: ~A" diffs))
+    ;; ...plus the pinned DIRECTION: neither engine may match PROPAGATE-BORROW
+    ;; (the agreement-only draft stays green under the top-tens probe, so the
+    ;; no-match claim itself is asserted per engine here).
+    (multiple-value-bind (mtt-p oracle-p)
+        (dual-track-production-matches (subtraction-model-path)
+                                       'propagate-borrow goal retr)
+      (is (null mtt-p)
+          "mtt matches PROPAGATE-BORROW despite old-top 4 != top-tens 5")
+      (is (null oracle-p)
+          "oracle matches PROPAGATE-BORROW despite old-top 4 != top-tens 5"))))

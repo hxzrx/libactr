@@ -89,3 +89,53 @@ on-path production matching ANY listed name, and still rejects others."
     (is (step-done? a (funcall mk 'retrieve-irregular) s))
     (is (step-done? a (funcall mk 'apply-regular) s))
     (is (null (step-done? a (funcall mk 'some-other) s)))))
+
+;;; --- Phase 12: bug-DSL runtime helpers + malformed-input condition ----------
+
+(test signal-bad-request.signals-condition-with-message
+  (let ((err (nth-value 1 (ignore-errors (signal-bad-request "bad ~a!" "id")))))
+    (is (typep err 'bad-tutor-request))
+    (is (string= "bad id!" (bad-tutor-request-message err)))))
+
+(test bug-goal-env.is-goal-chunk-slots
+  (let* ((a (make-test-adapter))
+         (s (%fake-session (make-buffer-state))))
+    (is (null (bug-goal-env a s)))            ; empty goal -> nil
+    (adapter-set-goal a s "G" :x 1 :y 2)
+    (is (equal (list (cons (intern "X" :mtt/server-test) 1)
+                     (cons (intern "Y" :mtt/server-test) 2))
+               (bug-goal-env a s)))))
+
+(test bug-intent.shape
+  "bug-intent writes each answer to its goal slot and primes a bug-fact with
+the kind keyword + fact slots filled from answers, goal slots, and literals."
+  (let* ((a (make-test-adapter))
+         (s (%fake-session (make-buffer-state))))
+    (adapter-set-goal a s "TASK" :verb (intern "GO" :mtt/server-test))
+    (let* ((spec (make-bug-spec
+                  :name (intern "BUGGY-X" :mtt/server-test)
+                  :kind :over :kc :irr :feedback "f"
+                  :goal-type (intern "TASK" :mtt/server-test)
+                  :answers (list (list :action "value"
+                                   :slot (intern "PAST" :mtt/server-test)))
+                  :fact-slots (list (list (intern "VERB" :mtt/server-test)
+                                          :from (list :goal
+                                                      (intern "VERB" :mtt/server-test)))
+                                    (list (intern "PAST" :mtt/server-test)
+                                          :from (list :answer 0))
+                                    (list (intern "JUNK" :mtt/server-test) :literal 0))
+                  :when '(t)))
+           (intent (bug-intent a s spec (list (intern "WENT" :mtt/server-test)))))
+      (is (equal (list (list (intern "GOAL" :mtt/server-test)
+                             (intern "PAST" :mtt/server-test)
+                             (intern "WENT" :mtt/server-test)))
+                 (step-intent-assignments intent)))
+      (let* ((prime (cdr (first (step-intent-prime intent))))
+             (slots (chunk-slots prime)))
+        (is (eq (intern "BUG-FACT" :mtt/server-test) (chunk-isa prime)))
+        (is (eql :over (cdr (assoc (intern "KIND" :mtt/server-test) slots))))
+        (is (eq (intern "GO" :mtt/server-test)
+                (cdr (assoc (intern "VERB" :mtt/server-test) slots))))
+        (is (eq (intern "WENT" :mtt/server-test)
+                (cdr (assoc (intern "PAST" :mtt/server-test) slots))))
+        (is (eql 0 (cdr (assoc (intern "JUNK" :mtt/server-test) slots))))))))

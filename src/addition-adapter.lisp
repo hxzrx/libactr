@@ -65,16 +65,21 @@ suitable for mtt/server:register-model. Model symbols land in
     (or (cdr (assoc digits m :test #'string=)) digits)))
 
 (defun %parse-problem (problem-id pkg)
-  "Parse a problem id like \"5+2\" -> two values: arg1 and arg2 as model-package
-number symbols (e.g. FIVE TWO in PKG). Returns values suitable for the goal
-buffer's arg1/arg2 slots."
+  "Parse a problem id like \"5+2\" -> two values: arg1 and arg2 as
+model-package number symbols (e.g. FIVE TWO in PKG). Semantic constraint
+(phase 12 debt #1): both addends are single digits 0-9 — the dm number chain
+covers exactly 0-9, and \"12+3\" used to intern garbage symbols silently.
+All failures signal bad-tutor-request (400 over HTTP)."
   (let* ((s (princ-to-string problem-id))
-         (plus (position #\+ s)))
-    (unless plus
-      (error "mtt/addition-adapter: cannot parse problem-id ~a (expected \"N+M\")"
-             problem-id))
-    (values (intern (%num-word (subseq s 0 plus)) pkg)
-            (intern (%num-word (subseq s (1+ plus))) pkg))))
+         (plus (position #\+ s))
+         (a (and plus (plusp (length s)) (subseq s 0 plus)))
+         (b (and plus (subseq s (1+ plus)))))
+    (unless (and a b (= 1 (length a)) (= 1 (length b))
+                 (digit-char-p (char a 0)) (digit-char-p (char b 0)))
+      (mtt:signal-bad-request
+       "mtt/addition-adapter: cannot parse problem-id ~a (addends must be single digits 0-9, \"N+M\")"
+       problem-id))
+    (values (intern (%num-word a) pkg) (intern (%num-word b) pkg))))
 
 (defun %action-value (action a)
   "Read the \"value\" entry of ACTION (an alist with string keys, as decoded by
@@ -150,4 +155,4 @@ PRIME slot (Phase 6 multi-step). Action types:
             (mtt:adapter-fact a "NUMBER" :number current-sum
                               :next (mtt/addition-tutor:dm-next (mtt:session-model session) current-sum)))))
         (t
-         (error "mtt/addition-adapter: unknown action type ~a" type))))))
+         (mtt:signal-bad-request "mtt/addition-adapter: unknown action type ~a" type))))))

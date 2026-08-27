@@ -8,7 +8,7 @@
 (defpackage :mtt/past-tense-tutor
   (:use :cl)
   (:nicknames :past-tense-tutor)
-  (:export #:load-past-tense-model #:verb-info #:analogy-bugs))
+  (:export #:load-past-tense-model #:verb-info #:analogy-bugs #:bug-specs))
 (in-package :mtt/past-tense-tutor)
 
 (defun verb-info (verb)
@@ -33,32 +33,35 @@ cut, hit) have correct-past = the stem."
 bring->brang (by sing/sang), catch->cought (by teach/taught). Uppercase strings."
   '(("BRING" . "BRANG") ("CATCH" . "COUGHT")))
 
-(defun buggy-rules ()
-  "Three buggy rules for past-tense inflection, mirroring the fraction buggy
-library: :kind keyword discriminant compared as a literal in =retrieval> bug-fact
-(package-independent so the adapter in another package can prime a matching
-bug-fact); :kc attributes each bug to the skill it misapplies; bug-fact verb/past
-carry the student's answer."
-  (flet ((bug (name kind kc feedback)
-           (mtt:make-production
-            name
-            (list (mtt:make-buffer-pattern
-                   'goal := 'past-tense-task
-                   (list (mtt:make-slot-test 'past :literal nil)))
-                  (mtt:make-buffer-pattern
-                   'retrieval := 'bug-fact
-                   (list (mtt:make-slot-test 'kind :literal kind)
-                         (mtt:make-slot-test 'verb :variable '=v1)
-                         (mtt:make-slot-test 'past :variable '=v2))))
-            (list (mtt:make-action ':= 'goal (list (cons 'past '=v2))))
-            kc :buggy feedback)))
-    (list
-     (bug 'buggy-over-regularize :over-regularize :irregular-retrieval
-          "That verb is irregular — retrieve its past form instead of adding -ed.")
-     (bug 'buggy-no-ed          :no-ed          :regular-inflection
-          "This verb is regular — add -ed to form the past tense.")
-     (bug 'buggy-vowel-analogy  :vowel-analogy  :irregular-retrieval
-          "You swapped the vowel by analogy — this verb's past form is different."))))
+(defun bug-specs ()
+  "Three bug declarations for past-tense inflection (phase 12 spec §2.2) —
+the F5 lookup family through the DSL's named-predicate extension: the :when
+forms call DOMAIN predicates (verb+ed-p / string= / analogy-p, defined in
+src/past-tense-adapter.lisp) registered by the adapter's bug-predicates
+table. known-p guards over-regularize so UNKNOWN verbs stay unclassified
+(the old branch tested correct non-nil). List order IS the detection order."
+  (list
+   (mtt:make-bug-spec
+    :name 'buggy-over-regularize :kind :over-regularize :kc :irregular-retrieval
+    :feedback "That verb is irregular — retrieve its past form instead of adding -ed."
+    :goal-type 'past-tense-task
+    :answers '((:action "value" :slot past :as answer))
+    :fact-slots '((verb :from (:goal verb)) (past :from (:answer 0)))
+    :when '(and known-p (not regular-p) (verb+ed-p answer verb)))
+   (mtt:make-bug-spec
+    :name 'buggy-no-ed :kind :no-ed :kc :regular-inflection
+    :feedback "This verb is regular — add -ed to form the past tense."
+    :goal-type 'past-tense-task
+    :answers '((:action "value" :slot past :as answer))
+    :fact-slots '((verb :from (:goal verb)) (past :from (:answer 0)))
+    :when '(and regular-p (string= answer verb)))
+   (mtt:make-bug-spec
+    :name 'buggy-vowel-analogy :kind :vowel-analogy :kc :irregular-retrieval
+    :feedback "You swapped the vowel by analogy — this verb's past form is different."
+    :goal-type 'past-tense-task
+    :answers '((:action "value" :slot past :as answer))
+    :fact-slots '((verb :from (:goal verb)) (past :from (:answer 0)))
+    :when '(analogy-p answer verb))))
 
 (defun load-past-tense-model ()
   "Read+compile past-tense.lisp, attribute correct-production KCs, append the
@@ -72,5 +75,6 @@ buggy library. Model symbols land in :mtt/past-tense-tutor (*PACKAGE* binding)."
        '((retrieve-irregular . :irregular-retrieval)
          (apply-regular     . :regular-inflection)))
       (setf (mtt:model-definition-productions md)
-            (append (mtt:model-definition-productions md) (buggy-rules)))
+            (append (mtt:model-definition-productions md)
+                    (mapcar #'mtt:bug-production (bug-specs))))
       md)))

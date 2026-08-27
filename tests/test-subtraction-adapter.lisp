@@ -237,3 +237,36 @@ done=false then true, and both KCs in mastery (array-of-objects wire shape)."
                  (declare (ignore body))
                  (is (= 200 status))))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 12 Task 5: semantic problem validation + malformed-action 400 -----
+
+(test subtraction.bad-problem-and-action-are-400
+  "\"5-18\" (top < bot, negative result) is a semantic violation (so is
+\"52-52\", non-positive result); a non-integer action value is malformed; a
+digit action after DONE is graceful — all bad-tutor-request programmatically
+and 400 over the handler (phase 12 debt #1/#2)."
+  (let ((s (%server)))
+    (unwind-protect
+         (progn
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-start-session s "sx" "5-18" "sub"))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-start-session s "sx2" "52-52" "sub"))
+           (multiple-value-bind (r status)
+               (mtt/server::handle-start s `(("student_id" . "sx")
+                                             ("problem_id" . "5-18")
+                                             ("model_id" . "sub")))
+             (is (= 400 status))
+             (is (search "positive answer" (getf r :error))))
+           (let ((sid (mtt/server:server-start-session s "sy" "52-18" "sub")))
+             (signals mtt:bad-tutor-request
+               (mtt/server:server-step-session
+                s sid '(("type" . "digit") ("value" . "x"))))
+             (signals mtt:bad-tutor-request
+               (mtt/server:server-step-session
+                s sid '(("type" . "what") ("value" . "4"))))
+             ;; graceful after DONE: full problem then one more digit
+             (%step s sid 4)
+             (%step s sid 3)
+             (signals mtt:bad-tutor-request (%step s sid 9))))
+      (mtt/server:stop-tutor-server s))))
