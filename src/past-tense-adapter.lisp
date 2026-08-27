@@ -22,6 +22,31 @@ INHERITED from the base (terminal list) — the third dogfood of the base."))
                  :model-package (find-package :mtt/past-tense-tutor)
                  :terminal-production '("RETRIEVE-IRREGULAR" "APPLY-REGULAR")))
 
+;;; --- domain predicates (the named-predicate table for the bug-DSL) ---
+
+(defun %verb+ed-p (answer verb)
+  "Domain predicate: ANSWER is VERB with ED appended (both model-package
+symbols here; compare on symbol-name)."
+  (string= (symbol-name answer)
+           (concatenate 'string (symbol-name verb) "ED")))
+
+(defun %analogy-p (answer verb)
+  "Domain predicate: ANSWER is the known vowel-analogy wrong form for VERB.
+nil-guarded (phase-10 lesson #4): a verb with no table entry must NOT feed
+nil to string= as the \"NIL\" designator."
+  (let ((a (cdr (assoc (symbol-name verb)
+                       (mtt/past-tense-tutor:analogy-bugs)
+                       :test #'string=))))
+    (and a (string= (symbol-name answer) a))))
+
+(defun bug-predicates ()
+  "The named-predicate table passed to detect-bug (zero global registry).
+Keys match :when operators by symbol-name, so the adapter-package symbols
+here pair with the tutor-package symbols in the specs."
+  (list (cons 'verb+ed-p #'%verb+ed-p)
+        (cons 'string= #'string=)
+        (cons 'analogy-p #'%analogy-p)))
+
 (defun build-past-tense-model ()
   "Read+compile the past-tense model + buggy library (reuses mtt/past-tense-tutor)."
   (mtt/past-tense-tutor:load-past-tense-model))
@@ -38,32 +63,21 @@ compiled model serves any verb). Returns the session."
 (defmethod mtt:adapt-action ((a past-tense-adapter) action session)
   "Translate a decoded student ACTION alist ((\"type\" . \"answer\")
   (\"value\" . \"went\")) into a primed step-intent. The adapter classifies the
-verb, compares the student's answer against the lexicon/bug tables, and primes
-retrieval with the matching fact so the matcher routes on-path /
-off-path-buggy / off-path. See spec §5's 6-branch table."
+  verb, compares the student's answer against the lexicon, and routes: correct
+  -> verb-fact priming; else the phase-12 bug-DSL (detect-bug over
+  bug-specs with the domain predicate table; env carries the goal slots plus
+  the derived regular-p / known-p); no match -> bare intent (off-path,
+  incl. unknown verbs — design behavior)."
   (flet ((gi (name) (mtt:adapter-intern a name)))
     (let* ((type (cdr (assoc "type" action :test #'string=)))
            (answer (string-upcase (cdr (assoc "value" action :test #'string=))))
            (verb-sym (mtt:adapter-goal-slot a session "VERB"))
-           (verb (and verb-sym (symbol-name verb-sym)))
-           ;; assoc-then-test guard: a MISSING analogy entry's cdr is nil,
-           ;; itself a valid string designator reading "NIL", so feeding it
-           ;; straight to string= would misroute a literal "nil" answer into
-           ;; branch 5. Bind the table value once, compare only when bound.
-           (analogy (and verb
-                         (cdr (assoc verb (mtt/past-tense-tutor:analogy-bugs)
-                                     :test #'string=)))))
+           (verb (and verb-sym (symbol-name verb-sym))))
       (unless (string= type "answer")
         (mtt:signal-bad-request "mtt/past-tense-adapter: unknown action type ~a" type))
       (multiple-value-bind (regular-p correct) (mtt/past-tense-tutor:verb-info verb)
         (let ((answer-sym (mtt:adapter-intern a answer)))
-          (labels
-              ((intent () `((,(gi "GOAL") ,(gi "PAST") ,answer-sym)))
-               (bug (kind)
-                 (mtt:adapter-primed-intent
-                  a (intent)
-                  (mtt:adapter-fact a "BUG-FACT" :kind kind
-                                    :verb verb-sym :past answer-sym))))
+          (labels ((intent () `((,(gi "GOAL") ,(gi "PAST") ,answer-sym))))
             (cond
               ;; 1-2 correct: verb-fact whose class slot literal routes the
               ;; production (regular -> apply-regular, irregular ->
@@ -76,16 +90,15 @@ off-path-buggy / off-path. See spec §5's 6-branch table."
                                   :verb verb-sym
                                   :class (gi (if regular-p "REGULAR" "IRREGULAR"))
                                   :past answer-sym)))
-              ;; 3 bug: over-regularize (verb+ED on an irregular verb)
-              ((and (not regular-p) correct
-                    (string= answer (concatenate 'string verb "ED")))
-               (bug :over-regularize))
-              ;; 4 bug: no-ed (unchanged regular verb)
-              ((and regular-p (string= answer verb))
-               (bug :no-ed))
-              ;; 5 bug: vowel analogy (lookup table; ANALOGY is nil when the
-              ;; verb has no entry — guarded above, see the let* comment)
-              ((and analogy (string= answer analogy))
-               (bug :vowel-analogy))
-              ;; 6 unclassified (incl. unknown verbs): bare intent, no prime
-              (t (mtt:make-step-intent :assignments (intent))))))))))
+              ;; 3-5 bugs via the DSL; 6 unclassified (incl. unknown verbs)
+              (t
+               (let* ((answers (list answer-sym))
+                      (env (append (list (cons (gi "REGULAR-P") regular-p)
+                                         (cons (gi "KNOWN-P") (and correct t)))
+                                   (mtt:bug-goal-env a session)))
+                      (spec (mtt:detect-bug (mtt/past-tense-tutor:bug-specs)
+                                            answers env
+                                            :predicates (bug-predicates))))
+                 (if spec
+                     (mtt:bug-intent a session spec answers)
+                     (mtt:make-step-intent :assignments (intent))))))))))))
