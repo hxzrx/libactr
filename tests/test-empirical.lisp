@@ -281,3 +281,53 @@ like the others: in (0,1)."
     (dolist (entry m)
       (let ((pl (getf entry :p-l)))
         (is (and (realp pl) (< 0.0d0 pl 1.0d0)))))))
+
+;;; --- Phase 13: fraction simplify third KC — observable + P(L) behavior --------
+;;;
+;;; Two legs mirroring the established harness pattern: (a) the synthetic P(L)
+;;; leg (%events/%p-l, no server) for the NEW :simplify KC; (b) the driven leg —
+;;; a real simplifiable problem (1/6+1/6: cdenom 6 -> sum 2/6 -> simplify 1/3)
+;;; through the real server path yields mastery carrying the THIRD fraction KC
+;;; (:simplify), while the unsimplifiable control (1/2+1/3, gcd-1 sum, 2 steps)
+;;; still shows exactly two. This is the pin that the third KC is OBSERVABLE in
+;;; the KT layer, not just in the adapter.
+
+(test p-l.simplify-kc-rises
+  "P(L) for the :simplify KC rises over consecutive corrects (synthetic events)."
+  (let ((curve (loop :for n :from 1 :to 6
+                     :collect (%p-l (compute-mastery (%events :simplify
+                                                              (make-list n :initial-element t)))
+                                     :simplify))))
+    (is (every (lambda (a b) (<= a b)) curve (rest curve)))))
+
+(test empirical.fraction-simplify-third-kc-observable
+  "A driven simplifiable problem (1/6+1/6) through the real server path yields
+mastery with THREE fraction KCs — :simplify present with total 1 — while the
+unsimplifiable control (1/2+1/3, two steps) still shows two."
+  (flet ((drive (student problem steps)
+             (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+               (unwind-protect
+                    (progn
+                      (mtt/server:register-model s "frac"
+                                                 (mtt/fraction-adapter:build-fraction-model)
+                                                 (mtt/fraction-adapter:make-fraction-adapter))
+                      (let ((sid (mtt/server:server-start-session s student problem "frac")))
+                        (dolist (a steps)
+                          (mtt/server:server-step-session s sid a))
+                        (multiple-value-bind (m outcome)
+                            (mtt/server:server-student-mastery s student)
+                          (declare (ignore outcome))
+                          (mapcar (lambda (x) (getf x :kc)) m))))
+                  (mtt/server:stop-tutor-server s)))))
+    (let ((kcs-simplifiable
+            (drive "es" "1/6+1/6"
+                   '((("type" . "common-denom") ("value" . "6"))
+                     (("type" . "sum") ("num" . "2") ("denom" . "6"))
+                     (("type" . "simplify") ("num" . "1") ("denom" . "3")))))
+          (kcs-control
+            (drive "ec" "1/2+1/3"
+                   '((("type" . "common-denom") ("value" . "6"))
+                     (("type" . "sum") ("num" . "5") ("denom" . "6"))))))
+      (is (member :simplify kcs-simplifiable))
+      (is (null (member :simplify kcs-control)))
+      (is (= 2 (length kcs-control))))))

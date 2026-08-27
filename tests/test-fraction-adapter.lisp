@@ -273,3 +273,17 @@ before the simplify increment (ADD-FRACTIONS on-path -> done)."
            (signals mtt:bad-tutor-request
              (%step s sid '(("type" . "simplify") ("num" . "5") ("denom" . "6")))))
       (mtt/server:stop-tutor-server s))))
+
+(test fraction-adapter.wrong-reduction-unclassified
+  "Task-5 review pin: a WRONG reduction at a simplifiable sum (1/6+1/6 = 2/6,
+student 'simplifies' to 2/3 — not the correct 1/3) gets a BARE intent (no
+reduce-fact prime), so SIMPLIFY cannot match -> :off-path unclassified."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "f" "1/6+1/6" "frac")))
+           (%step s sid '(("type" . "common-denom") ("value" . "6")))
+           (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "6")))
+           (let ((r (%step s sid '(("type" . "simplify") ("num" . "2") ("denom" . "3")))))
+             (is (eq :off-path (mtt:trace-result-status r)))
+             (is (null (mtt:trace-result-feedback r)))))
+      (mtt/server:stop-tutor-server s))))
