@@ -2,7 +2,9 @@
 ;;;; Implements the 3-method adapter protocol for the fraction-addition model.
 ;;;; The ADAPTER IS THE DOMAIN BRAIN (spec §2): it computes the correct answer,
 ;;;; detects the bug pattern, and primes retrieval with the matching fact so the
-;;;; matcher confirms and routes (on-path / off-path-buggy / off-path). Stateless;
+;;;; matcher confirms and routes (on-path / off-path-buggy / off-path). The bug
+;;;; branches at both action types are now driven by the phase-12 bug-DSL
+;;;; (per-action-type spec lists; list order IS the detection order). Stateless;
 ;;;; all state lives on the session passed into each method. NO global variables.
 (defpackage :mtt/fraction-adapter
   (:use :cl)
@@ -98,14 +100,15 @@ the matching fact (lcm-fact / sum-fact / bug-fact). See spec §6."
                a
                `((,(gi "GOAL") ,(gi "CDENOM") ,correct))
                (mtt:adapter-fact a "LCM-FACT" :d1 den1 :d2 den2 :lcm correct)))
-             ((= student (* den1 den2))        ; use-product (only a bug when ≠ LCM)
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "CDENOM") ,student))
-               (mtt:adapter-fact a "BUG-FACT" :kind :use-product :num student :denom 0)))
-             (t                                ; unclassified: prime nothing
-              (mtt:make-step-intent
-               :assignments `((,(gi "GOAL") ,(gi "CDENOM") ,student)))))))
+             (t
+              (let* ((answers (list student))
+                     (spec (mtt:detect-bug
+                            (mtt/fraction-tutor:cdenom-bug-specs) answers
+                            (mtt:bug-goal-env a session))))
+                (if spec
+                    (mtt:bug-intent a session spec answers)
+                    (mtt:make-step-intent
+                     :assignments `((,(gi "GOAL") ,(gi "CDENOM") ,student)))))))))
         ((string= type "sum")
          (let* ((ssnum (%action-int action "num"))
                 (ssdenom (%action-int action "denom"))
@@ -120,27 +123,15 @@ the matching fact (lcm-fact / sum-fact / bug-fact). See spec §6."
                `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
                  (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom))
                (mtt:adapter-fact a "SUM-FACT" :cdenom cdenom :snum ssnum :sdenom ssdenom)))
-             ((and (= ssnum (+ num1 num2)) (= ssdenom (+ den1 den2)))
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
-                 (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom))
-               (mtt:adapter-fact a "BUG-FACT" :kind :add-across :num ssnum :denom ssdenom)))
-             ((and (= ssnum (+ num1 num2)) (= ssdenom den1))
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
-                 (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom))
-               (mtt:adapter-fact a "BUG-FACT" :kind :keep-left-denom :num ssnum :denom ssdenom)))
-             ((and (= ssnum (+ num1 num2)) (= ssdenom cdenom))
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
-                 (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom))
-               (mtt:adapter-fact a "BUG-FACT" :kind :no-convert :num ssnum :denom ssdenom)))
              (t
-              (mtt:make-step-intent
-               :assignments `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
-                              (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom)))))))
+              (let* ((answers (list ssnum ssdenom))
+                     (spec (mtt:detect-bug
+                            (mtt/fraction-tutor:sum-bug-specs) answers
+                            (mtt:bug-goal-env a session))))
+                (if spec
+                    (mtt:bug-intent a session spec answers)
+                    (mtt:make-step-intent
+                     :assignments `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
+                                    (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom)))))))))
         (t
          (mtt:signal-bad-request "mtt/fraction-adapter: unknown action type ~a" type))))))
