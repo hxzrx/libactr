@@ -20,7 +20,7 @@ standard-domain-adapter for reusable plumbing (spec §3)."))
 (defun make-fraction-adapter ()
   (make-instance 'fraction-adapter
                  :model-package (find-package :mtt/fraction-tutor)
-                 :terminal-production "ADD-FRACTIONS"))
+                 :terminal-production '("ADD-FRACTIONS" "SIMPLIFY")))
 
 (defun build-fraction-model ()
   "Read+compile the fraction model + buggy library (reuses mtt/fraction-tutor)."
@@ -76,13 +76,14 @@ model's default initial-goal so one compiled model serves any problem."
   (multiple-value-bind (num1 den1 num2 den2) (%parse-problem problem-id)
     (mtt:adapter-set-goal a session "FRAC-ADD"
                           :num1 num1 :den1 den1 :num2 num2 :den2 den2
-                          :cdenom nil :snum nil :sdenom nil))
+                          :cdenom nil :snum nil :sdenom nil
+                          :rnum nil :rdenom nil))
   session)
 
 (defmethod mtt:adapt-action ((a fraction-adapter) action session)
   "Translate a decoded student ACTION alist into a primed step-intent. The adapter
 computes the correct value, detects the bug (if any), and primes retrieval with
-the matching fact (lcm-fact / sum-fact / bug-fact). See spec §6."
+the matching fact (lcm-fact / sum-fact / reduce-fact / bug-fact). See spec §6."
   (flet ((gi (name) (mtt:adapter-intern a name)))
     (let* ((type (cdr (assoc "type" action :test #'string=)))
            (num1 (mtt:adapter-goal-slot a session "NUM1"))
@@ -133,5 +134,51 @@ the matching fact (lcm-fact / sum-fact / bug-fact). See spec §6."
                     (mtt:make-step-intent
                      :assignments `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
                                     (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom)))))))))
+        ((string= type "simplify")
+         (let* ((rnum (%action-int action "num"))
+                (rdenom (%action-int action "denom"))
+                (snum (mtt:adapter-goal-slot a session "SNUM"))
+                (sdenom (mtt:adapter-goal-slot a session "SDENOM"))
+                (g (%gcd snum sdenom)))
+           (cond
+             ((and (> g 1) (= rnum (/ snum g)) (= rdenom (/ sdenom g)))
+              (mtt:adapter-primed-intent
+               a
+               `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
+                 (,(gi "GOAL") ,(gi "RDENOM") ,rdenom))
+               (mtt:adapter-fact a "REDUCE-FACT"
+                                 :num snum :den sdenom :rnum rnum :rdenom rdenom)))
+             ((= g 1)
+              (mtt:signal-bad-request
+               "mtt/fraction-adapter: the sum is already in lowest terms — no simplify step for this problem"))
+             (t                            ; wrong reduction: unclassified off-path
+              (mtt:make-step-intent
+               :assignments `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
+                              (,(gi "GOAL") ,(gi "RDENOM") ,rdenom)))))))
         (t
          (mtt:signal-bad-request "mtt/fraction-adapter: unknown action type ~a" type))))))
+
+;;; --- Phase 13: conditional termination --------------------------------------
+;;; The terminal-name list cannot express "ADD-FRACTIONS is terminal ONLY when
+;;; the summed fraction is already in lowest terms" (ANY-match would end a
+;;; simplifiable problem one step early), so this adapter overrides step-done?
+;;; locally (mirrors the pre-phase-8 per-domain local override precedent; phase
+;;; 13 spec §8 amendment). The override governs; the terminal list above is
+;;; documentation config.
+
+(defmethod mtt:step-done? ((a fraction-adapter) trace-result session)
+  "Conditional termination (phase 13 spec §8 amendment): SIMPLIFY on-path is
+always done; ADD-FRACTIONS on-path is done ONLY when the summed fraction is
+already in lowest terms (gcd(snum,sdenom)=1, read from the session goal) —
+the terminal-name list cannot express this (ANY-match would end simplifiable
+problems one step early). Other productions are never done."
+  (and (eq :on-path (mtt:trace-result-status trace-result))
+       (let ((p (mtt:trace-result-production trace-result)))
+         (and p
+              (let ((n (symbol-name (mtt:production-name p))))
+                (cond
+                  ((string= "SIMPLIFY" n) t)
+                  ((string= "ADD-FRACTIONS" n)
+                   (= 1 (%gcd (mtt:adapter-goal-slot a session "SNUM")
+                              (mtt:adapter-goal-slot a session "SDENOM"))))
+                  (t nil)))))))
