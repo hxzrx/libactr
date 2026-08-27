@@ -170,3 +170,153 @@ non-builtin operators (zero global registry)."
                              (append (bug-answer-env spec answers) env)
                              :predicates predicates)
           :return spec))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 13: validate-bug-spec — the authoring validator (spec §6).
+;;; Pure function over a bug-spec: collects ERRORS (authoring mistakes that
+;;; would otherwise degrade silently — the phase-12 final-review backlog) and
+;;; WARNINGS (conditions the constructor cannot fully decide). make-bug-spec
+;;; itself is untouched; tutor loaders / adapter makers call this and signal
+;;; on non-empty errors (Task 3). Never signals, never mutates.
+
+(defun %builtin-op-p (op)
+  "The closed builtin operator set of eval-bug-form (all CL symbols — :when
+forms are read in a package that :use :cl, so the case in eval-bug-form and
+this member agree on identity)."
+  (and (symbolp op) (not (null op))
+       (member op '(and or not = < <= > >= + - * abs))))
+
+(defun %builtin-arity-errors (op args)
+  "Arity violations for the closed builtin set (mirrors eval-bug-form
+semantics: not/abs read exactly one arg; and/or take any; the rest apply over
+>= 1)."
+  (case op
+    ((not abs)
+     (unless (= 1 (length args))
+       (list (format nil "operator ~(~a~) takes exactly 1 argument, got ~d"
+                     op (length args)))))
+    ((and or) nil)
+    (t (unless (>= (length args) 1)
+         (list (format nil "operator ~(~a~) needs at least 1 argument" op))))))
+
+(defun %walk-when (form resolvable-p predicates)
+  "Walk the restricted :when form (the same shape language eval-bug-form
+reads): collect one error per unresolvable name, unknown operator, or builtin
+arity violation."
+  (cond
+    ((symbolp form)
+     (if (or (null form) (eq form t) (funcall resolvable-p form))
+         nil
+         (list (format nil
+                       "unresolvable name ~(~a~) in :when (not an answer :as, fact-slot, goal-guard slot, or extra-env-name)"
+                       form))))
+    ((consp form)
+     (let ((op (first form)) (args (rest form)))
+       (append
+        (unless (or (%builtin-op-p op)
+                    (cdr (assoc op predicates :key #'symbol-name :test #'string=)))
+          (list (format nil
+                        "unknown operator ~(~a~) in :when (not builtin, not in :predicates)"
+                        op)))
+        (when (%builtin-op-p op) (%builtin-arity-errors op args))
+        (loop :for a :in args :append (%walk-when a resolvable-p predicates)))))
+    (t nil)))
+
+(defun validate-bug-spec (spec &key (predicates nil) (extra-env-names nil))
+  "Validate a bug-spec declaration, returning (values ERRORS WARNINGS) as
+lists of human-readable strings. ERRORS catch what would otherwise degrade
+silently: missing required fields (name/kind/kc/goal-type must be non-nil
+symbols), malformed answer entries (:action string + :slot symbol), malformed fact-slot
+entries ((name :from (:answer i)|(:goal s)) or (name :literal v)), a fact-slot
+index out of range, an answer with no matching (:answer i) fact slot (the RHS
+would silently get (slot . nil)), duplicate answer :slot or :as names (env
+shadowing), malformed goal-guard entries, unresolvable names in :when, unknown
+operators, and builtin arity violations. WARNINGS hold constructor-undecidable
+notes (e.g. non-string feedback). PREDICATES is the caller's named-predicate
+alist (the same one detect-bug receives); EXTRA-ENV-NAMES are names the
+adapter adds to the detection env beyond goal slots (e.g. past-tense's
+regular-p / known-p). Pure: never signals, never mutates the spec."
+  (let ((errors nil) (warnings nil))
+    (flet ((err (fmt &rest args) (push (apply #'format nil fmt args) errors))
+           (note (fmt &rest args) (push (apply #'format nil fmt args) warnings)))
+      ;; 1. required fields (nil IS a symbol in CL and the defstruct default,
+      ;;    so the check is non-nil-symbol, not bare symbolp)
+      (unless (and (symbolp (bug-spec-name spec)) (bug-spec-name spec))
+        (err "missing required field name"))
+      (unless (and (symbolp (bug-spec-kind spec)) (bug-spec-kind spec))
+        (err "missing required field kind"))
+      (unless (and (symbolp (bug-spec-kc spec)) (bug-spec-kc spec))
+        (err "missing required field kc"))
+      (unless (and (symbolp (bug-spec-goal-type spec)) (bug-spec-goal-type spec))
+        (err "missing required field goal-type"))
+      ;; 2. answers shape + duplicate :slot / :as
+      (let ((slots-seen nil) (as-seen nil))
+        (dolist (entry (bug-spec-answers spec))
+          (unless (and (stringp (getf entry :action))
+                       (symbolp (getf entry :slot)))
+            (err "malformed answer entry ~s (need :action string + :slot symbol)" entry))
+          (let ((slot (getf entry :slot))
+                (as (or (getf entry :as) (getf entry :slot))))
+            (when (member slot slots-seen)
+              (err "duplicate answer :slot ~a" slot))
+            (when (member as as-seen)
+              (err "duplicate answer :as name ~a (env shadowing)" as))
+            (push slot slots-seen) (push as as-seen))))
+      ;; 3. fact-slots shape + index range (:literal presence via plist keys —
+      ;;    getf cannot distinguish absent from nil-valued)
+      (dolist (fs (bug-spec-fact-slots spec))
+        (if (not (and (consp fs) (symbolp (first fs))))
+            (err "malformed fact-slot entry ~s (need (name ...))" fs)
+            (let ((from (getf (rest fs) :from))
+                  (literal-present-p (member :literal (rest fs))))
+              (cond
+                ((and from literal-present-p)
+                 (err "fact-slot ~a has BOTH :from and :literal" (first fs)))
+                (from
+                 (unless (and (listp from)
+                              (member (first from) '(:answer :goal))
+                              (or (and (eq (first from) :answer) (integerp (second from)))
+                                  (and (eq (first from) :goal) (symbolp (second from)))))
+                   (err "malformed :from ~s on fact-slot ~a" from (first fs)))
+                 (when (and (listp from) (eq (first from) :answer)
+                            (integerp (second from)))
+                   (unless (< -1 (second from) (length (bug-spec-answers spec)))
+                     (err "fact-slot ~a references (:answer ~d) — out of range for ~d answers"
+                          (first fs) (second from) (length (bug-spec-answers spec))))))
+                ((not literal-present-p)
+                 (err "fact-slot ~a has neither :from nor :literal (degrades to literal nil at runtime)"
+                      (first fs)))))))
+      ;; 4. goal-guard shape
+      (dolist (pair (bug-spec-goal-guard spec))
+        (unless (and (listp pair) (= 2 (length pair)) (symbolp (first pair)))
+          (err "malformed goal-guard entry ~s (need (slot literal))" pair)))
+      ;; 5. answer <-> fact-slot cross reference (the headline check)
+      (loop :for i :from 0 :below (length (bug-spec-answers spec))
+            :unless (some (lambda (fs)
+                            (and (consp fs)
+                                 (equal (getf (rest fs) :from) (list :answer i))))
+                          (bug-spec-fact-slots spec))
+              :do (err "answer ~d has no fact slot (:answer ~d) — RHS would silently get (slot . nil)"
+                       i i))
+      ;; 6. :when walk (names resolvable = answer :as + fact names + goal-guard
+      ;;    slots + extra-env-names, matched by symbol-name like apply-kc-map)
+      (let* ((as-names (mapcar (lambda (e) (or (getf e :as) (getf e :slot)))
+                               (bug-spec-answers spec)))
+             (fact-names (mapcar #'first (bug-spec-fact-slots spec)))
+             (guard-names (mapcar #'first (bug-spec-goal-guard spec)))
+             (resolvable (append as-names fact-names guard-names extra-env-names))
+             (resolvable-p (lambda (n)
+                             (and (symbolp n)
+                                  (member n resolvable
+                                          :key (lambda (x) (and (symbolp x) x))
+                                          :test #'string=)
+                                  t))))
+        ;; push (not append) so the final nreverse keeps ALL errors in
+        ;; emission order: append placed the walk list after the pushed
+        ;; err messages and the nreverse then reversed the walk order
+        (dolist (e (%walk-when (bug-spec-when spec) resolvable-p predicates))
+          (push e errors)))
+      ;; 7. warnings
+      (when (and (bug-spec-feedback spec) (not (stringp (bug-spec-feedback spec))))
+        (note "feedback is not a string"))
+      (values (nreverse errors) (nreverse warnings)))))

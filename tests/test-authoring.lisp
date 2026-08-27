@@ -240,3 +240,149 @@ genuinely exercises declared-order priority."
     ;; shadowing: goal res=nil, answer digit=4 -> (= digit 4) true via ANSWER env
     (is (eq 'hit (bug-spec-name (detect-bug (list (%mini-spec 'hit '(= digit 4)))
                                             '(4) env))))))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 13: validate-bug-spec (authoring validator)
+
+(defun %valid-subtraction-spec ()
+  "A well-formed subtraction mirror spec (phase 12 §2.2 shape)."
+  (make-bug-spec
+   :name 'buggy-borrow-ignore :kind :borrow-ignore :kc :borrow
+   :feedback "fb" :goal-type 'sub2 :goal-guard '((stage ones))
+   :answers '((:action "value" :slot res-ones :as digit))
+   :fact-slots '((digit :from (:answer 0)))
+   :when '(and (< top-ones bot-ones) (= digit (- bot-ones top-ones)))))
+
+(test validate-bug-spec.valid-spec-has-no-errors
+  ;; top-ones / bot-ones are GOAL-slot names — the validator cannot derive
+  ;; them from the spec (no chunk-type knowledge), so the caller declares
+  ;; them via :extra-env-names (the parameter's exact purpose).
+  (multiple-value-bind (errors warnings)
+      (validate-bug-spec (%valid-subtraction-spec)
+                         :extra-env-names '(top-ones bot-ones))
+    (is (null errors))
+    (is (null warnings))))
+
+(test validate-bug-spec.missing-required-fields
+  ;; a spec with name/kind/kc/goal-type nil -> one error per missing field
+  (let ((spec (make-bug-spec :answers '((:action "value" :slot r :as d))
+                             :fact-slots '((d :from (:answer 0)))
+                             :when '(= d 1))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 4 (length errors)))
+      (is (find "name" errors :test #'(lambda (want e) (search want e))))
+      (is (find "kind" errors :test #'(lambda (want e) (search want e))))
+      (is (find "kc" errors :test #'(lambda (want e) (search want e))))
+      (is (find "goal-type" errors :test #'(lambda (want e) (search want e)))))))
+
+(test validate-bug-spec.answer-without-fact-slot
+  "The headline silent degradation: answer 1 has no (:answer 1) fact slot ->
+RHS would get (slot . nil). Must be an ERROR."
+  (let ((spec (make-bug-spec
+               :name 'b1 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '((:action "num" :slot s1 :as s1)
+                          (:action "denom" :slot s2 :as s2))
+               :fact-slots '((num :from (:answer 0)))   ; answer 1 unsourced
+               :when '(= s1 num))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 1 (length errors)))
+      (is (and (search "answer 1" (first errors)) t))
+      (is (and (search "(:answer 1)" (first errors)) t)))))
+
+(test validate-bug-spec.answer-index-out-of-range
+  "A fact slot (:answer 2) on a 2-answer spec -> index error. Both answers
+must be SOURCED (num/den) — otherwise the headline answer-without-fact-slot
+error would fire too and the count would not isolate the index error."
+  (let ((spec (make-bug-spec
+               :name 'b2 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '((:action "num" :slot s1 :as s1)
+                          (:action "denom" :slot s2 :as s2))
+               :fact-slots '((num :from (:answer 0)) (den :from (:answer 1))
+                             (bogus :from (:answer 2)))
+               :when '(= s1 num))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 1 (length errors)))
+      (is (and (search "out of range" (first errors)) t)))))
+
+(test validate-bug-spec.fact-slot-without-from-or-literal
+  "(name) with neither :from nor :literal degrades literal-nil at runtime -> error."
+  (let ((spec (make-bug-spec
+               :name 'b3 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '((:action "value" :slot s :as s))
+               :fact-slots '((d))                        ; malformed
+               :when '(= s 1))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (and (search ":from" (first errors)) t)))))
+
+(test validate-bug-spec.duplicate-answer-slot-and-as
+  (let ((spec (make-bug-spec
+               :name 'b4 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '((:action "a" :slot s1 :as x)
+                          (:action "b" :slot s1 :as y))   ; duplicate :slot
+               :fact-slots '((f0 :from (:answer 0)) (f1 :from (:answer 1)))
+               :when '(= x 1))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (and (search "duplicate" (first errors)) t)))))
+
+(test validate-bug-spec.when-name-resolution
+  ":when names must resolve to answer :as names / fact-slot names / goal-guard
+slot names / extra-env-names. An unknown name AND an unknown operator are both
+errors; a predicate supplied via :predicates resolves; extra-env-names resolves."
+  (let ((spec (make-bug-spec
+               :name 'b5 :kind :k :kc :kc1 :goal-type 'gt
+               :goal-guard '((stage ones))
+               :answers '((:action "value" :slot r :as d))
+               :fact-slots '((digit :from (:answer 0)))
+               :when '(and regular-p (verb-p d stage no-such-name)))))
+    ;; without predicates/extra names: 3 errors (regular-p name, verb-p
+    ;; operator, no-such-name name), first in emission order
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 3 (length errors)))                        ; regular-p verb-p no-such-name
+      (is (and (search "regular-p" (first errors)) t)))
+    ;; with the domain table + env names: regular-p / verb-p resolve; the
+    ;; genuinely-unknown no-such-name remains the SOLE error
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec
+                           :predicates '((verb-p . (lambda (&rest _)
+                                                     (declare (ignore _)) t)))
+                           :extra-env-names '(regular-p))
+      (declare (ignore warnings))
+      (is (= 1 (length errors)))
+      (is (and (search "no-such-name" (first errors)) t)))))
+
+(test validate-bug-spec.builtin-arity
+  "abs/not take exactly 1 arg; a 2-arg abs is an error."
+  (let ((spec (make-bug-spec
+               :name 'b6 :kind :k :kc :kc1 :goal-type 'gt
+               :answers '((:action "value" :slot r :as d))
+               :fact-slots '((digit :from (:answer 0)))
+               :when '(= d (abs 1 2)))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (= 1 (length errors)))
+      (is (and (search "abs" (first errors)) t)))))
+
+(test validate-bug-spec.malformed-goal-guard
+  (let ((spec (make-bug-spec
+               :name 'b7 :kind :k :kc :kc1 :goal-type 'gt
+               :goal-guard '((stage))                    ; not a 2-list
+               :answers '((:action "value" :slot r :as d))
+               :fact-slots '((digit :from (:answer 0)))
+               :when '(= d 1))))
+    (multiple-value-bind (errors warnings)
+        (validate-bug-spec spec)
+      (declare (ignore warnings))
+      (is (and (search "goal-guard" (first errors)) t)))))

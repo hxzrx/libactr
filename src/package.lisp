@@ -99,6 +99,8 @@
            #:bug-production #:detect-bug
            ;; Phase 12: bug-DSL runtime half + malformed-input condition
            #:bad-tutor-request #:bad-tutor-request-message #:signal-bad-request
-           #:bug-goal-env #:bug-intent))
+           #:bug-goal-env #:bug-intent
+           ;; Phase 13: authoring validator (spec §6)
+           #:validate-bug-spec))
 
 (in-package :mtt)
