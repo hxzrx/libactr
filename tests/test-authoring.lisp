@@ -192,6 +192,28 @@ no goal-guard -> only the auto answer-nil test."
       (is (equalp (list (make-slot-test (intern "CD" pkg) :literal nil))
                   (buffer-pattern-slot-tests (first (production-lhs p))))))))
 
+(test bug-production.gold-shape-two-answers-auto-nil-tests
+  "A 2-answer spec (the fraction-sum shape) generates an auto (slot nil) goal
+test PER answer (snum AND sdenom), the num/denom =V1/=V2 retrieval pair, and
+the two-slot RHS — the Task 8 review's deferred gold pin."
+  (let* ((pkg (%defbug-fixture-package))
+         (spec (make-bug-spec
+                :name (intern "BUGGY-SUM-X" pkg) :kind :sum-x :kc :add-f
+                :feedback "f" :goal-type (intern "FRAC-ADD" pkg)
+                :answers (list (list :action "num" :slot (intern "SNUM" pkg) :as (intern "SNUM" pkg))
+                               (list :action "denom" :slot (intern "SDENOM" pkg) :as (intern "SDENOM" pkg)))
+                :fact-slots (list (list (intern "NUM" pkg) :from (list :answer 0))
+                                   (list (intern "DENOM" pkg) :from (list :answer 1)))
+                :when '(and (= snum 1) (= sdenom 2))))
+         (p (bug-production spec)))
+    (is (equalp (list (make-slot-test (intern "SNUM" pkg) :literal nil)
+                      (make-slot-test (intern "SDENOM" pkg) :literal nil))
+                (buffer-pattern-slot-tests (first (production-lhs p)))))
+    (is (equalp (list (make-action ':= (intern "GOAL" pkg)
+                                   (list (cons (intern "SNUM" pkg) (intern "=V1" pkg))
+                                         (cons (intern "SDENOM" pkg) (intern "=V2" pkg)))))
+                (production-rhs p)))))
+
 (defun %mini-spec (name when)
   (make-bug-spec :name name :kind name :kc :k :feedback "f"
                  :goal-type 'task
