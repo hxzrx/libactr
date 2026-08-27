@@ -224,3 +224,23 @@ unknown action type exit is signalled (phase 12 debt #2)."
              (mtt/server:server-step-session
               s sid '(("type" . "wat") ("value" . "went")))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 13 Task 3: validate-bug-spec wiring (construction IS validation) --
+
+(test past-tense-adapter.bug-specs-pass-validation
+  "Construction IS validation (phase 13 spec §6 wiring): the predicate table
+lives in this adapter, so make-past-tense-adapter gates the three specs with
+its own predicates + env additions (verb = goal slot; regular-p / known-p are
+adapter-derived at runtime) and errors before returning if any spec is
+invalid. The explicit loop re-checks the same specs directly."
+  (is (typep (mtt/past-tense-adapter:make-past-tense-adapter)
+             'mtt/past-tense-adapter:past-tense-adapter))
+  (dolist (spec (mtt/past-tense-tutor:bug-specs))
+    (multiple-value-bind (errors warnings)
+        (mtt:validate-bug-spec spec
+                               :predicates (mtt/past-tense-adapter::bug-predicates)
+                               :extra-env-names '(verb regular-p known-p))
+      (declare (ignore warnings))
+      (is (null errors)
+          "past-tense spec ~a: ~{~a~^; ~}"
+          (mtt:bug-spec-name spec) errors))))

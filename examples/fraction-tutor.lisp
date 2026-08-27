@@ -69,5 +69,21 @@ buggy library. Model symbols land in :mtt/fraction-tutor (*PACKAGE* binding)."
       (setf (mtt:model-definition-productions md)
             (append (mtt:model-definition-productions md)
                     (mapcar #'mtt:bug-production
-                            (append (sum-bug-specs) (cdenom-bug-specs)))))
+                            (%validate-specs!
+                             (append (sum-bug-specs) (cdenom-bug-specs))))))
       md)))
+
+(defun %validate-specs! (specs)
+  "Authoring-time gate (phase 13 spec §6): signal when any spec has errors,
+return SPECS. The fraction :when forms read the frac-add GOAL slots (problem
+variables the validator cannot derive from the spec itself), so they are
+declared via :extra-env-names (cdenom is a goal slot in the sum specs and the
+answer :as in the cdenom spec — superset is harmless)."
+  (dolist (spec specs)
+    (multiple-value-bind (errors warnings)
+        (mtt:validate-bug-spec spec
+                               :extra-env-names '(num1 den1 num2 den2 cdenom))
+      (declare (ignore warnings))
+      (when errors
+        (error "invalid bug-spec ~a: ~{~a~^; ~}" (mtt:bug-spec-name spec) errors))))
+  specs)
