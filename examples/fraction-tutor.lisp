@@ -65,7 +65,8 @@ buggy library. Model symbols land in :mtt/fraction-tutor (*PACKAGE* binding)."
       (mtt:apply-kc-map
        md
        '((find-common-denominator . :common-denominator)
-         (add-fractions          . :add-fractions)))
+         (add-fractions          . :add-fractions)
+         (simplify               . :simplify)))
       (setf (mtt:model-definition-productions md)
             (append (mtt:model-definition-productions md)
                     (mapcar #'mtt:bug-production

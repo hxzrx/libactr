@@ -209,6 +209,29 @@ the goal is set to a terminate-addition state."
       (is (null diffs)
           "fraction add-fractions dual-track: ~A" diffs))))
 
+(test dual-track-fraction-simplify
+  "Goal: cdenom=6 snum=2 sdenom=6 rnum nil. Retrieval: reduce-fact num=2 den=6
+rnum=1 rdenom=3. Both engines must agree SIMPLIFY matches and the other two
+fraction productions do not."
+  (let ((goal (mtt:make-chunk :isa 'frac-add
+                              :slots '((cdenom . 6) (snum . 2) (sdenom . 6)
+                                       (rnum . nil))))
+        (retr (mtt:make-chunk :isa 'reduce-fact
+                              :slots '((num . 2) (den . 6) (rnum . 1) (rdenom . 3)))))
+    (let ((diffs (dual-track-check-with-retrieval (fraction-model-path) goal retr)))
+      (is (null diffs) "fraction simplify dual-track: ~A" diffs))))
+
+(test dual-track-fraction-simplify-done-guard
+  "Goal: rnum=1 (simplify already applied), same reduce-fact retrieval. Both
+engines must agree SIMPLIFY does NOT match (goal wants rnum nil)."
+  (let ((goal (mtt:make-chunk :isa 'frac-add
+                              :slots '((cdenom . 6) (snum . 2) (sdenom . 6)
+                                       (rnum . 1) (rdenom . 3))))
+        (retr (mtt:make-chunk :isa 'reduce-fact
+                              :slots '((num . 2) (den . 6) (rnum . 1) (rdenom . 3)))))
+    (let ((diffs (dual-track-check-with-retrieval (fraction-model-path) goal retr)))
+      (is (null diffs) "fraction simplify negative dual-track: ~A" diffs))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Phase 10: past-tense dual-track (model-matching vs act-r oracle)
 ;;; ---------------------------------------------------------------------------
