@@ -362,3 +362,226 @@ with a warning; the local session is untouched."
         (stop-cluster-manager m2)
         (stop-tutor-server s1)
         (stop-tutor-server s2)))))
+
+;;; --- Task 10: thin front proxy -------------------------------------------------
+
+;; [brief defect, run-evidenced: dexador SIGNALS dex:http-request-failed on
+;; 4xx/5xx (the proxy's own %forward-post in the brief knows this — it
+;; unwraps the condition with dex:response-status/response-body — but the
+;; brief's tests call dex:post/dex:get raw and read the RETURNED status, so
+;; every non-2xx assertion aborted with "Unexpected Error: HTTP-REQUEST-...
+;; returned 404/503" instead of asserting. Mirrors %forward-post's unwrap in
+;; a test helper; assertions unchanged.]
+(defun %post (url content)
+  (handler-case (dex:post url :content content)
+    (dex:http-request-failed (c)
+      (values (typecase (dex:response-body c)
+                (string (dex:response-body c))
+                (vector (babel:octets-to-string (dex:response-body c) :encoding :utf-8))
+                (t nil))
+              (dex:response-status c)))))
+
+(defun %get (url)
+  (handler-case (dex:get url)
+    (dex:http-request-failed (c)
+      (values nil (dex:response-status c)))))
+
+;; [brief defect, probe-evidenced ((getf '("w1" 1) 0) => NIL in a fresh REPL
+;; probe — the exact defect class Task 9's route assertions evidenced): the
+;; brief's two route assertions use (getf (multiple-value-list
+;; (cluster-route-get ...)) 0), but getf is a PROPERTY-LIST accessor while
+;; multiple-value-list returns a POSITIONAL list — the lookup always reads
+;; NIL and (string= "w1" nil) signals. first on the positional list here;
+;; the proxy skeleton carries the same defect in its route resolution (fixed
+;; with nth-value 0 there).]
+
+(test proxy.smoke-start-step-end-through-proxy
+  "One worker behind an in-process proxy: start routes to the worker and
+writes sess/student/worker-sess keys; step and end flow through verbatim."
+  (with-test-redis (conn port)
+    (let* ((s (%worker-server port))
+           (m (make-cluster-manager :server s :worker-id "w1"
+                                    :redis-host "127.0.0.1" :redis-port port
+                                    :prefix "t-px:"))
+           (p (make-tutor-proxy :port (%find-free-port)
+                                :redis-host "127.0.0.1" :redis-port port
+                                :prefix "t-px:")))
+      (unwind-protect
+           (progn
+             (cluster-join m)
+             (multiple-value-bind (body status)
+                 (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                        "{\"student_id\":\"px\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+               (is (= 200 status))
+               (let* ((alist (yason:parse body :object-as :alist))
+                      (sid (cdr (assoc "session_id" alist :test #'string=))))
+                 (is (and sid t))
+                 ;; the proxy wrote the three route keys
+                 (is (string= "w1" (first (multiple-value-list
+                                          (cluster-route-get (uiop:strcat "t-px:sess:" sid))))))
+                 (is (string= "w1" (first (multiple-value-list
+                                          (cluster-route-get (uiop:strcat "t-px:student:px"))))))
+                 (is (find sid (redis:red-smembers "t-px:worker-sess:w1") :test #'string=))
+                 ;; step through the proxy
+                 (multiple-value-bind (b2 s2)
+                     (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                            (format nil
+                                    "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
+                                    sid))
+                   (is (= 200 s2))
+                   (is (string= "on-path"
+                                (cdr (assoc "status" (yason:parse b2 :object-as :alist)
+                                            :test #'string=)))))
+                 ;; end through the proxy
+                 (multiple-value-bind (b3 s3)
+                     (%post (format nil "http://127.0.0.1:~a/session/end" (proxy-port p))
+                            (format nil "{\"session_id\":\"~a\"}" sid))
+                   (declare (ignore b3))
+                   (is (= 200 s3))))))
+        (stop-tutor-proxy p)
+        (stop-cluster-manager m)
+        (stop-tutor-server s)))))
+
+(test proxy.unknown-session-404
+  (with-test-redis (conn port)
+    (let ((p (make-tutor-proxy :port (%find-free-port)
+                               :redis-host "127.0.0.1" :redis-port port
+                               :prefix "t-404:")))
+      (unwind-protect
+           (multiple-value-bind (body status)
+               (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                      "{\"session_id\":\"nope\",\"action\":{\"type\":\"digit\",\"value\":\"1\"}}")
+             (declare (ignore body))
+             (is (= 404 status)))
+        (stop-tutor-proxy p)))))
+
+(test proxy.dead-route-retry-and-503
+  "A route pointing at a dead port: transport failure -> one re-resolve ->
+route unchanged -> 503. Then move the route to a live worker -> the retry
+succeeds (the takeover-transparent continuation shape).
+
+[brief defect, probe-evidenced (RED probe: retry branch disabled -> suite
+STILL 65/65 GREEN): the brief's two segments cannot discriminate the retry —
+the route is healed BEFORE the second request, so its first try succeeds and
+the re-resolve branch never runs. Third leg added (minimal, assertions of the
+original two unchanged): a connection-killer listener that flips the route
+MID-REQUEST — the only deterministic single-threaded shape where 200 is
+reachable ONLY through transport-failure -> re-resolve -> changed route ->
+retry. This is the leg that goes red under the brief's Step-5 probe.]"
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-rt:"))
+           (sid (progn (cluster-join m1)
+                       (let ((sid (server-start-session s1 "rt" "52-18" "sub")))
+                         (redis:red-hset (uiop:strcat "t-rt:sess:" sid) "worker" "w1")
+                         sid)))
+           (dead-port (%find-free-port))          ; bound then released: nothing listens
+           (p (make-tutor-proxy :port (%find-free-port)
+                                :redis-host "127.0.0.1" :redis-port port
+                                :prefix "t-rt:"))
+           ;; the "doomed worker": accepts the forwarded step, flips the route
+           ;; to the live worker (the takeover), then kills the connection —
+           ;; dexador surfaces the reset/EOF as a transport error. Own redis
+           ;; connection: cl-redis connections are single-socket, never shared
+           ;; across threads.
+           (doom-port (%find-free-port))
+           (doom-sock (usocket:socket-listen "127.0.0.1" doom-port :reuse-address t))
+           (doom-conn (let ((redis:*connection* nil))
+                        (redis:connect :host "127.0.0.1" :port port)))
+           (doom-th (bordeaux-threads:make-thread
+                     (lambda ()
+                       (ignore-errors
+                         (let ((c (usocket:socket-accept doom-sock)))
+                           (let ((redis:*connection* doom-conn))
+                             (redis:red-hset (uiop:strcat "t-rt:sess:" sid)
+                                             "worker" "w1"))
+                           (usocket:socket-close c)))))))
+      (unwind-protect
+           (progn
+             ;; [brief simplification applied (the brief's own implementation
+             ;; note): the minimal ghost shape = route -> ghost-id + the ghost's
+             ;; worker:<id> metadata pointing at a dead port. The brief's
+             ;; intermediate hash-shaped hset on the same key was dead weight
+             ;; (immediately overwritten by the SET) and is dropped; assertions
+             ;; unchanged.]
+             (let* ((ghost (format nil "ghost-~a" dead-port))
+                    (h (make-hash-table :test 'equal)))
+               (setf (gethash "host" h) "127.0.0.1" (gethash "port" h) dead-port)
+               (redis:red-hset (uiop:strcat "t-rt:sess:" sid) "worker" ghost)
+               (redis:red-set (uiop:strcat "t-rt:worker:" ghost)
+                              (with-output-to-string (out) (yason:encode h out))))
+             ;; point the route at a dead port: 503 after the failed retry
+             (multiple-value-bind (body status)
+                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                        (format nil
+                                "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
+                                sid))
+               (declare (ignore body))
+               (is (= 503 status)))
+             ;; move the route to the live worker -> same call succeeds
+             (redis:red-hset (uiop:strcat "t-rt:sess:" sid) "worker" "w1")
+             (multiple-value-bind (b2 s2)
+                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                        (format nil
+                                "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
+                                sid))
+               (is (= 200 s2))
+               (is (string= "on-path"
+                            (cdr (assoc "status" (yason:parse b2 :object-as :alist)
+                                        :test #'string=)))))
+             ;; takeover-transparent: route -> doomed worker; its listener flips
+             ;; the route to w1 WHILE the request is in flight, then kills the
+             ;; connection -> the 200 below is reachable ONLY via the
+             ;; re-resolve+retry. (Action "3": the tens digit — the leg above
+             ;; consumed the ones digit "4".)
+             (let* ((h2 (make-hash-table :test 'equal)))
+               (setf (gethash "host" h2) "127.0.0.1" (gethash "port" h2) doom-port)
+               (redis:red-hset (uiop:strcat "t-rt:sess:" sid) "worker" "doom")
+               (redis:red-set (uiop:strcat "t-rt:worker:doom")
+                              (with-output-to-string (out) (yason:encode h2 out))))
+             (multiple-value-bind (b3 s3)
+                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                        (format nil
+                                "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"3\"}}"
+                                sid))
+               (is (= 200 s3))
+               (is (string= "on-path"
+                            (cdr (assoc "status" (yason:parse b3 :object-as :alist)
+                                        :test #'string=))))))
+        (ignore-errors (usocket:socket-close doom-sock))   ; unblocks a pending accept
+        (ignore-errors (bordeaux-threads:join-thread doom-th))
+        (let ((redis:*connection* doom-conn))
+          (ignore-errors (redis:disconnect)))
+        (stop-tutor-proxy p)
+        (stop-cluster-manager m1)
+        (stop-tutor-server s1)))))
+
+(test proxy.mastery-location-free
+  "/student/mastery is served from redis directly: works even though no
+worker ever registered locally in this process for that student; unknown
+student -> 404."
+  (with-test-redis (conn port)
+    (let* ((s (%worker-server port))
+           (sid (server-start-session s "mp" "52-18" "sub")))
+      (server-step-session s sid '(("type" . "digit") ("value" . "4")))
+      (let ((p (make-tutor-proxy :port (%find-free-port)
+                                 :redis-host "127.0.0.1" :redis-port port
+                                 :prefix "t-my:")))
+        (unwind-protect
+             (progn
+               (multiple-value-bind (body status)
+                   (%get (format nil "http://127.0.0.1:~a/student/mastery?student_id=mp"
+                                 (proxy-port p)))
+                 (is (= 200 status))
+                 (let ((kc (cdr (assoc "kc" (yason:parse body :object-as :alist)
+                                       :test #'string=))))
+                   (is (and kc (> (length kc) 0) t))))
+               (multiple-value-bind (body status)
+                   (%get (format nil "http://127.0.0.1:~a/student/mastery?student_id=ghost"
+                                 (proxy-port p)))
+                 (declare (ignore body))
+                 (is (= 404 status))))
+          (stop-tutor-proxy p)
+          (stop-tutor-server s))))))

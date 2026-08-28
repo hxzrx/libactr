@@ -18,7 +18,11 @@
            #:cluster-route-get #:cluster-route-set
            #:checkpoint-store #:save-checkpoint #:load-checkpoint
            #:memory-checkpoint-store #:make-memory-checkpoint-store
-           #:redis-checkpoint-store #:make-redis-checkpoint-store))
+           #:redis-checkpoint-store #:make-redis-checkpoint-store
+           ;; Task 10 (proxy.lisp, same package): exported here so the test
+           ;; package sees them via :use — unexported = invisible.
+           #:tutor-proxy #:tutor-proxy-p #:make-tutor-proxy
+           #:stop-tutor-proxy #:proxy-port #:with-proxy-redis))
 (in-package :mtt/cluster)
 
 (defclass cluster-manager ()
