@@ -283,9 +283,106 @@ dropped)."
             (redis:red-del (cluster-sess-key m sid))))))
     (values checked dropped)))
 
-;; --- takeover tick: Task 9 fills this in (no-op stub for now) ---------------
+;; --- routes (shared with proxy.lisp; *connection* must be bound) -----------
 
-(defun cluster-takeover-tick (m) (declare (ignore m)) (values 0 nil))
+(defun cluster-route-get (key)
+  "Route table read: (values worker-id epoch) for a sess:/student: hash key,
+nil when unrouted. [brief defect, run-evidenced: the brief parse-integer'd the
+epoch field unconditionally — TYPE-ERROR on parse-integer's STRING parameter
+when the hash carries only the worker field (the pre-takeover shape the tests
+seed); a missing/garbled epoch reads as 0, the same default route-set's
+HINCRBY counts up from.]"
+  (let ((w (redis:red-hget key "worker")))
+    (when w
+      (let ((e (redis:red-hget key "epoch")))
+        (values w (if e (or (parse-integer e :junk-allowed t) 0) 0))))))
+
+(defun cluster-route-set (key worker-id)
+  "Point KEY at WORKER-ID and bump its epoch (the future-fencing counter,
+spec §5.5)."
+  (redis:red-hset key "worker" worker-id)
+  (redis:red-hincrby key "epoch" 1)
+  worker-id)
+
+;; --- takeover (spec §5.2 protocol 4) -----------------------------------------
+
+(defun cluster-adopt-session (m sid checkpoint dead-worker)
+  "Rebuild the session locally from CHECKPOINT and flip the routes to this
+worker. Composition of exported core/server APIs only (spec §4.1): the
+student's redis event log continues where the dead worker left it."
+  (let* ((server (cluster-server m))
+         (model-id (getf checkpoint :model-id))
+         (entry (gethash model-id (mtt/server:server-models server))))
+    (unless entry
+      (error "mtt/cluster: takeover of ~a needs model ~a registered locally"
+             sid model-id))
+    (let* ((model (car entry))
+           (adapter (cdr entry))
+           (student-id (getf checkpoint :student-id))
+           (log (mtt:make-redis-event-log
+                 :key (format nil "mtt:student:~a:events" student-id)
+                 :host (cluster-redis-host m) :port (cluster-redis-port m)))
+           (session (mtt:restore-from-checkpoint checkpoint model log)))
+      (setf (gethash sid (mtt/server:server-sessions server))
+            (make-instance 'mtt/server:session-handle
+                           :session session
+                           :lock (bordeaux-threads:make-lock
+                                  (format nil "session-~a" sid))
+                           :adapter adapter))
+      (with-cluster-redis (m)
+        (cluster-route-set (cluster-sess-key m sid) (cluster-worker-id m))
+        (cluster-route-set (cluster-student-key m student-id) (cluster-worker-id m))
+        (redis:red-srem (cluster-worker-sess-key m dead-worker) sid)
+        (redis:red-sadd (cluster-worker-sess-key m (cluster-worker-id m)) sid)
+        (redis:red-del (cluster-claim-key m sid)))
+      sid)))
+
+(defun cluster-takeover-tick (m)
+  "One takeover scan: find workers in the registry whose lease key has
+expired (simulated cleanly by a DEL in tests — what TTL expiry does), then for
+each sid in their reverse index: atomically claim (SETNX+EXPIRE), skip on a
+local sid collision (warning), skip when no checkpoint exists (route stays —
+the proxy 503s and the client restarts), else adopt. Returns (values taken
+dead-worker-ids).
+
+[deviation from brief, lock-discipline-mandated (Task 8 ruling): the brief
+wrapped the whole tick in ONE with-cluster-redis and called
+cluster-adopt-session — which opens its own — inside it: bordeaux locks are
+non-recursive, guaranteed self-deadlock; it also nested the store lock
+(load-checkpoint) inside the manager lock. Same commands, re-sequenced: the
+manager lock is taken in SHORT scopes (dead-list, per-sid claim, per-sid
+claim-drop) and the store lock only for load-checkpoint, always released
+before adopt's own manager-lock scope — never nested (the scan tick already
+sequences store-then-manager the same way).]"
+  (labels ((claim (sid)
+             (with-cluster-redis (m)
+               (and (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
+                    (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m)))))
+           (drop-claim (sid)
+             (with-cluster-redis (m)
+               (redis:red-del (cluster-claim-key m sid)))))
+    (let* ((dead (with-cluster-redis (m)
+                   (loop :for id :in (redis:red-smembers
+                                      (uiop:strcat (cluster-prefix m) "workers"))
+                         :unless (or (string= id (cluster-worker-id m))
+                                     (redis:red-exists (cluster-worker-key m id)))
+                           :collect id)))
+           (taken 0))
+      (dolist (w dead)
+        (dolist (sid (with-cluster-redis (m)
+                       (redis:red-smembers (cluster-worker-sess-key m w))))
+          (when (claim sid)
+            (cond
+              ;; local sid already live (cross-process gensym collision): skip
+              ((gethash sid (mtt/server:server-sessions (cluster-server m)))
+               (format *error-output*
+                       "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%" sid)
+               (drop-claim sid))
+              (t (let ((cp (load-checkpoint (cluster-store m) sid)))  ; store lock
+                   (cond
+                     (cp (cluster-adopt-session m sid cp w) (incf taken))
+                     (t (drop-claim sid)))))))))       ; no-ckpt window
+      (values taken dead))))
 
 ;; --- thread lifecycle (thin timers over the tick fns) ------------------------
 
@@ -335,7 +432,10 @@ takeover). The threads are plain drivers over the single-steppable ticks."
 
 (defun stop-cluster-manager (m)
   "Stop the tick threads (they observe the running flag within one interval),
-gracefully leave, disconnect redis. Safe to call multiple times."
+gracefully leave, disconnect redis — the MANAGER's connection and the default
+store's (controller-mandated, Task 8 review ruling: the store holds its own
+lazy redis conn that would otherwise outlive the manager). Safe to call
+multiple times."
   (setf (cluster-running m) nil)
   (dolist (th (cluster-threads m))
     (ignore-errors (bordeaux-threads:destroy-thread th)))
@@ -345,4 +445,15 @@ gracefully leave, disconnect redis. Safe to call multiple times."
     (let ((redis:*connection* (cluster-conn m)))
       (ignore-errors (redis:disconnect)))
     (setf (cluster-conn m) nil))
+  ;; Controller-mandated (Task 8 review ruling): disconnect the store's own
+  ;; lazy conn — guarded (only a redis-checkpoint-store with an open conn),
+  ;; under the STORE's lock (the same single-socket serialization
+  ;; with-store-redis applies), idempotent (conn slot nil'ed).
+  (let ((store (cluster-store m)))
+    (when (typep store 'redis-checkpoint-store)
+      (bordeaux-threads:with-lock-held ((redis-checkpoint-store-lock store))
+        (when (redis-checkpoint-store-conn store)
+          (let ((redis:*connection* (redis-checkpoint-store-conn store)))
+            (ignore-errors (redis:disconnect)))
+          (setf (redis-checkpoint-store-conn store) nil)))))
   m)

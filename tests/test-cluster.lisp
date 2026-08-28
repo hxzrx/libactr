@@ -219,3 +219,146 @@ worker-sess (SREM) and drops sess:<sid>."
     (is (equalp cp (load-checkpoint store "s1")))
     (save-checkpoint store "s1" (list :session-id "s1" :step-count 3))
     (is (= 3 (getf (load-checkpoint store "s1") :step-count)))))
+
+;;; --- Task 9: takeover tick + adopt ------------------------------------------
+
+;; [brief defect, run-evidenced: the fixture opened its OWN with-test-redis,
+;; but every caller already sits inside one — cl-redis's connect refuses an
+;; open *connection* ("A connection to Redis server is already established"),
+;; and even if it didn't, the nested fixture would start a SECOND redis-server
+;; putting its data where the caller's bare red-* assertions never look. The
+;; fixture reuses the CALLER's redis (port passed in) — one server, exactly
+;; the single-server semantics the tests assert.]
+(defun %dead-worker-scenario (port prefix)
+  "Shared shape (run inside the caller's with-test-redis): server+manager w1
+with one mid-problem session (ones borrow step done, checkpoint saved), then
+w1's lease is deleted (simulated death). Returns (values s1 m1 s2 m2 sid)."
+  (let* ((s1 (%worker-server port))
+         (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                   :redis-host "127.0.0.1" :redis-port port
+                                   :prefix prefix))
+         (sid (progn (cluster-join m1)
+                     (let ((sid (server-start-session s1 "tk" "52-18" "sub")))
+                       (server-step-session s1 sid '(("type" . "digit") ("value" . "4")))
+                       (cluster-scan-tick m1)          ; checkpoint saved
+                       (redis:red-hset (uiop:strcat prefix "sess:" sid) "worker" "w1")
+                       (redis:red-sadd (uiop:strcat prefix "worker-sess:w1") sid)
+                       sid)))
+         (s2 (%worker-server port))
+         (m2 (make-cluster-manager :server s2 :worker-id "w2"
+                                   :redis-host "127.0.0.1" :redis-port port
+                                   :prefix prefix)))
+    (redis:red-del (uiop:strcat prefix "worker:w1"))   ; simulated death
+    (values s1 m1 s2 m2 sid)))
+
+(test cluster.takeover-rebuilds-and-continues
+  "w1 dies mid-problem (borrow ones done, checkpointed). w2's takeover tick
+claims, rebuilds from the checkpoint (same sid), flips both routes, and the
+session CONTINUES on w2 to completion; mastery replays from the shared redis
+log losslessly."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-tk:")
+      (unwind-protect
+           (progn
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (is (= 1 taken))
+               (is (equal '("w1") dead)))
+             ;; routes flipped to w2 with epoch >= 1
+             (multiple-value-bind (w epoch) (cluster-route-get (uiop:strcat "t-tk:sess:" sid))
+               (is (string= "w2" w)) (is (>= epoch 1)))
+             ;; [brief defect, probe-evidenced: getf is a PROPERTY-LIST
+             ;; accessor — (getf '("w2" 1) 0) is NIL, so the brief's four
+             ;; route assertions were permanently red even under a correct
+             ;; implementation. first on the multiple-value list instead.]
+             (is (string= "w2" (first (multiple-value-list
+                                      (cluster-route-get
+                                       (uiop:strcat "t-tk:student:tk"))))))
+             ;; handle registered locally on w2, same sid
+             (is (gethash sid (server-sessions s2)))
+             ;; continue: tens digit -> done
+             (let ((r (nth-value 0 (server-step-session
+                                    s2 sid '(("type" . "digit") ("value" . "3"))))))
+               (is (eq :on-path (mtt:trace-result-status r)))
+               (is (string= "SUBTRACT-TENS-DIRECT"
+                            (symbol-name (mtt:production-name
+                                          (mtt:trace-result-production r))))))
+             ;; mastery replay: the redis log holds both workers' events
+             (let ((mastery (mtt:compute-mastery
+                             (mtt:log-all-events
+                              (mtt:make-redis-event-log
+                               :key "mtt:student:tk:events"
+                               :host "127.0.0.1" :port port)))))
+               (is (member :borrow (mapcar (lambda (x) (getf x :kc)) mastery)))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
+(test cluster.claim-mutex-blocks-second-taker
+  "A pre-set claim key (another taker won the SETNX) -> takeover skips the
+sid entirely: no local handle, routes untouched."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-cl:")
+      (unwind-protect
+           (progn
+             (redis:red-set (uiop:strcat "t-cl:claim:" sid) "someone-else")
+             (redis:red-expire (uiop:strcat "t-cl:claim:" sid) 30)
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (is (= 0 taken))
+               (is (equal '("w1") dead)))
+             (is (null (gethash sid (server-sessions s2))))
+             (is (string= "w1" (first (multiple-value-list
+                                      (cluster-route-get
+                                       (uiop:strcat "t-cl:sess:" sid)))))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
+(test cluster.no-checkpoint-leaves-route-alone
+  "A dead worker's sid with NO checkpoint (died before the first scan) is not
+adopted: no claim residue, routes untouched (the proxy will 503 and the
+client restarts — spec §5.2 protocol 4)."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-nc:")
+      (unwind-protect
+           (progn
+             (redis:red-del (uiop:strcat "t-nc:ckpt:" sid))   ; no checkpoint
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (is (= 0 taken))
+               (is (equal '("w1") dead)))
+             (is (null (gethash sid (server-sessions s2))))
+             (is (string= "w1" (first (multiple-value-list
+                                      (cluster-route-get
+                                       (uiop:strcat "t-nc:sess:" sid))))))
+             (is (null (redis:red-exists (uiop:strcat "t-nc:claim:" sid)))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
+(test cluster.local-sid-collision-skips
+  "If the taker already holds a DIFFERENT live session under the same sid
+(the cross-process gensym-collision guard, spec §13.1), adoption is skipped
+with a warning; the local session is untouched."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-co:")
+      (unwind-protect
+           (progn
+             ;; plant a fake local session under the same sid on w2
+             (setf (gethash sid (server-sessions s2))
+                   (make-instance 'session-handle
+                                  :session (server-start-session s2 "local" "47-25" "sub")
+                                  :lock (bordeaux-threads:make-lock "fake")
+                                  :adapter (cdr (gethash "sub" (server-models s2)))))
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (is (= 0 taken))
+               (is (equal '("w1") dead)))
+             ;; routes untouched
+             (is (string= "w1" (first (multiple-value-list
+                                      (cluster-route-get
+                                       (uiop:strcat "t-co:sess:" sid)))))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
