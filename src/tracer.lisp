@@ -78,6 +78,10 @@
 ;; INTENT are accepted so action-type anchoring / confidence ranking can be
 ;; dropped in later without changing trace-step.
 (defun path-continuity-strategy (covering intent path)
+  "Default disambiguation strategy: the FIRST covering production in model
+definition order (deterministic and reproducible). INTENT and PATH are
+accepted (ignored here) so richer strategies can be dropped into trace-step
+without changing its signature. Pure."
   (declare (ignore intent path))
   (first covering))
 

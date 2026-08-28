@@ -36,6 +36,12 @@ untouched when a loader applies the map before appending them."
                       (&key (name nil) (kind nil) (kc nil) (feedback nil)
                             (goal-type nil) (goal-guard nil)
                             (answers nil) (fact-slots nil) (when nil))))
+  "Pure-data declaration of ONE bug — the single source from which the three
+artifacts derive: the buggy production (bug-production), the detection
+predicate (eval-bug-form / detect-bug over :when), and the runtime
+prime+intent (bug-goal-env / bug-intent in adapter.lisp). Authored in the
+tutor package; generated symbols intern in the NAME's package (= the model
+package). Validate with validate-bug-spec before wiring into a tutor."
   (name nil :type symbol)      ; production name (tutor/model package symbol)
   (kind nil :type symbol)      ; keyword discriminant in bug-fact's kind slot
   (kc nil :type symbol)        ; KC attribution (pedagogical judgment, declared)
@@ -237,9 +243,11 @@ alist (the same one detect-bug receives); EXTRA-ENV-NAMES is the catch-all
 for every :when name not derivable from the spec itself — adapter-added env
 names (e.g. past-tense's regular-p / known-p) AND plain goal-slot names (the
 validator has no chunk-type knowledge, so real specs' top-ones / bot-ones /
-verb ... must be declared here). Robust to any spec shape: malformed
-collections or entries degrade to collected errors. Pure: never signals,
-never mutates the spec."
+verb ... must be declared here). Robustness: malformed COLLECTIONS (a
+:answers/:fact-slots/:goal-guard that is not a proper list), atom ENTRIES,
+and the enumerated entry shapes degrade to collected errors; dotted or
+otherwise plist-malformed entries (e.g. ((digit . 5)) in :fact-slots) may
+still SIGNAL at a getf/length. Pure: never mutates the spec."
   (let* ((answers (bug-spec-answers spec))
          (fact-slots (bug-spec-fact-slots spec))
          (goal-guard (bug-spec-goal-guard spec))
@@ -247,12 +255,15 @@ never mutates the spec."
     (flet ((err (fmt &rest args) (push (apply #'format nil fmt args) errors))
            (note (fmt &rest args) (push (apply #'format nil fmt args) warnings))
            (proper-list-p (x) (and (listp x) (null (cdr (last x))))))
-      ;; 0. collection shape — the purity contract (never signal) holds for
-      ;;    ANY spec shape: a collection that is not a proper list degrades
-      ;;    to a collected error + an empty LOCAL (the spec is never
+      ;; 0. collection shape — a collection that is not a proper list
+      ;;    degrades to a collected error + an empty LOCAL (the spec is never
       ;;    mutated). make-bug-spec's :type list lets improper lists through
       ;;    (any cons is a LIST), and a port without defstruct type checking
-      ;;    would let atoms through too.
+      ;;    would let atoms through too. Scope of the never-signal guarantee:
+      ;;    it covers malformed collections, atom entries, and the enumerated
+      ;;    entry shapes below — a dotted/plist-malformed ENTRY (e.g. an
+      ;;    (atom . val) pair inside :fact-slots) is NOT covered and may
+      ;;    still signal at a getf/length (docstring says the same).
       (unless (proper-list-p answers)
         (err ":answers is not a proper list (~s) — treated as empty" answers)
         (setf answers nil))

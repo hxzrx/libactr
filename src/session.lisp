@@ -20,7 +20,13 @@
    ;; Written internally via slot-value; no initarg. The checkpoint itself is pure
    ;; data built by checkpoint-session, so this slot is the diagnostic channel that
    ;; makes :checkpoint-every observable (spec §6.1 step 5).
-   (last-checkpoint :reader session-last-checkpoint :initform nil)))
+   (last-checkpoint :reader session-last-checkpoint :initform nil))
+  (:documentation "One student x one problem traced session: a thin wrapper
+over the pure trace-step that holds ALL per-session mutable state (buffer
+state, path, event-log) as instance slots — never global. Concurrency: the
+core session is single-threaded by contract; the service layer (mtt/server's
+session-handle) owns the per-session lock. Slot comments document each
+reader/accessor."))
 
 (defun cognitive-session-p (x)
   "Type predicate for cognitive-session (defclass does not auto-generate -p)."

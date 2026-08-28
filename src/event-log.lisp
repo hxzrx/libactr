@@ -7,6 +7,9 @@
 
 ;; --- log-event: one record per traced step; pure data ------------------------
 (defstruct log-event
+  "One record per traced step — the authoritative append-only stream that
+mastery/KT (compute-mastery) deterministically derives from. Pure data;
+slot comments document each field."
   (seq            0 :type unsigned-byte)  ; monotonic within a session (from 1)
   (timestamp      nil)                    ; get-universal-time; informational
   (student-id     nil)

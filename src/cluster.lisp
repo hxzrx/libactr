@@ -9,20 +9,27 @@
 (defpackage :mtt/cluster
   (:use :cl)
   (:nicknames :mtt-cluster)
-  (:export #:cluster-manager #:cluster-manager-p
-           #:make-cluster-manager #:start-cluster-manager #:stop-cluster-manager
-           #:cluster-server #:cluster-worker-id
-           #:cluster-heartbeat-tick #:cluster-scan-tick #:cluster-takeover-tick
-           #:cluster-live-workers #:cluster-adopt-session
-           #:cluster-join #:cluster-leave #:cluster-threads
-           #:cluster-route-get #:cluster-route-set
-           #:checkpoint-store #:save-checkpoint #:load-checkpoint
-           #:memory-checkpoint-store #:make-memory-checkpoint-store
-           #:redis-checkpoint-store #:make-redis-checkpoint-store
-           ;; Task 10 (proxy.lisp, same package): exported here so the test
-           ;; package sees them via :use — unexported = invisible.
-           #:tutor-proxy #:tutor-proxy-p #:make-tutor-proxy
-           #:stop-tutor-proxy #:proxy-port #:with-proxy-redis))
+  (:export
+   ;; ===== 服务层接口:manager(worker 编排本体) =====
+   ;; 库消费者经 make/start/stop-cluster-manager 进入;slot readers
+   ;; (cluster-server/worker-id/threads)为只读检视。实例持全部状态。
+   #:cluster-manager #:cluster-manager-p
+   #:make-cluster-manager #:start-cluster-manager #:stop-cluster-manager
+   #:cluster-server #:cluster-worker-id
+   #:cluster-heartbeat-tick #:cluster-scan-tick #:cluster-takeover-tick
+   #:cluster-live-workers #:cluster-adopt-session
+   #:cluster-join #:cluster-leave #:cluster-threads
+   #:cluster-route-get #:cluster-route-set
+   ;; ===== 服务层接口:checkpoint-store 协议 + 两后端 =====
+   ;; takeover 重建会话所依赖的持久 seam;memory 后端供测试/单进程。
+   #:checkpoint-store #:save-checkpoint #:load-checkpoint
+   #:memory-checkpoint-store #:make-memory-checkpoint-store
+   #:redis-checkpoint-store #:make-redis-checkpoint-store
+   ;; ===== 服务层接口:front proxy(proxy.lisp,同包) =====
+   ;; Task 10 (proxy.lisp, same package): exported here so the test
+   ;; package sees them via :use — unexported = invisible.
+   #:tutor-proxy #:tutor-proxy-p #:make-tutor-proxy
+   #:stop-tutor-proxy #:proxy-port #:with-proxy-redis))
 (in-package :mtt/cluster)
 
 (defclass cluster-manager ()
@@ -50,7 +57,9 @@
   (:documentation "Per-server orchestration state container (spec §4.2). All
 state instance-held; zero global mutable state in this system."))
 
-(defun cluster-manager-p (x) (typep x 'cluster-manager))
+(defun cluster-manager-p (x)
+  "Type predicate for cluster-manager (defclass does not auto-generate -p)."
+  (typep x 'cluster-manager))
 
 (defmacro with-cluster-redis ((m) &body body)
   "Ensure MANAGER's lazy cl-redis connection and dynamically bind
@@ -130,7 +139,9 @@ under session-id SID, overwriting any previous one."))
 (defclass memory-checkpoint-store ()
   ((table :accessor memory-checkpoint-store-table :initform (make-hash-table :test 'equal)))
   (:documentation "In-memory checkpoint store (tests / single-process use)."))
-(defun make-memory-checkpoint-store () (make-instance 'memory-checkpoint-store))
+(defun make-memory-checkpoint-store ()
+  "Create an in-memory checkpoint-store (tests / single-process deployments)."
+  (make-instance 'memory-checkpoint-store))
 (defmethod save-checkpoint ((s memory-checkpoint-store) sid cp)
   (setf (gethash sid (memory-checkpoint-store-table s)) cp) s)
 (defmethod load-checkpoint ((s memory-checkpoint-store) sid)
@@ -153,6 +164,9 @@ state as an ARRAY of {buffer isa slots[]} entries (buffer/slot names must keep
 their packages, so they are VALUES not object keys), path as tagged array."))
 (defun make-redis-checkpoint-store (&key (prefix "mtt:cluster:ckpt:")
                                     (host "127.0.0.1") (port 6379))
+  "Create a Redis-backed checkpoint-store under PREFIX (one lazy cl-redis
+connection; every use serialized under the store's per-instance lock —
+single-socket, not thread-safe)."
   (make-instance 'redis-checkpoint-store :prefix prefix :host host :port port))
 
 (defmacro with-store-redis ((store) &body body)

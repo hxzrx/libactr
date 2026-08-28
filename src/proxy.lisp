@@ -37,7 +37,9 @@
   (:documentation "Front-door proxy. Holds its own redis connection + a
 round-robin cursor for worker selection at session start."))
 
-(defun tutor-proxy-p (x) (typep x 'tutor-proxy))
+(defun tutor-proxy-p (x)
+  "Type predicate for tutor-proxy (defclass does not auto-generate -p)."
+  (typep x 'tutor-proxy))
 
 (defmacro with-proxy-redis ((p) &body body)
   "Ensure PROXY's lazy cl-redis connection and dynamically bind

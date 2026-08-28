@@ -14,7 +14,9 @@
    (conn :reader redis-event-log-connection :initform nil))
   (:documentation "Append-only event log backed by a Redis LIST with AOF persistence."))
 
-(defun redis-event-log-p (x) (typep x 'redis-event-log))
+(defun redis-event-log-p (x)
+  "Type predicate for redis-event-log (defclass does not auto-generate -p)."
+  (typep x 'redis-event-log))
 
 (defun make-redis-event-log (&key key (host "127.0.0.1") (port 6379))
   "Create a redis-event-log. Opens one cl-redis connection (lazily on first use)."
