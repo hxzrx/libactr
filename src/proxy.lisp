@@ -18,7 +18,12 @@
    (port :accessor proxy-port :initarg :port :initform 0)
    (redis-host :reader proxy-redis-host :initarg :redis-host :initform "127.0.0.1")
    (redis-port :reader proxy-redis-port :initarg :redis-port :initform 6379)
-   (prefix :reader proxy-prefix :initarg :prefix :initform "mtt/cluster:")
+   ;; [controller-mandated (Task 10 review ruling, applied Task 11): the default
+   ;; prefix must be the managers' "mtt:cluster:" (colon) — a proxy created
+   ;; WITHOUT :prefix must still see the routing table the managers write. This
+   ;; initform was "mtt/cluster:" (slash) at review time (the ruling's premise
+   ;; had it as colon already); normalized with the constructor default below.]
+   (prefix :reader proxy-prefix :initarg :prefix :initform "mtt:cluster:")
    (kt-params :reader proxy-kt-params :initarg :kt-params :initform (mtt:make-kt-params))
    (forward-timeout :reader proxy-forward-timeout :initarg :forward-timeout :initform 5)
    (conn :accessor proxy-conn :initform nil)
@@ -265,7 +270,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
         (cons "/health" (lambda () (%proxy-health p)))))
 
 (defun make-tutor-proxy (&key (port 0) (redis-host "127.0.0.1") (redis-port 6379)
-                           (prefix "mtt/cluster:") (kt-params (mtt:make-kt-params))
+                           (prefix "mtt:cluster:") (kt-params (mtt:make-kt-params))
                            (forward-timeout 5))
   "Create + start the front proxy on PORT (0 = OS-assigned; read it back via
 proxy-port). Reuses mtt/server's tutor-acceptor subclass for per-instance
