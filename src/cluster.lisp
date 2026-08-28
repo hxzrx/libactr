@@ -35,6 +35,12 @@
    (advertise-host     :reader cluster-advertise-host :initarg :advertise-host :initform "127.0.0.1")
    (store              :reader cluster-store :initarg :store :initform nil) ; Task 8
    (conn               :accessor cluster-conn :initform nil)
+   ;; Controller-mandated (Task 7 review): cl-redis connections are
+   ;; single-socket, not thread-safe — the three tick threads (heartbeat /
+   ;; scan / takeover) multiplex this ONE connection, so all manager redis
+   ;; use (lazy connect included) is serialized under this per-instance lock.
+   (redis-lock         :reader cluster-redis-lock
+                       :initform (bordeaux-threads:make-lock "cluster-redis"))
    (threads            :accessor cluster-threads :initform nil)
    (running            :accessor cluster-running :initform nil))
   (:documentation "Per-server orchestration state container (spec §4.2). All
@@ -45,15 +51,20 @@ state instance-held; zero global mutable state in this system."))
 (defmacro with-cluster-redis ((m) &body body)
   "Ensure MANAGER's lazy cl-redis connection and dynamically bind
 redis:*connection* to it for BODY (mirrors redis-store's with-redis — cl-redis
-refuses to connect when *connection* is globally set, so each user rebinds)."
+refuses to connect when *connection* is globally set, so each user rebinds).
+BODY runs under the manager's redis LOCK: the three tick threads (heartbeat /
+scan / takeover) multiplex this ONE connection, and cl-redis connections are
+single-socket, not thread-safe — the lock serializes the lazy connect and
+every command (controller-mandated, Task 7 review ruling)."
   (let ((mm (gensym)))
-    `(let* ((,mm ,m)
-            (conn (or (cluster-conn ,mm)
-                      (setf (cluster-conn ,mm)
-                            (let ((redis:*connection* nil))
-                              (redis:connect :host (cluster-redis-host ,mm)
-                                             :port (cluster-redis-port ,mm)))))))
-       (let ((redis:*connection* conn)) ,@body))))
+    `(let ((,mm ,m))
+       (bordeaux-threads:with-lock-held ((cluster-redis-lock ,mm))
+         (let* ((conn (or (cluster-conn ,mm)
+                          (setf (cluster-conn ,mm)
+                                (let ((redis:*connection* nil))
+                                  (redis:connect :host (cluster-redis-host ,mm)
+                                                 :port (cluster-redis-port ,mm)))))))
+           (let ((redis:*connection* conn)) ,@body))))))
 
 ;; --- key layout (spec §5.1) -------------------------------------------------
 
@@ -104,9 +115,176 @@ expires naturally — the takeover scan treats both identically, spec §5.2.)"
                              (cdr (assoc "host" a :test #'string=))
                              (cdr (assoc "port" a :test #'string=)))))))
 
-;; --- scan / takeover ticks: Task 8/9 fill these in (no-op stubs for now) ----
+;; --- checkpoint-store protocol (spec §5.1 ckpt:<sid>) ------------------------
 
-(defun cluster-scan-tick (m) (declare (ignore m)) (values 0 nil))
+(defgeneric save-checkpoint (store sid checkpoint)
+  (:documentation "Persist CHECKPOINT (pure data from mtt:checkpoint-session)
+under session-id SID, overwriting any previous one."))
+(defgeneric load-checkpoint (store sid)
+  (:documentation "Newest checkpoint for SID, or nil when none was saved."))
+
+(defclass memory-checkpoint-store ()
+  ((table :accessor memory-checkpoint-store-table :initform (make-hash-table :test 'equal)))
+  (:documentation "In-memory checkpoint store (tests / single-process use)."))
+(defun make-memory-checkpoint-store () (make-instance 'memory-checkpoint-store))
+(defmethod save-checkpoint ((s memory-checkpoint-store) sid cp)
+  (setf (gethash sid (memory-checkpoint-store-table s)) cp) s)
+(defmethod load-checkpoint ((s memory-checkpoint-store) sid)
+  (gethash sid (memory-checkpoint-store-table s)))
+
+(defclass redis-checkpoint-store ()
+  ((prefix :reader redis-checkpoint-store-prefix :initarg :prefix
+           :initform "mtt:cluster:ckpt:")
+   (host :reader redis-checkpoint-store-host :initarg :host :initform "127.0.0.1")
+   (port :reader redis-checkpoint-store-port :initarg :port :initform 6379)
+   (conn :accessor redis-checkpoint-store-conn :initform nil)
+   ;; Controller-mandated (Task 7 review): cl-redis connections are
+   ;; single-socket, not thread-safe — the scan thread (and Task 9's takeover)
+   ;; multiplex this ONE connection, so all use is serialized under this lock.
+   (lock :reader redis-checkpoint-store-lock
+         :initform (bordeaux-threads:make-lock "cluster-store-redis")))
+  (:documentation "Redis-backed checkpoint store. JSON via the Task-1 symbol
+codec: explicit schema (spec §8 Interfaces) — top-level scalars, tagged status,
+state as an ARRAY of {buffer isa slots[]} entries (buffer/slot names must keep
+their packages, so they are VALUES not object keys), path as tagged array."))
+(defun make-redis-checkpoint-store (&key (prefix "mtt:cluster:ckpt:")
+                                    (host "127.0.0.1") (port 6379))
+  (make-instance 'redis-checkpoint-store :prefix prefix :host host :port port))
+
+(defmacro with-store-redis ((store) &body body)
+  "Ensure STORE's lazy cl-redis connection and dynamically bind
+redis:*connection* to it for BODY (mirrors with-cluster-redis). BODY runs
+under the store's LOCK: the lazy connect AND every command are serialized —
+cl-redis connections are single-socket, not thread-safe, and the scan thread
+(Task 8) plus the takeover thread (Task 9) share this store's connection."
+  (let ((st (gensym)))
+    `(let ((,st ,store))
+       (bordeaux-threads:with-lock-held ((redis-checkpoint-store-lock ,st))
+         (let* ((conn (or (redis-checkpoint-store-conn ,st)
+                          (setf (redis-checkpoint-store-conn ,st)
+                                (let ((redis:*connection* nil))
+                                  (redis:connect
+                                   :host (redis-checkpoint-store-host ,st)
+                                   :port (redis-checkpoint-store-port ,st)))))))
+           (let ((redis:*connection* conn)) ,@body))))))
+
+(defun %cp-hash (cp)
+  "checkpoint plist -> yason-encodable hash-table (explicit schema walk;
+symbols tagged via mtt:tag-symbols — numbers/strings pass through)."
+  (let ((h (make-hash-table :test 'equal)))
+    ;; [brief defect, run-evidenced: the brief encoded these keys via
+    ;; (string-downcase (symbol-name k)) — hyphens ("session-id") — while the
+    ;; spec §8 schema and the brief's own DECODER use underscores
+    ;; ("session_id"), silently dropping all four scalar fields on the
+    ;; round-trip. Encode the schema keys directly.]
+    (dolist (k '(("session_id" . :session-id) ("student_id" . :student-id)
+                 ("problem_id" . :problem-id) ("model_id" . :model-id)))
+      (setf (gethash (car k) h) (mtt:tag-symbols (getf cp (cdr k)))))
+    (setf (gethash "step_count" h) (or (getf cp :step-count) 0)
+          (gethash "last_seq" h) (or (getf cp :last-seq) 0)
+          (gethash "status" h) (mtt:tag-symbols (getf cp :status)))
+    ;; :state entries are (buffer isa . slots-alist) — SBCL-probe verified:
+    ;; serialize-buffer-state conses the buffer name onto serialize-chunk's
+    ;; (isa . slots-alist) pair, so (car entry) = buffer, (cadr entry) = isa,
+    ;; (cddr entry) = slots; a nil chunk yields the 1-element (buffer).
+    (setf (gethash "state" h)
+          (mapcar (lambda (entry)
+                    (let ((ch (make-hash-table :test 'equal)))
+                      (setf (gethash "buffer" ch) (mtt:tag-symbols (car entry)))
+                      (when (cdr entry)
+                        (setf (gethash "isa" ch) (mtt:tag-symbols (cadr entry))
+                              (gethash "slots" ch)
+                              (mapcar (lambda (cell)
+                                        (let ((sh (make-hash-table :test 'equal)))
+                                          (setf (gethash "slot" sh)
+                                                (mtt:tag-symbols (car cell))
+                                                (gethash "value" sh)
+                                                (mtt:tag-symbols (cdr cell)))
+                                          sh))
+                                      (cddr entry))))
+                      ch))
+                  (getf cp :state)))
+    (setf (gethash "path" h) (mapcar #'mtt:tag-symbols (getf cp :path)))
+    h))
+
+(defun %json-checkpoint (json)
+  "yason-parsed (alist) tree -> checkpoint plist (inverse schema walk).
+[deviation from brief, probe-verified: the brief applied mtt:untag-symbols to
+the WHOLE parsed tree, but yason's :object-as :alist entries are dotted
+(key . scalar) pairs — improper lists — and untag-symbols' cons branch mapcars
+proper lists only, so the whole-tree walk signals TYPE-ERROR on the first
+scalar field (\"session_id\" . \"s1\"). untag is applied at the LEAF value
+subtrees instead — the same discipline as redis-store's decode-row: tag alists
+intern, arrays of tags map to lists, scalars pass through.]"
+  (flet ((ag (key alist) (cdr (assoc key alist :test #'string=)))
+         (un (x) (mtt:untag-symbols x)))
+    (list :session-id (un (ag "session_id" json))
+          :student-id (un (ag "student_id" json))
+          :problem-id (un (ag "problem_id" json))
+          :model-id   (un (ag "model_id" json))
+          :step-count (or (ag "step_count" json) 0)
+          :status     (un (ag "status" json))
+          :last-seq   (or (ag "last_seq" json) 0)
+          :state      (map 'list
+                           (lambda (e)
+                             (cons (un (ag "buffer" e))
+                                   (when (assoc "isa" e :test #'string=)
+                                     (cons (un (ag "isa" e))
+                                           (map 'list
+                                                (lambda (sc)
+                                                  (cons (un (ag "slot" sc))
+                                                        (un (ag "value" sc))))
+                                                (ag "slots" e))))))
+                           (ag "state" json))
+          :path       (un (ag "path" json)))))
+
+(defmethod save-checkpoint ((s redis-checkpoint-store) sid cp)
+  (with-store-redis (s)
+    (redis:red-set (uiop:strcat (redis-checkpoint-store-prefix s) sid)
+                   (with-output-to-string (out)
+                     (yason:encode (%cp-hash cp) out)))
+    s))
+
+(defmethod load-checkpoint ((s redis-checkpoint-store) sid)
+  (with-store-redis (s)
+    (let ((json (redis:red-get (uiop:strcat (redis-checkpoint-store-prefix s) sid))))
+      (and json (%json-checkpoint (yason:parse json :object-as :alist))))))
+
+;; --- scan tick (spec §5.2 protocol 3): checkpoint + reverse-index reconcile --
+
+(defun cluster-scan-tick (m)
+  "One scan pass over the LOCAL server's active sessions: snapshot each under
+its session lock (consistent state, no step-hot-path cost) into the
+checkpoint store; then reconcile the worker-sess reverse index (sids no
+longer local -> SREM + drop the sess route). Returns (values checked
+dropped)."
+  (let ((checked 0) (dropped 0) (seen nil))
+    ;; [deviation from brief, one paren: the brief's maphash form was one
+    ;; close short (lambda never closed -> maphash swallowed the following
+    ;; with-cluster-redis form as a third argument); same class of defect as
+    ;; Task 7's fixture tail.]
+    (maphash (lambda (sid handle)
+               (push sid seen)
+               (incf checked)
+               ;; double parens: with-lock-held's lock clause takes ONE form
+               ;; (bordeaux apiv2 (place &key timeout)); a reader call is that
+               ;; one form [brief defect — brief used single parens].
+               (bordeaux-threads:with-lock-held ((mtt/server:handle-lock handle))
+                 (save-checkpoint (cluster-store m) sid
+                                  (mtt:checkpoint-session
+                                   (mtt/server:handle-session handle)))))
+             (mtt/server:server-sessions (cluster-server m)))
+    (with-cluster-redis (m)
+      (let ((key (cluster-worker-sess-key m (cluster-worker-id m))))
+        (dolist (sid (redis:red-smembers key))
+          (unless (member sid seen :test #'string=)
+            (incf dropped)
+            (redis:red-srem key sid)
+            (redis:red-del (cluster-sess-key m sid))))))
+    (values checked dropped)))
+
+;; --- takeover tick: Task 9 fills this in (no-op stub for now) ---------------
+
 (defun cluster-takeover-tick (m) (declare (ignore m)) (values 0 nil))
 
 ;; --- thread lifecycle (thin timers over the tick fns) ------------------------
@@ -121,12 +299,20 @@ expires naturally — the takeover scan treats both identically, spec §5.2.)"
                              (heartbeat-interval 5) (scan-interval 2)
                              (takeover-interval 5) (claim-ttl 30)
                              (advertise-host "127.0.0.1") store)
-  (make-instance 'cluster-manager
-                 :server server :worker-id worker-id
-                 :redis-host redis-host :redis-port redis-port :prefix prefix
-                 :heartbeat-ttl heartbeat-ttl :heartbeat-interval heartbeat-interval
-                 :scan-interval scan-interval :takeover-interval takeover-interval
-                 :claim-ttl claim-ttl :advertise-host advertise-host :store store))
+  "STORE defaults to a redis checkpoint store on the manager's own redis
+(prefix + \"ckpt:\") — the scan tick persists checkpoints there (spec §5.1)."
+  (let ((store* (or store
+                    (make-redis-checkpoint-store
+                     :prefix (uiop:strcat prefix "ckpt:")
+                     :host (or redis-host "127.0.0.1")
+                     :port (or redis-port 6379)))))
+    (make-instance 'cluster-manager
+                   :server server :worker-id worker-id
+                   :redis-host redis-host :redis-port redis-port :prefix prefix
+                   :heartbeat-ttl heartbeat-ttl :heartbeat-interval heartbeat-interval
+                   :scan-interval scan-interval :takeover-interval takeover-interval
+                   :claim-ttl claim-ttl :advertise-host advertise-host
+                   :store store*)))
 
 (defun start-cluster-manager (m)
   "Join the registry and spawn the three tick threads (heartbeat / scan /

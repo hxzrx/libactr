@@ -138,3 +138,84 @@ heartbeats the lease exists; stop-cluster-manager leaves (registry empty)."
         (stop-cluster-manager m)
         (stop-tutor-server s))
       (is (null (find "w9" (redis:red-smembers "t-thr:workers") :test #'string=))))))
+
+(test cluster.checkpoint-store-round-trips-symbols
+  "The redis checkpoint store round-trips a real checkpoint-session plist with
+SYMBOL fidelity (buffer names, chunk isa/slot names in the model package, path
+production names) — the Task-1 codec reused (spec §7)."
+  (with-test-redis (conn port)
+    (let* ((s (%worker-server port))
+           (store (make-redis-checkpoint-store :prefix "t-ck:" :host "127.0.0.1" :port port)))
+      (unwind-protect
+           (let* ((sid (server-start-session s "cs" "52-18" "sub"))
+                  (session (handle-session (gethash sid (server-sessions s))))
+                  (cp (checkpoint-session session)))
+             ;; drive one correct borrow step so state/path are non-trivial
+             (server-step-session s sid '(("type" . "digit") ("value" . "4")))
+             (setf cp (checkpoint-session session))
+             (save-checkpoint store sid cp)
+             (let ((back (load-checkpoint store sid)))
+               (is (string= sid (getf back :session-id)))
+               (is (string= "52-18" (getf back :problem-id)))
+               (is (string= "sub" (getf back :model-id)))
+               (is (eq :active (getf back :status)))
+               ;; state: buffer name is the model-package GOAL symbol
+               (let ((goal-entry (find "GOAL" (getf back :state)
+                                       :key (lambda (e) (symbol-name (car e)))
+                                       :test #'string=)))
+                 (is (and goal-entry t))
+                 (is (eq (find-symbol "GOAL" :mtt/subtraction-tutor) (car goal-entry)))
+                 ;; chunk isa is the model-package SUB2 symbol
+                 (is (eq (find-symbol "SUB2" :mtt/subtraction-tutor)
+                         (car (cdr goal-entry)))))
+               ;; path: production-name symbols in the model package
+               ;; [brief defect, run-evidenced: the brief compared a keyword
+               ;; SYMBOL to the PACKAGE object ((eq :mtt/subtraction-tutor
+               ;; (symbol-package p)) — never true); resolve the designator
+               ;; with find-package, mirroring the find-symbol form above.]
+               (is (every (lambda (p) (eq (find-package :mtt/subtraction-tutor)
+                                          (symbol-package p)))
+                          (getf back :path)))))
+        (stop-tutor-server s)))))
+
+(test cluster.scan-tick-checkpoints-active-sessions
+  "One scan pass: the local active session gains a ckpt:<sid> entry under the
+manager's prefix; a second pass after end (handle gone) reconciles
+worker-sess (SREM) and drops sess:<sid>."
+  (with-test-redis (conn port)
+    (let* ((s (%worker-server port))
+           (m (make-cluster-manager :server s :worker-id "w1"
+                                    :redis-host "127.0.0.1" :redis-port port
+                                    :prefix "t-scan:")))
+      (unwind-protect
+           (let ((sid (server-start-session s "cs2" "52-18" "sub")))
+             (server-step-session s sid '(("type" . "digit") ("value" . "4")))
+             ;; simulate what the proxy writes at start (Task 10 owns the real
+             ;; writer; scan reconciles the reverse index either way)
+             (redis:red-sadd "t-scan:worker-sess:w1" sid)
+             (redis:red-hset (uiop:strcat "t-scan:sess:" sid) "worker" "w1")
+             (multiple-value-bind (checked dropped) (cluster-scan-tick m)
+               (declare (ignore dropped))
+               (is (= 1 checked))
+               (is (redis:red-exists (uiop:strcat "t-scan:ckpt:" sid))))
+             ;; end the session -> handle removed -> next pass reconciles
+             (server-end-session s sid)
+             (multiple-value-bind (checked2 dropped2) (cluster-scan-tick m)
+               (is (= 0 checked2))
+               (is (= 1 dropped2))
+               (is (null (redis:red-smembers "t-scan:worker-sess:w1")))
+               (is (null (redis:red-exists (uiop:strcat "t-scan:sess:" sid))))))
+        (stop-cluster-manager m)
+        (stop-tutor-server s)))))
+
+(test cluster.memory-checkpoint-store
+  "The in-memory store (same protocol) saves/loads/overwrites without redis."
+  (let ((store (make-memory-checkpoint-store))
+        (cp (list :session-id "s1" :student-id "st" :problem-id "p" :model-id "m"
+                  :step-count 2 :status :active :last-seq 4 :state nil
+                  :path (list 'a 'b))))
+    (is (null (load-checkpoint store "s1")))
+    (save-checkpoint store "s1" cp)
+    (is (equalp cp (load-checkpoint store "s1")))
+    (save-checkpoint store "s1" (list :session-id "s1" :step-count 3))
+    (is (= 3 (getf (load-checkpoint store "s1") :step-count)))))
