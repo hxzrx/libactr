@@ -73,7 +73,7 @@ all with the SAME session_id (transparent continuation)."
            ;; w1 launches and is polled up BEFORE w2 launches, so at most one
            ;; subprocess compiles at a time; the second boot overlaps no
            ;; compilation (cache warm) and costs nothing.]
-           (w1 (progn (ensure-directories-exist dir)
+           (w1 (progn (ensure-directories-exist (uiop:ensure-directory-pathname dir))
                       (uiop:launch-program (%worker-command worker-file p1 port "w1")
                                            :output log1 :error-output log1)))
            (w2 nil)
@@ -172,17 +172,22 @@ all with the SAME session_id (transparent continuation)."
                            (is (member "borrow" kcs :test #'string-equal))
                            (is (member "column-subtract" kcs :test #'string-equal))))
                        ;; the event log is one contiguous sequence
-                       (let* ((log (mtt:make-redis-event-log
-                                    :key "mtt:student:e2e:events"
-                                    :host "127.0.0.1" :port port))
-                              (events (mtt:log-all-events log)))
-                         (is (>= (length events) 3))
-                         (is (equal (loop :for i :from 1 :to (length events) :collect i)
-                                    (mapcar #'mtt:log-event-seq events)))))))))
+                       (let ((log (mtt:make-redis-event-log
+                                   :key "mtt:student:e2e:events"
+                                   :host "127.0.0.1" :port port)))
+                         (unwind-protect
+                              (let ((events (mtt:log-all-events log)))
+                                (is (>= (length events) 3))
+                                (is (equal (loop :for i :from 1 :to (length events) :collect i)
+                                           (mapcar #'mtt:log-event-seq events))))
+                           ;; B3 seam (final review): the direct event-log conn
+                           ;; opened for this assertion was dangling — close it.
+                           (mtt:disconnect-log log))))))))
           ;; teardown
           (ignore-errors (uiop:terminate-process w1))
           (ignore-errors (uiop:terminate-process w2))
           (ignore-errors (uiop:wait-process w1))
           (ignore-errors (uiop:wait-process w2))
           (ignore-errors (stop-tutor-proxy proxy))
-          (ignore-errors (uiop:delete-directory-tree dir :validate t)))))))
+          (ignore-errors (uiop:delete-directory-tree
+                          (uiop:ensure-directory-pathname dir) :validate t)))))))

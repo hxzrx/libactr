@@ -295,7 +295,12 @@ dropped)."
     (with-cluster-redis (m)
       (let ((key (cluster-worker-sess-key m (cluster-worker-id m))))
         (dolist (sid (redis:red-smembers key))
-          (unless (member sid seen :test #'string=)
+          ;; TOCTOU (final review): a session installed + SADDed AFTER the
+          ;; maphash snapshot above is missing from SEEN; deleting its worker-
+          ;; sess entry + route here would 404 a live session forever. Only
+          ;; delete when the sid is absent from the local hash NOW as well.
+          (unless (or (member sid seen :test #'string=)
+                      (gethash sid (mtt/server:server-sessions (cluster-server m))))
             (incf dropped)
             (redis:red-srem key sid)
             (redis:red-del (cluster-sess-key m sid))))))
@@ -374,8 +379,17 @@ before adopt's own manager-lock scope — never nested (the scan tick already
 sequences store-then-manager the same way).]"
   (labels ((claim (sid)
              (with-cluster-redis (m)
-               (and (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
-                    (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m)))))
+               (or (and (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
+                        (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m)))
+                   ;; Crash gap (final review): a taker that died between SETNX
+                   ;; and EXPIRE leaves a claim with NO TTL — SETNX then fails
+                   ;; for every future taker, blocking this sid's takeover
+                   ;; forever. On the losing path, reclaim the residue ONCE
+                   ;; (single retry, no loop): TTL -1 = exists with no expiry.
+                   (and (= -1 (redis:red-ttl (cluster-claim-key m sid)))
+                        (redis:red-del (cluster-claim-key m sid))
+                        (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
+                        (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m))))))
            (drop-claim (sid)
              (with-cluster-redis (m)
                (redis:red-del (cluster-claim-key m sid)))))
@@ -389,17 +403,25 @@ sequences store-then-manager the same way).]"
       (dolist (w dead)
         (dolist (sid (with-cluster-redis (m)
                        (redis:red-smembers (cluster-worker-sess-key m w))))
-          (when (claim sid)
-            (cond
-              ;; local sid already live (cross-process gensym collision): skip
-              ((gethash sid (mtt/server:server-sessions (cluster-server m)))
-               (format *error-output*
-                       "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%" sid)
-               (drop-claim sid))
-              (t (let ((cp (load-checkpoint (cluster-store m) sid)))  ; store lock
-                   (cond
-                     (cp (cluster-adopt-session m sid cp w) (incf taken))
-                     (t (drop-claim sid)))))))))       ; no-ckpt window
+          (handler-case
+              (when (claim sid)
+                (cond
+                  ;; local sid already live (cross-process gensym collision): skip
+                  ((gethash sid (mtt/server:server-sessions (cluster-server m)))
+                   (format *error-output*
+                           "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%" sid)
+                   (drop-claim sid))
+                  (t (let ((cp (load-checkpoint (cluster-store m) sid)))  ; store lock
+                       (cond
+                         (cp (cluster-adopt-session m sid cp w) (incf taken))
+                         (t (drop-claim sid)))))))       ; no-ckpt window
+            ;; Isolation (final review): one poisoned sid (unreadable
+            ;; checkpoint, unregistered model-id, ...) must not abort the
+            ;; whole takeover pass for the remaining sids — report, continue.
+            (error (c)
+              (format *error-output*
+                      "mtt/cluster: takeover of sid ~a failed: ~a; continuing pass~%"
+                      sid c)))))
       (values taken dead))))
 
 ;; --- thread lifecycle (thin timers over the tick fns) ------------------------

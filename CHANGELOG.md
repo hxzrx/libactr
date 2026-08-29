@@ -58,11 +58,11 @@ Twelve phases, each ending merged and green (see the phase docs for detail):
   starts, `student-session` (one shared log per student), and
   `mtt/redis-store` for AOF-durable event logs.
 - **Phase 6 — knowledge tracing.** Corbett & Anderson four-parameter BKT:
-  `compute-mastery` folds the event log into per-KC accuracy + P(L); per-KC
-  parameter overrides; multi-step primed intents (visible + hidden steps).
+  `compute-mastery` folds the event log into per-KC accuracy + P(L); multi-step
+  primed intents (visible + hidden steps).
 - **Phase 7 — fraction domain.** Second domain; established the adapter as
-  the domain brain (arithmetic, bug detection, retrieval priming) and the
-  empirical synthetic-student harness.
+  the domain brain (arithmetic, bug detection, retrieval priming), per-KC KT
+  parameter overrides, and the empirical synthetic-student harness.
 - **Phase 8 — authoring support.** Declarative `apply-kc-map` KC attribution
   and the reusable `standard-domain-adapter` base (dogfooded by both
   arithmetic adapters).

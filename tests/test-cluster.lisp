@@ -20,7 +20,10 @@
   (find-if #'probe-file *redis-server-candidates*))
 
 (defun %unique-dir (prefix)
-  (format nil "/tmp/~a-~a-~a/" prefix (get-universal-time) (gensym)))
+  ;; No trailing slash (final review): callers append "/redis.log" etc. and the
+  ;; delete-directory-tree call site coerces via ensure-directory-pathname (a
+  ;; slashless STRING alone still fails UIOP's pathnamep gate — see fixture).
+  (format nil "/tmp/~a-~a-~a" prefix (get-universal-time) (gensym)))
 
 (defmacro with-test-redis ((conn-var port-var) &body body)
   "Disposable redis-server on a free port + fresh connection; FLUSHDB; cleanup
@@ -31,7 +34,9 @@
          (5am:skip "no redis-server binary found")
          (let ((,port (%find-free-port))
                (,dir (%unique-dir "mtt-cluster")))
-           (ensure-directories-exist ,dir)
+           ;; ensure-directory-pathname: a slashless namestring's last component
+           ;; parses as a NAME, and ensure-directories-exist would not create it.
+           (ensure-directories-exist (uiop:ensure-directory-pathname ,dir))
            (uiop:run-program (list (%redis-server-binary)
                                    "--port" (princ-to-string ,port)
                                    "--daemonize" "yes" "--appendonly" "yes"
@@ -57,7 +62,12 @@
                ;; short (defmacro would run to EOF; COMPILE-FILE-ERROR "end of
                ;; file"). The whole-body *connection* let adds a nesting level
                ;; over the redis-store fixture; tail needs 9.]
-               (ignore-errors (uiop:delete-directory-tree ,dir :validate t)))))))))
+               ;; ensure-directory-pathname (final review): delete-directory-tree
+               ;; takes a physical non-wildcard directory PATHNAME — a namestring
+               ;; (slash or not) fails its pathnamep gate and the ignore-errors
+               ;; silently skipped cleanup, leaking /tmp/mtt-cluster-* dirs.
+               (ignore-errors (uiop:delete-directory-tree
+                               (uiop:ensure-directory-pathname ,dir) :validate t)))))))))
 
 (defun %worker-server (redis-port)
   "A subtraction-registered tutor-server with a live acceptor + redis event
@@ -310,6 +320,32 @@ sid entirely: no local handle, routes untouched."
              (is (string= "w1" (first (multiple-value-list
                                       (cluster-route-get
                                        (uiop:strcat "t-cl:sess:" sid)))))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
+(test cluster.claim-crash-residue-reclaimed
+  "REGRESSION (final review, crash gap): a taker that died between SETNX and
+EXPIRE leaves a claim with NO TTL. Pre-fix, SETNX fails for every future taker
+and this sid's takeover is blocked forever; post-fix the losing path reclaims a
+TTL-less (red-ttl = -1) residue once, retries the claim, and adopts. A residue
+WITH a TTL still blocks (the mutex semantics claim-mutex tests above)."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-cr:")
+      (unwind-protect
+           (progn
+             ;; crash residue: plain SET, NO expire (red-ttl reads -1)
+             (redis:red-set (uiop:strcat "t-cr:claim:" sid) "crashed-taker")
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (is (= 1 taken))
+               (is (equal '("w1") dead)))
+             ;; adopted: handle local, route flipped, claim consumed
+             (is (gethash sid (server-sessions s2)))
+             (is (string= "w2" (first (multiple-value-list
+                                      (cluster-route-get
+                                       (uiop:strcat "t-cr:sess:" sid))))))
+             (is (null (redis:red-exists (uiop:strcat "t-cr:claim:" sid)))))
         (stop-cluster-manager m1)
         (stop-cluster-manager m2)
         (stop-tutor-server s1)

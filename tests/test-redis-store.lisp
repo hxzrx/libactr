@@ -24,7 +24,10 @@
   ;; Include get-universal-time so the directory is unique across fresh SBCL
   ;; processes (gensym alone resets per process, which would let AOF data from
   ;; a previous run leak into the current one).
-  (format nil "/tmp/~a-~a-~a/" prefix (get-universal-time) (gensym)))
+  ;; No trailing slash (final review): callers append "/redis.log" etc. and the
+  ;; delete-directory-tree call sites coerce via ensure-directory-pathname (a
+  ;; slashless STRING alone still fails UIOP's pathnamep gate — see fixture).
+  (format nil "/tmp/~a-~a-~a" prefix (get-universal-time) (gensym)))
 
 (defmacro with-test-redis ((conn-var port-var) &body body)
   "Start a disposable redis-server (--appendonly yes) on a free high port, bind
@@ -35,7 +38,9 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
          (5am:skip "no redis-server binary found")
          (let ((,port (%find-free-port))
                (,dir (%unique-dir "mtt-redis")))
-           (ensure-directories-exist ,dir)
+           ;; ensure-directory-pathname: a slashless namestring's last component
+           ;; parses as a NAME, and ensure-directories-exist would not create it.
+           (ensure-directories-exist (uiop:ensure-directory-pathname ,dir))
            (uiop:run-program (list (%redis-server-binary)
                                    "--port" (princ-to-string ,port)
                                    "--daemonize" "yes" "--appendonly" "yes"
@@ -55,7 +60,12 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
                                          "shutdown" "nosave")
                                    :output :string :error-output :string))
                (sleep 1)
-               (ignore-errors (uiop:delete-directory-tree ,dir :validate t))))))))
+               ;; ensure-directory-pathname (final review): delete-directory-tree
+               ;; takes a physical non-wildcard directory PATHNAME — a namestring
+               ;; (slash or not) fails its pathnamep gate and the ignore-errors
+               ;; silently skipped cleanup, leaking /tmp/mtt-redis-* dirs.
+               (ignore-errors (uiop:delete-directory-tree
+                               (uiop:ensure-directory-pathname ,dir) :validate t))))))))
 
 (test redis-event-log.round-trip-equivalence
   (with-test-redis (conn port)
@@ -84,7 +94,7 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
   (let* ((dir (%unique-dir "mtt-redis-aof"))
          (port (%find-free-port))
          (key "mtt:test:aof"))
-    (ensure-directories-exist dir)
+    (ensure-directories-exist (uiop:ensure-directory-pathname dir))
     (unwind-protect
          (progn
            (uiop:run-program (list (%redis-server-binary) "--port" (princ-to-string port)
@@ -113,7 +123,8 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
         (uiop:run-program (list "redis-cli" "-p" (princ-to-string port) "shutdown" "nosave")
                           :output :string :error-output :string))
       (sleep 1)
-      (ignore-errors (uiop:delete-directory-tree dir :validate t)))))
+      (ignore-errors (uiop:delete-directory-tree
+                      (uiop:ensure-directory-pathname dir) :validate t)))))
 
 (test redis-event-log.non-nil-summaries-round-trip
   "REGRESSION (C1): a log-event with NON-NIL intent-summary and result-summary
