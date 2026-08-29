@@ -19,24 +19,30 @@
   (nth-value 0 (mtt/server:server-step-session s sid action)))
 
 (test fraction-adapter.on-path-full-problem
-  "1/2 + 1/3: common-denom 6 (on-path) -> sum 5/6 (on-path, done)."
+  "1/2 + 1/3: common-denom 6 (on-path) -> sum 5/6 (on-path, done).
+Phase 13: done assertions pass the REAL session (the conditional step-done?
+override reads the goal's snum/sdenom); 5/6 has gcd 1, so semantics are
+unchanged from the old default-termination behavior."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+         (let* ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac"))
+                (adapter (mtt/fraction-adapter:make-fraction-adapter))
+                (session (mtt/server:handle-session
+                          (gethash sid (mtt/server:server-sessions s)))))
            ;; common-denom 6 -> find-common-denominator on-path
            (let ((r1 (%step s sid '(("type" . "common-denom") ("value" . "6")))))
              (is (eq :on-path (mtt:trace-result-status r1)))
              (is (string= "FIND-COMMON-DENOMINATOR"
                           (symbol-name (mtt:production-name
                                         (mtt:trace-result-production r1)))))
-             (is (null (mtt:step-done? (mtt/fraction-adapter:make-fraction-adapter) r1 nil))))
+             (is (null (mtt:step-done? adapter r1 session))))
            ;; sum 5/6 -> add-fractions on-path, done
            (let ((r2 (%step s sid '(("type" . "sum") ("num" . "5") ("denom" . "6")))))
              (is (eq :on-path (mtt:trace-result-status r2)))
              (is (string= "ADD-FRACTIONS"
                           (symbol-name (mtt:production-name
                                         (mtt:trace-result-production r2)))))
-             (is (mtt:step-done? (mtt/fraction-adapter:make-fraction-adapter) r2 nil))))
+             (is (mtt:step-done? adapter r2 session))))
       (mtt/server:stop-tutor-server s))))
 
 (test fraction-adapter.buggy-add-across
@@ -209,4 +215,75 @@ bad-tutor-request / 400 (phase 12 debt #1/#2)."
              (signals mtt:bad-tutor-request
                (mtt/server:server-step-session
                 s sid '(("type" . "sum") ("num" . "x") ("denom" . "5"))))))
+      (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 13 Task 5: simplify action branch + conditional step-done? ---------
+;;;
+;;; The fraction problem now runs 3 steps when the summed fraction is
+;;; simplifiable (cdenom -> sum -> simplify) and 2 steps when it is already in
+;;; lowest terms. Termination is CONDITIONAL: SIMPLIFY on-path always ends the
+;;; problem; ADD-FRACTIONS on-path ends it ONLY when gcd(snum,sdenom)=1 — the
+;;; terminal-name list alone cannot express this (ANY-match would end
+;;; simplifiable problems one step early), hence the local step-done? override.
+
+(test fraction-adapter.simplify-full-problem
+  "1/6 + 1/6: cdenom 6 -> sum 2/6 -> simplify 1/3 (SIMPLIFY on-path, done).
+The sum step is NOT done (gcd 2 > 1) — the conditional step-done? override."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "f" "1/6+1/6" "frac")))
+           (%step s sid '(("type" . "common-denom") ("value" . "6")))
+           (let* ((adapter (mtt/fraction-adapter:make-fraction-adapter))
+                  (r2 (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "6"))))
+                  (session (mtt/server:handle-session
+                            (gethash sid (mtt/server:server-sessions s)))))
+             (is (eq :on-path (mtt:trace-result-status r2)))
+             (is (null (mtt:step-done? adapter r2 session)))   ; gcd(2,6)=2 -> not done
+             (let ((r3 (%step s sid '(("type" . "simplify") ("num" . "1") ("denom" . "3")))))
+               (is (eq :on-path (mtt:trace-result-status r3)))
+               (is (string= "SIMPLIFY"
+                            (symbol-name (mtt:production-name
+                                          (mtt:trace-result-production r3)))))
+               (is (mtt:step-done? adapter r3 session)))))
+      (mtt/server:stop-tutor-server s))))
+
+(test fraction-adapter.unsimplifiable-sum-still-done
+  "1/2 + 1/3 = 5/6 (gcd 1): the sum step terminates the problem exactly as
+before the simplify increment (ADD-FRACTIONS on-path -> done)."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+           (%step s sid '(("type" . "common-denom") ("value" . "6")))
+           (let* ((adapter (mtt/fraction-adapter:make-fraction-adapter))
+                  (r2 (%step s sid '(("type" . "sum") ("num" . "5") ("denom" . "6"))))
+                  (session (mtt/server:handle-session
+                            (gethash sid (mtt/server:server-sessions s)))))
+             (is (eq :on-path (mtt:trace-result-status r2)))
+             (is (mtt:step-done? adapter r2 session))))          ; gcd(5,6)=1
+      (mtt/server:stop-tutor-server s))))
+
+(test fraction-adapter.simplify-on-lowest-terms-rejected
+  "A simplify attempt on an already-lowest-terms sum signals bad-tutor-request
+(the step does not exist for this problem)."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+           (%step s sid '(("type" . "common-denom") ("value" . "6")))
+           (%step s sid '(("type" . "sum") ("num" . "5") ("denom" . "6")))
+           (signals mtt:bad-tutor-request
+             (%step s sid '(("type" . "simplify") ("num" . "5") ("denom" . "6")))))
+      (mtt/server:stop-tutor-server s))))
+
+(test fraction-adapter.wrong-reduction-unclassified
+  "Task-5 review pin: a WRONG reduction at a simplifiable sum (1/6+1/6 = 2/6,
+student 'simplifies' to 2/3 — not the correct 1/3) gets a BARE intent (no
+reduce-fact prime), so SIMPLIFY cannot match -> :off-path unclassified."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "f" "1/6+1/6" "frac")))
+           (%step s sid '(("type" . "common-denom") ("value" . "6")))
+           (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "6")))
+           (let ((r (%step s sid '(("type" . "simplify") ("num" . "2") ("denom" . "3")))))
+             (is (eq :off-path (mtt:trace-result-status r)))
+             (is (null (mtt:trace-result-feedback r)))))
       (mtt/server:stop-tutor-server s))))

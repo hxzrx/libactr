@@ -63,5 +63,21 @@ direct columns share :column-subtract."
          (subtract-tens-direct  . :column-subtract)))
       (setf (mtt:model-definition-productions md)
             (append (mtt:model-definition-productions md)
-                    (mapcar #'mtt:bug-production (bug-specs))))
+                    (mapcar #'mtt:bug-production (%validate-specs! (bug-specs)))))
       md)))
+
+(defun %validate-specs! (specs)
+  "Authoring-time gate (phase 13 spec §6): signal when any spec has errors,
+return SPECS. The subtraction :when forms read the sub2 GOAL slots (problem
+variables the validator cannot derive from the spec itself), so they are
+declared via :extra-env-names (the tens slots are a harmless superset — only
+the ones slots appear in :when)."
+  (dolist (spec specs)
+    (multiple-value-bind (errors warnings)
+        (mtt:validate-bug-spec spec
+                               :extra-env-names
+                               '(top-ones bot-ones top-tens bot-tens))
+      (declare (ignore warnings))
+      (when errors
+        (error "invalid bug-spec ~a: ~{~a~^; ~}" (mtt:bug-spec-name spec) errors))))
+  specs)

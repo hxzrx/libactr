@@ -9,9 +9,16 @@
   ((student-id :reader student-session-student-id :initarg :student-id)
    (event-log  :reader student-session-log       :initarg :event-log)
    (sessions   :accessor student-session-sessions :initform nil)   ; list of cognitive-session ids (bookkeeping)
-   (status     :accessor student-session-status   :initform :active))) ; :active | :ended
+   (status     :accessor student-session-status   :initform :active))  ; :active | :ended
+  (:documentation "Cross-problem student entity (the upper session layer):
+owns ONE event-log shared by all of that student's cognitive-sessions (via
+start-session :event-log injection) so cross-problem mastery is one read.
+Pure bookkeeping — no HTTP, no Redis connections, no locks in this layer;
+durability comes from whichever event-log backend was injected."))
 
-(defun student-session-p (x) (typep x 'student-session))
+(defun student-session-p (x)
+  "Type predicate for student-session (defclass does not auto-generate -p)."
+  (typep x 'student-session))
 
 (defun start-student-session (student-id &key event-log)
   "Create a student-session. A fresh in-memory event-log is made unless one is

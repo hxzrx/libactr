@@ -8,6 +8,8 @@
   (parent  nil :type (or null symbol)))
 
 (defun make-chunk-type-def (&key name slots parent)
+  "&key wrapper over the boa constructor: create a chunk-type-def (NAME symbol,
+SLOTS list of slot symbols own+inherited, PARENT type name or nil). Pure."
   (make-chunk-type-def% name slots parent))
 
 ;; chunk 实例:类型名 + 槽值 alist(slot-symbol . value)
@@ -16,13 +18,18 @@
   (slots  nil :type list))
 
 (defun make-chunk (&key isa slots)
+  "&key wrapper over the boa constructor: create a chunk (ISA type-name symbol,
+SLOTS alist of (slot-symbol . value)). Pure."
   (make-chunk% isa slots))
 
 ;; buffer 状态:hash table buffer-name(symbol) -> chunk 或 nil(空)
 (defun make-buffer-state ()
+  "Fresh empty buffer-state: an eq hash table buffer-name -> chunk-or-nil.
+The table is fresh per call (session-private); no global state."
   (make-hash-table :test 'eq))
 
 (defun buffer-chunk (state buffer-name)
+  "STATE's chunk in BUFFER-NAME, or nil when the buffer is empty. Pure reader."
   (gethash buffer-name state))
 
 (defun (setf buffer-chunk) (new-value state buffer-name)
@@ -71,10 +78,15 @@ Wraps (setf buffer-chunk) for the exported API."
   (params        nil))  ; alist of sgp params (信息性)
 
 (defun make-model-definition (&key chunk-types chunks productions initial-goal params)
+  "&key wrapper over the boa constructor: create a model-definition (the
+read-only shared compile product; see the defstruct's slot comments). Pure."
   (make-model-definition% chunk-types chunks productions initial-goal params))
 
 ;; step-intent: 领域无关的学生输入(对 buffer 的提议 delta)
 (defstruct step-intent
+  "Domain-neutral encoding of one student step: the PROPOSED buffer-slot
+deltas the tracer judges against the model's productions (via covers-p).
+Built by a domain adapter's adapt-action; slot comments document each field."
   (assignments nil)   ; list of (buffer slot value);value 为字面量
   (action-type nil)   ; 可选适配器标签;默认策略不用,留给未来策略
   (prime nil))        ; Phase 6: list of (buffer-name . chunk) to install in
@@ -83,6 +95,9 @@ Wraps (setf buffer-chunk) for the exported API."
 
 ;; kc-event: 每步 KC 触发,供期 6 knowledge tracing(纯数据)
 (defstruct kc-event
+  "One knowledge-component observation per traced step — the pure-data KT
+input (folded by compute-mastery) alongside the student-visible trace-result.
+Slot comments document each field."
   (kc nil)            ; production-kc,或无 kc 时取 production-name
   (correct-p nil)     ; on-path correct → t;off-path/buggy/unclassified → nil
   (production nil)    ; 命中产生式(correct 或 buggy),或 nil
@@ -90,6 +105,9 @@ Wraps (setf buffer-chunk) for the exported API."
 
 ;; trace-result: trace-step 单一返回对象(Approach A:内含推进后状态)
 (defstruct trace-result
+  "trace-step's single return object (Approach A): the on/off-path diagnosis
+PLUS the advanced buffer-state/path when on-path. Consumed by step-session
+and the adapter/server layers; slot comments document each field."
   (status :off-path)        ; :on-path | :off-path-buggy | :off-path
   (production nil)
   (bindings nil)

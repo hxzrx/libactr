@@ -40,3 +40,18 @@ their misapplied-skill KCs; model symbols land in :mtt/subtraction-tutor."
     (is (eq (find-package :mtt/subtraction-tutor)
             (symbol-package
              (mtt:chunk-isa (mtt:model-definition-initial-goal md)))))))
+
+(test subtraction-bug-specs-pass-validation
+  "Every subtraction bug-spec passes the phase-13 authoring validator. The
+:when forms read the sub2 GOAL slots (problem variables the validator cannot
+derive from the spec itself), so they are declared via :extra-env-names (the
+tens slots are a harmless superset — only the ones slots appear in :when)."
+  (dolist (spec (mtt/subtraction-tutor:bug-specs))
+    (multiple-value-bind (errors warnings)
+        (mtt:validate-bug-spec spec
+                               :extra-env-names
+                               '(top-ones bot-ones top-tens bot-tens))
+      (declare (ignore warnings))
+      (is (null errors)
+          "subtraction spec ~a: ~{~a~^; ~}"
+          (mtt:bug-spec-name spec) errors))))

@@ -1,9 +1,11 @@
 ;;;; mtt.asd — Model-Tracing Tutor engine
 
 (asdf:defsystem "mtt"
-  :version "0.1.0"
+  :version "0.2.0"
   :description "Independent, multi-user-safe model-tracing production engine"
-  :license "TBD"
+  :long-description "mtt is the Path-B deliverable of the ACT-R project: an independent, multi-user-safe model-tracing tutor engine for cognitive-tutor deployments, following the Carnegie Learning / MATHia lineage of authoring models in ACT-R and shipping a dedicated runtime. The core holds zero global mutable state — every piece of per-session and per-student state lives on CLOS instances and locks stay in the service layer — so one Lisp image can trace many students concurrently; the core system itself has no dependencies. act-r/ is used strictly as a development-time dual-track oracle (mtt/oracle, mtt/dual); runtime deployments never load it."
+  :license "MIT"
+  :author "The mtt authors"
   :depends-on ()
   :serial t
   :components ((:file "src/package")
@@ -201,3 +203,23 @@
   :depends-on ("mtt/fraction-adapter" "mtt/addition-adapter"
                "mtt/past-tense-adapter" "mtt/subtraction-adapter" "fiveam")
   :components ((:file "tests/test-empirical")))
+
+;;; Phase 13 — multi-worker orchestration (complete orchestration layer).
+;;; cluster.lisp: cluster-manager CLOS (join/heartbeat/scan/takeover ticks +
+;;; checkpoint-store protocol + redis impl). proxy.lisp: the thin front proxy
+;;; (routes by student_id/session_id from the redis routing table, forwards
+;;; via dexador, one re-resolve retry on transport failure; /student/mastery
+;;; is served from redis directly — location-free). Same package :mtt/cluster
+;;; across both files (mirrors mtt/server's server.lisp + http-api.lisp).
+(asdf:defsystem "mtt/cluster"
+  :depends-on ("mtt/server" "mtt/redis-store" "dexador" "yason")
+  :components ((:file "src/cluster")
+               (:file "src/proxy")))
+
+(asdf:defsystem "mtt/cluster-test"
+  ;; Suite :mtt/cluster (the 10th, merge-gate suite). Self-starts redis-server
+  ;; (skip if absent); the e2e file additionally spawns SBCL worker
+  ;; subprocesses via examples/cluster-worker.lisp.
+  :depends-on ("mtt/cluster" "mtt/subtraction-adapter" "fiveam" "dexador")
+  :components ((:file "tests/test-cluster")
+               (:file "tests/test-cluster-e2e")))

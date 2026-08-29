@@ -18,9 +18,16 @@ inflection). Stateless. Subclasses standard-domain-adapter; step-done? is
 INHERITED from the base (terminal list) — the third dogfood of the base."))
 
 (defun make-past-tense-adapter ()
-  (make-instance 'past-tense-adapter
-                 :model-package (find-package :mtt/past-tense-tutor)
-                 :terminal-production '("RETRIEVE-IRREGULAR" "APPLY-REGULAR")))
+  "Construct the adapter. The phase-13 authoring gate (spec §6) runs HERE —
+the named-predicate table lives in this adapter (not the tutor loader), so
+construction IS validation: every past-tense bug-spec must pass
+validate-bug-spec with the adapter's own predicates + env additions, else
+error before the adapter is handed out."
+  (let ((a (make-instance 'past-tense-adapter
+                          :model-package (find-package :mtt/past-tense-tutor)
+                          :terminal-production '("RETRIEVE-IRREGULAR" "APPLY-REGULAR"))))
+    (%validate-specs! (mtt/past-tense-tutor:bug-specs))
+    a))
 
 ;;; --- domain predicates (the named-predicate table for the bug-DSL) ---
 
@@ -46,6 +53,23 @@ here pair with the tutor-package symbols in the specs."
   (list (cons 'verb+ed-p #'%verb+ed-p)
         (cons 'string= #'string=)
         (cons 'analogy-p #'%analogy-p)))
+
+(defun %validate-specs! (specs)
+  "Authoring-time gate (phase 13 spec §6): signal when any spec has errors,
+return SPECS. Validated with the adapter's own named-predicate table
+(bug-predicates — the same alist detect-bug receives at runtime) and the
+adapter's env additions as :extra-env-names: VERB is the goal slot the specs'
+:when forms read (also a fact-slot :from source), REGULAR-P / KNOWN-P are
+derived by adapt-action (adapter-added, underivable from the spec)."
+  (dolist (spec specs)
+    (multiple-value-bind (errors warnings)
+        (mtt:validate-bug-spec spec
+                               :predicates (bug-predicates)
+                               :extra-env-names '(verb regular-p known-p))
+      (declare (ignore warnings))
+      (when errors
+        (error "invalid bug-spec ~a: ~{~a~^; ~}" (mtt:bug-spec-name spec) errors))))
+  specs)
 
 (defun build-past-tense-model ()
   "Read+compile the past-tense model + buggy library (reuses mtt/past-tense-tutor)."
