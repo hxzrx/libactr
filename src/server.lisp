@@ -113,8 +113,17 @@ student-session/event-log or push a duplicate session onto the shared list."))
   (typep x 'tutor-server))
 
 (defun make-session-id ()
-  "Generate a unique session-id string."
-  (format nil "sess-~(~a~)" (gensym "s")))
+  "Generate a unique session-id string. Cross-process uniqueness (phase 14
+A2): universal time (seconds) + get-internal-real-time (sub-second, diverges
+across images) + the per-image gensym counter. Fresh SBCL images used to emit
+colliding `sess-s1` sequences (per-image gensym counter AND a deterministically
+seeded *random-state* — probed 2026-08-31), so the two time components carry
+the cross-image entropy. No global counter is introduced (this file stays
+zero-defvar/defparameter). The sid remains an opaque string to consumers."
+  (format nil "sess-~36r-~36r-~a"
+          (get-universal-time)
+          (get-internal-real-time)
+          (gensym "s")))
 
 (defun event-log-for (server student-id)
   "Return the event-log to attach to a new student-session. If SERVER has a

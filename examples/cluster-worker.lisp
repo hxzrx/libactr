@@ -22,9 +22,9 @@
   "Start one cluster worker and BLOCK. Port 0 = OS-assigned. Intervals default
 to test-tight values; production deployments pass saner ones (e.g. ttl 15 /
 intervals 5/2/5 — see README's cluster guide)."
-  ;; Cross-process sid uniqueness mitigation (spec §13.1): SBCL's gensym
-  ;; counter starts identically in fresh images, so make-session-id sequences
-  ;; would collide; burn a worker-id-derived offset.
+  ;; Defense-in-depth only (phase 14 A2 root fix landed in make-session-id:
+  ;; time+sub-second+gensym components): burning a worker-id-derived gensym
+  ;; offset additionally staggers the per-image counter. Harmless; kept.
   (loop :repeat (mod (sxhash worker-id) 4096) :do (gensym))
   (let* ((server (mtt/server:start-tutor-server
                   :port port :start-acceptor-p t

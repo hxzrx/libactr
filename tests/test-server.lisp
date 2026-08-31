@@ -829,3 +829,14 @@ other conditions still propagate (500 semantics unchanged)."
              (signals bad-tutor-request
                       (server-step-session server sid '((type . x))))))
       (stop-tutor-server server))))
+
+(test server.session-id-cross-process-components
+  "Phase 14 A2: make-session-id carries time + sub-second + gensym components
+(cross-process uniqueness root fix — fresh images used to emit colliding
+`sess-s1` sequences). Shape: sess-<ut36>-<irt36>-<gensym>."
+  (let ((a (mtt/server::make-session-id))
+        (b (mtt/server::make-session-id)))
+    (is (string= "sess-" (subseq a 0 5)))
+    ;; two component separators after the prefix (ut | irt | gensym)
+    (is (= 2 (count #\- (subseq a 5))))
+    (is (not (string= a b)))))
