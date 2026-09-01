@@ -421,6 +421,22 @@ with a warning; the local session is untouched."
         (stop-tutor-server s1)
         (stop-tutor-server s2)))))
 
+;;; --- Phase 14 C5: strict route-epoch parse -------------------------------------
+
+(test cluster.route-epoch-strict-parse
+  "C5: a malformed epoch (\"12abc\") reads as 0 — junk-allowed parsing used to
+silently read it as 12. A well-formed epoch still parses."
+  (with-test-redis (conn port)
+    (redis:red-hset "t-ep:sess:x" "worker" "w1")
+    (redis:red-hset "t-ep:sess:x" "epoch" "12abc")
+    (multiple-value-bind (w e) (cluster-route-get "t-ep:sess:x")
+      (is (string= "w1" w))
+      (is (= 0 e)))
+    (redis:red-hset "t-ep:sess:x" "epoch" "7")
+    (is (= 7 (nth-value 1 (cluster-route-get "t-ep:sess:x"))))
+    (redis:red-hdel "t-ep:sess:x" "epoch")
+    (is (= 0 (nth-value 1 (cluster-route-get "t-ep:sess:x"))))))
+
 ;;; --- Phase 14 A1: zombie self-check -----------------------------------------
 ;; [brief defect, reader-evidenced (COMPILE-FILE "unmatched close parenthesis",
 ;; line 429 col 34) + task-4 review round 1: each test's extra paren sits on

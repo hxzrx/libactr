@@ -342,7 +342,12 @@ dropped)."
 
 (defun cluster-route-get (key)
   "Route table read: (values worker-id epoch) for a sess:/student: hash key,
-nil when unrouted. [brief defect, run-evidenced: the brief parse-integer'd the
+nil when unrouted. Epoch parses STRICTLY (phase 14 C5): a missing, null, or
+malformed epoch field reads as 0. Junk-allowed parsing previously read
+\"12abc\" as 12 — a silent misread; the field is written only by our own
+route-set, so garbage means corruption or tampering, and it is tolerated as
+0 (never guessed at).
+[brief defect, run-evidenced: the brief parse-integer'd the
 epoch field unconditionally — TYPE-ERROR on parse-integer's STRING parameter
 when the hash carries only the worker field (the pre-takeover shape the tests
 seed); a missing/garbled epoch reads as 0, the same default route-set's
@@ -350,7 +355,9 @@ HINCRBY counts up from.]"
   (let ((w (redis:red-hget key "worker")))
     (when w
       (let ((e (redis:red-hget key "epoch")))
-        (values w (if e (or (parse-integer e :junk-allowed t) 0) 0))))))
+        (values w (if e (handler-case (parse-integer e)
+                          (parse-error () 0))
+                      0))))))
 
 (defun cluster-route-set (key worker-id)
   "Point KEY at WORKER-ID and bump its epoch (the future-fencing counter,
