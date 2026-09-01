@@ -75,13 +75,22 @@ untag-symbols. Shared with the phase-13 cluster checkpoint store."
 
 (defun %sym-tag-p (x)
   "True when X is a yason-parsed object (alist form) carrying exactly the
-symbol-tag keys — the decode image of tag-symbols' hash-tables."
+symbol-tag keys — the decode image of tag-symbols' hash-tables. Phase 14 C6
+tightening: the VALUES must carry the tag's types as well — sym is a string
+(the symbol NAME tag-symbols always writes), pkg is a string or null
+(uninterned symbols write pkg as JSON null). WIRE CONTRACT (phase-14 spec
+§6): business summaries are POSITIONAL lists (JSON arrays) and never produce
+a 2-key sym/pkg object — a decoded object of exactly this shape IS a symbol
+tag."
   (and (consp x)
        (consp (first x)) (stringp (caar x))
        (= 2 (length x))
-       (assoc "pkg" x :test #'string=)
-       (assoc "sym" x :test #'string=)
-       t))
+       (let ((sym (cdr (assoc "sym" x :test #'string=)))
+             (pkg-cell (assoc "pkg" x :test #'string=)))
+         (and (stringp sym)
+              pkg-cell
+              (or (null (cdr pkg-cell)) (stringp (cdr pkg-cell)))
+              t))))
 
 (defun untag-symbols (tree)
   "Inverse of tag-symbols over a yason-parsed tree (objects parsed as alists):
@@ -98,7 +107,21 @@ produced the phase-10 char-list tree)."
        (if (and pkg sym) (intern sym pkg) sym)))
     ((stringp tree) tree)                       ; strings pass through (string IS a vector)
     ((vectorp tree) (map 'list #'untag-symbols tree))
-    ((consp tree) (mapcar #'untag-symbols tree))
+    ((consp tree)
+     (if (%sym-tag-p tree)
+         (let* ((sym (cdr (assoc "sym" tree :test #'string=)))
+                (pkg (find-package (cdr (assoc "pkg" tree :test #'string=)))))
+           (if (and pkg sym) (intern sym pkg) sym))
+         ;; C6 (phase 14): dotted-safe structural walk — a non-tag alist
+         ;; (e.g. a 2-key sym/pkg object with non-string values) passes
+         ;; through with its shape intact; mapcar on a dotted pair would
+         ;; TYPE-ERROR.
+         (let ((vals nil) (tail tree))
+           (loop :while (consp tail)
+                 :do (push (untag-symbols (car tail)) vals)
+                     (setf tail (cdr tail)))
+           (let ((head (nreverse vals)))
+             (if tail (nconc head (untag-symbols tail)) head)))))
     (t tree)))
 
 (defun log-event-to-json (e)
