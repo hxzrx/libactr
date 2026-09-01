@@ -215,6 +215,13 @@ window a restored student must re-solve), `takeover-interval` (5s),
 `:port`, `:forward-timeout` (5s), `:kt-params`, prefix. The ticks are
 single-steppable (`cluster-heartbeat-tick` etc.) for deterministic tests.
 
+## Versioning
+
+`0.3.0` is the feature-complete candidate. From here the library is in
+maintenance mode: defects are fixed, the public surface does not move.
+`1.0.0` will be cut once a real consumer project has validated mtt as a
+dependency in production shape.
+
 ## System matrix
 
 | System | What | Dependencies |

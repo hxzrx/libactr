@@ -104,6 +104,11 @@
    ;; 引擎之上的部署形态:领域适配器协议与可复用基座、bug-DSL 运行时半边、
    ;; 统一 400 条件、Redis 持久事件日志后端。符号仍住在 :mtt(适配器与
    ;; step-intent/trace-result 并用);行为随 mtt/server 系统加载。
+   ;; Phase 14 — server-layer additions: kc->json (C4), student-events-key
+   ;; (C3), server-drop-session (A1 zombie convergence / admin eviction).
+   ;; These three live in :mtt/server's own defpackage (src/server.lisp,
+   ;; 23 → 26 exports there), NOT here: :mtt's export count stays 178
+   ;; (grep-verified #: entries in this file — phase 14 added no :mtt symbols).
    ;; adapter 协议(引擎/领域唯一 seam:3 泛函 + tag 基类)
    #:domain-adapter
    #:prepare-session #:adapt-action #:step-done?
