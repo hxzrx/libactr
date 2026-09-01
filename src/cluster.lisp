@@ -467,6 +467,37 @@ sequences store-then-manager the same way).]"
                 (format *error-output* "mtt/cluster: ~a tick failed: ~a~%" name c)))
             (sleep interval)))
 
+(defun %stop-tick-threads (m)
+  "Phase 14 C2 poll-join: give each tick thread until DEADLINE (longest tick
+interval + 2s) to observe the running flag and exit on its own; destroy only
+what is still alive at the deadline. Returns the number of destroyed threads
+(0 on the normal path). Rationale: destroying a thread that holds the redis
+lock mid-command leaves the lock held forever (bordeaux locks are not
+released on destroy) and the cluster-leave below would hang — the
+millisecond teardown window this closes.
+
+[brief defect, run-evidenced (flaky RED with ~2s margins, then probed: (+
+3997214052 0.1 2) => 3.997214e9 SINGLE-FLOAT, delta-from-now 0.0): universal
+time (~4e9) exceeds the single-float mantissa, so the brief's float-contaged
+deadline is quantized to 256s and (>) against it exits at a random offset —
+sometimes immediately, leaving live threads to be destroyed / returning
+before the asserted lower bound. Deadline computed in INTEGER seconds
+(ceiling of the interval max) instead.]"
+  (let ((deadline (+ (get-universal-time)
+                     (ceiling (max (cluster-heartbeat-interval m)
+                                   (max (cluster-scan-interval m)
+                                        (cluster-takeover-interval m))))
+                     2))
+        (destroyed 0))
+    (dolist (th (cluster-threads m))
+      (loop :until (or (not (bordeaux-threads:thread-alive-p th))
+                       (> (get-universal-time) deadline))
+            :do (sleep 0.05))
+      (when (bordeaux-threads:thread-alive-p th)
+        (incf destroyed)
+        (ignore-errors (bordeaux-threads:destroy-thread th))))
+    destroyed))
+
 (defun make-cluster-manager (&key server worker-id redis-host redis-port
                              (prefix "mtt:cluster:") (heartbeat-ttl 15)
                              (heartbeat-interval 5) (scan-interval 2)
@@ -508,14 +539,14 @@ takeover). The threads are plain drivers over the single-steppable ticks."
   m)
 
 (defun stop-cluster-manager (m)
-  "Stop the tick threads (they observe the running flag within one interval),
-gracefully leave, disconnect redis — the MANAGER's connection and the default
-store's (controller-mandated, Task 8 review ruling: the store holds its own
-lazy redis conn that would otherwise outlive the manager). Safe to call
-multiple times."
+  "Stop the tick threads (they observe the running flag within one interval)
+(phase 14 C2: poll-join with a deadline — destroy only as the bounded
+fallback, see %stop-tick-threads), gracefully leave, disconnect redis — the
+MANAGER's connection and the default store's (controller-mandated, Task 8
+review ruling: the store holds its own lazy redis conn that would otherwise
+outlive the manager). Safe to call multiple times."
   (setf (cluster-running m) nil)
-  (dolist (th (cluster-threads m))
-    (ignore-errors (bordeaux-threads:destroy-thread th)))
+  (%stop-tick-threads m)
   (setf (cluster-threads m) nil)
   (ignore-errors (cluster-leave m))
   (when (cluster-conn m)

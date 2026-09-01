@@ -708,3 +708,44 @@ student -> 404."
         (is (and (search "test tick failed" out)
                  (search "boom-1" out)
                  t))))))
+
+;;; --- Phase 14 C2: stop-cluster-manager poll-join --------------------------------
+
+;; [brief defect, run-evidenced (same class as C1 above: UNDEFINED-FUNCTION
+;; (SETF CLUSTER-RUNNING) — cluster-running is an internal accessor, invisible
+;; to this package's :use): qualified with the same double-colon prefix the
+;; brief uses for %stop-tick-threads; assertions unchanged.]
+(test cluster.stop-poll-joins-without-destroy
+  "C2: well-behaved tick threads are given the deadline to observe the flag
+and exit on their own — the destroy count is 0 (the old always-destroy
+shape returns 3 and could kill a thread holding the redis lock mid-command,
+hanging the leave below)."
+  (let ((m (make-cluster-manager
+            :server (start-tutor-server :port 0 :start-acceptor-p nil)
+            :worker-id "w-pj"
+            :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1)))
+    (setf (mtt/cluster::cluster-running m) t
+          (cluster-threads m)
+          (loop :repeat 3 :collect
+                (bordeaux-threads:make-thread
+                 (lambda () (loop :while (mtt/cluster::cluster-running m)
+                                  :do (sleep 0.05))))))
+    (setf (mtt/cluster::cluster-running m) nil)
+    (is (= 0 (mtt/cluster::%stop-tick-threads m)))
+    (is (every (lambda (th) (not (bordeaux-threads:thread-alive-p th)))
+               (cluster-threads m)))))
+
+(test cluster.stop-deadline-fallback-destroys
+  "C2: a thread that never observes the flag is destroyed at the deadline
+(fallback = the old behavior, bounded by it). Intervals 0.1 -> deadline ~2.1s."
+  (let* ((m (make-cluster-manager
+             :server (start-tutor-server :port 0 :start-acceptor-p nil)
+             :worker-id "w-df"
+             :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1))
+         (th (bordeaux-threads:make-thread (lambda () (sleep 100)))))
+    (setf (mtt/cluster::cluster-running m) nil
+          (cluster-threads m) (list th))
+    (let ((start (get-universal-time)))
+      (is (= 1 (mtt/cluster::%stop-tick-threads m)))
+      (is (>= (get-universal-time) (+ start 2)))     ; waited the deadline
+      (is (< (get-universal-time) (+ start 10))))))  ; but bounded by it
