@@ -857,3 +857,76 @@ threads (they kept ticking on a manager the operator believed restarted)."
              (is (find "w-id" (redis:red-smembers "t-id:workers") :test #'string=)))
         (stop-cluster-manager m)
         (stop-tutor-server s)))))
+
+;;; --- Phase 14 A5: sticky proxy start --------------------------------------------
+
+;; [brief defect, compile-evidenced (same class as C1/C2 above: the brief's
+;; bare (proxy-live-workers p) reads as mtt/cluster-test::proxy-live-workers —
+;; UNDEFINED-FUNCTION, the symbol is internal to :mtt/cluster and this
+;; package's :use only sees exports): qualified with the same double-colon
+;; prefix the brief itself uses for proxy-rr; assertions unchanged.]
+(test proxy.sticky-start-same-worker-and-sid
+  "A5: a repeat /session/start for the same student through the proxy lands
+on the SAME worker and returns the SAME session_id (the worker's own
+same-student idempotency); when that worker's lease metadata is gone (dead),
+a start still succeeds on a live worker. The rr cursor is pre-set so a
+NON-sticky implementation would deterministically pick the OTHER worker
+(the RED shape)."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (s2 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "wa"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-sy:"))
+           (m2 (make-cluster-manager :server s2 :worker-id "wb"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-sy:"))
+           (p (make-tutor-proxy :port (%find-free-port)
+                                :redis-host "127.0.0.1" :redis-port port
+                                :prefix "t-sy:")))
+      (unwind-protect
+           (progn
+             (cluster-join m1)
+             (cluster-join m2)
+             (multiple-value-bind (b1 st1)
+                 (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                        "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+               (is (= 200 st1))
+               (let* ((sid1 (cdr (assoc "session_id" (yason:parse b1 :object-as :alist)
+                                         :test #'string=)))
+                      (owner1 (first (multiple-value-list
+                                      (with-proxy-redis (p)
+                                        (cluster-route-get "t-sy:student:sy"))))))
+                 (is (and sid1 owner1 t))
+                 ;; force the rr cursor: a non-sticky next pick would be the
+                 ;; OTHER worker (deterministic RED)
+                 (let* ((live (mtt/cluster::proxy-live-workers p))
+                        (other-pos (position owner1 live :key #'first
+                                             :test (complement #'string=))))
+                   (is (and other-pos t))
+                   (setf (mtt/cluster::proxy-rr p) (1- other-pos)))
+                 (multiple-value-bind (b2 st2)
+                     (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                            "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+                   (is (= 200 st2))
+                   (is (string= sid1 (cdr (assoc "session_id"
+                                                 (yason:parse b2 :object-as :alist)
+                                                 :test #'string=))))
+                   (is (string= owner1 (first (multiple-value-list
+                                               (with-proxy-redis (p)
+                                                 (cluster-route-get "t-sy:student:sy")))))))
+                 ;; dead sticky route: DEL the owner's lease metadata -> rr
+                 (redis:red-del (uiop:strcat "t-sy:worker:" owner1))
+                 (multiple-value-bind (b3 st3)
+                     (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                            "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+                   (is (= 200 st3))
+                   (is (and (cdr (assoc "session_id"
+                                        (yason:parse b3 :object-as :alist)
+                                        :test #'string=))
+                            t))))))
+        (stop-tutor-proxy p)
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))

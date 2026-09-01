@@ -201,10 +201,12 @@ session — the event log is unharmed.
   between takeover and the zombie's next heartbeat is bounded by the heartbeat
   interval. Per-request epoch fencing remains out of scope (hot-path cost);
   the `epoch` route field stays reserved for it.
-- *Start once per student-problem.* The proxy picks a worker round-robin at
-  `/session/start`; per-worker same-student idempotency does not span workers,
-  so a repeat start through the proxy can land on a different worker and open
-  a second session. Clients should start a session once and reuse its id.
+- *Repeat starts are sticky.* At `/session/start` the proxy first consults
+  the student's existing route: when that worker is still live, the request
+  is forwarded to it and the worker's own same-student idempotency returns
+  the active session (same session_id) — clients may retry start freely.
+  Only when the routed worker is dead does the proxy fall back to
+  round-robin, which can open a new session on another worker.
 
 **Tuning.** `make-cluster-manager`: `heartbeat-ttl` (15s),
 `heartbeat-interval` (5s), `scan-interval` (2s — also the takeover loss
