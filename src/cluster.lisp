@@ -53,6 +53,7 @@
    (redis-lock         :reader cluster-redis-lock
                        :initform (bordeaux-threads:make-lock "cluster-redis"))
    (threads            :accessor cluster-threads :initform nil)
+   (beats              :accessor cluster-beats :initform 0)
    (running            :accessor cluster-running :initform nil))
   (:documentation "Per-server orchestration state container (spec §4.2). All
 state instance-held; zero global mutable state in this system."))
@@ -96,11 +97,42 @@ every command (controller-mandated, Task 7 review ruling)."
     (with-output-to-string (s) (yason:encode h s))))
 
 (defun cluster-heartbeat-tick (m)
-  "One heartbeat: refresh this worker's lease key (SETEX = atomic set+ttl)."
+  "One heartbeat: refresh this worker's lease key (SETEX = atomic set+ttl).
+Phase 14 A1 zombie self-check: when the lease key is GONE (red-ttl -2 — it
+expired or was DELed while we were falsely dead) and this is not our first
+beat, sweep the local sessions — any sid whose sess: route now names ANOTHER
+worker was adopted away while we were down; drop the stale local handle
+(server-drop-session — silent, no end-event) so this worker stops stepping
+and checkpoint-clobbering it. Steady state costs one extra TTL read per
+heartbeat; the per-request hot path is untouched (spec §4.1)."
   (with-cluster-redis (m)
-    (redis:red-setex (cluster-worker-key m (cluster-worker-id m))
-                     (cluster-ttl m)
-                     (worker-metadata-json m))))
+    (let ((lease (cluster-worker-key m (cluster-worker-id m))))
+      (when (and (>= (cluster-beats m) 1)
+                 (= -2 (redis:red-ttl lease)))
+        (%zombie-sweep m))
+      (redis:red-setex lease (cluster-ttl m) (worker-metadata-json m))
+      (incf (cluster-beats m)))))
+
+(defun %zombie-sweep (m)
+  "A1: drop local session-handles whose sess: route names another worker.
+Runs under the manager redis lock (caller holds it); takes NO session locks
+(an in-flight step racing the remhash is the documented bounded residual).
+Collect-then-drop (maphash must not run concurrent remhash on the same
+table). server-drop-session nests the students-lock inside the manager lock
+— safe: no code path takes them in the opposite order (server-start-session
+issues zero redis commands while holding students-lock)."
+  (let ((stale nil))
+    (maphash (lambda (sid handle)
+               (declare (ignore handle))
+               (let ((owner (redis:red-hget (cluster-sess-key m sid) "worker")))
+                 (when (and owner (not (string= owner (cluster-worker-id m))))
+                   (push sid stale))))
+             (mtt/server:server-sessions (cluster-server m)))
+    (dolist (sid stale)
+      (mtt/server:server-drop-session (cluster-server m) sid)
+      (format *error-output*
+              "mtt/cluster: zombie self-check dropped local session ~a (route now owned by ~a)~%"
+              sid (redis:red-hget (cluster-sess-key m sid) "worker")))))
 
 (defun cluster-join (m)
   "Register in the workers set + first heartbeat."

@@ -399,6 +399,63 @@ with a warning; the local session is untouched."
         (stop-tutor-server s1)
         (stop-tutor-server s2)))))
 
+;;; --- Phase 14 A1: zombie self-check -----------------------------------------
+;; [brief defect, reader-evidenced (COMPILE-FILE "unmatched close parenthesis",
+;; line 429 col 34) + task-4 review round 1: each test's extra paren sits on
+;; the LAST-ASSERTION line, not the tail — its 5th close would close the
+;; unwind-protect itself, pushing stop-cluster-manager/stop-tutor-server out
+;; of the cleanup clauses into the let* body (an error in the protected body
+;; would then skip teardown and leak the acceptor/redis against a with-test-
+;; redis about to shut down). One close moved from each last-assert line to
+;; the brief's own 5-paren tail — cleanup sits INSIDE unwind-protect at depth
+;; 4, the same shape as cluster.heartbeat-refreshes-lease (lines 112-113).
+;; Assertions unchanged.]
+
+(test cluster.zombie-self-check-quiesces-adopted
+  "A1: w1 is falsely declared dead (lease DELed) and its session adopted
+(route flipped to w2). On w1's NEXT heartbeat the lease is gone (ttl -2) and
+beats>=1, so the sweep drops the stale local handle; the route and the
+refreshed lease are untouched by the sweep itself."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-zb:")))
+      (unwind-protect
+           (let ((sid (progn (cluster-join m1)        ; first beat: beats=1, no sweep
+                             (server-start-session s1 "zb" "52-18" "sub"))))
+             (redis:red-hset (uiop:strcat "t-zb:sess:" sid) "worker" "w1")
+             ;; false death + adoption by another worker
+             (redis:red-del "t-zb:worker:w1")
+             (redis:red-hset (uiop:strcat "t-zb:sess:" sid) "worker" "w2")
+             ;; recovery heartbeat: sweep fires (lease gone, beats>=1)
+             (cluster-heartbeat-tick m1)
+             (is (null (gethash sid (server-sessions s1))))          ; handle dropped
+             (is (string= "w2" (first (multiple-value-list
+                                       (cluster-route-get (uiop:strcat "t-zb:sess:" sid))))))
+             (is (redis:red-exists "t-zb:worker:w1"))                 ; lease refreshed
+             (is (= 2 (mtt/cluster::cluster-beats m1))))
+        (stop-cluster-manager m1)
+        (stop-tutor-server s1)))))
+
+(test cluster.zombie-sweep-skips-own-sessions
+  "A1 negative control: the same recovery shape but the route still names
+THIS worker — nothing is dropped."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-zn:")))
+      (unwind-protect
+           (let ((sid (progn (cluster-join m1)
+                             (server-start-session s1 "zn" "52-18" "sub"))))
+             (redis:red-hset (uiop:strcat "t-zn:sess:" sid) "worker" "w1")
+             (redis:red-del "t-zn:worker:w1")          ; lease lapsed
+             (cluster-heartbeat-tick m1)               ; recovery sweep: route=me
+             (is (gethash sid (server-sessions s1)))) ; untouched
+        (stop-cluster-manager m1)
+        (stop-tutor-server s1)))))
+
 ;;; --- Task 10: thin front proxy -------------------------------------------------
 
 ;; [brief defect, run-evidenced: dexador SIGNALS dex:http-request-failed on

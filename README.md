@@ -192,13 +192,15 @@ session — the event log is unharmed.
   `register-model` calls per worker, only `:worker-id`/`:port` differ.
 - *Isolate a worker after declaring it dead.* Lease expiry + takeover is how
   death is detected; once a worker is declared dead, remove it from the health
-  check / kill the process. **Known residual (fencing boundary)**: a zombie
-  worker (falsely declared dead) can still append to the shared event log —
-  appends are atomic `RPUSH` with contiguous seqs, so the stream stays
-  replayable, but it is polluted. Per-request epoch fencing was deliberately
-  not implemented (it would add a Redis round-trip to every step and churn
-  existing worker/store code); the `epoch` counter in route values is reserved
-  for a future opt-in fence.
+  check / kill the process. **Fencing (phase 14 A1)**: a worker whose lease
+  lapsed (GC pause, heartbeat jitter) and whose sessions were adopted away
+  drops those stale local handles at its next heartbeat (zombie self-check) —
+  it can no longer step them or clobber the new owner's checkpoints. Residual
+  contract: steps in flight at the takeover instant may interleave in the
+  shared log (atomic `RPUSH`, contiguous seqs, replay-safe), and the window
+  between takeover and the zombie's next heartbeat is bounded by the heartbeat
+  interval. Per-request epoch fencing remains out of scope (hot-path cost);
+  the `epoch` route field stays reserved for it.
 - *Start once per student-problem.* The proxy picks a worker round-robin at
   `/session/start`; per-worker same-student idempotency does not span workers,
   so a repeat start through the proxy can land on a different worker and open

@@ -20,6 +20,8 @@
            #:kc->json
            ;; Phase 14 C3 — canonical per-student event-log key
            #:student-events-key
+           ;; Phase 14 A1 — zombie convergence: drop a stale local handle
+           #:server-drop-session
            ;; slot readers/accessors used by tests and (Task 4) HTTP handlers
            #:server-acceptor #:server-port
            #:server-students #:server-sessions #:server-models
@@ -328,6 +330,19 @@ Serialized by the session-handle's lock."
       (bt:with-lock-held (lock)
         (prog1 (mtt:end-session (handle-session handle))
           (remhash session-id (server-sessions server)))))))
+
+(defun server-drop-session (server session-id)
+  "Remove the session-handle registered under SESSION-ID WITHOUT ending the
+underlying cognitive-session — no end-event is appended, the shared student
+event log is untouched. Phase 14 A1 zombie convergence: a worker whose lease
+lapsed and whose sessions were adopted away drops those stale local handles
+so it can no longer step or checkpoint them (also usable for admin eviction).
+Serialized under the server's students-lock. Returns SESSION-ID when a
+handle was present and removed, nil otherwise."
+  (bt:with-lock-held ((server-students-lock server))
+    (when (gethash session-id (server-sessions server))
+      (remhash session-id (server-sessions server))
+      session-id)))
 
 (defun server-student-mastery (server student-id)
   "Aggregate mastery for STUDENT-ID across all of that student's cognitive-
