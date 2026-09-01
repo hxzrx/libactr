@@ -368,10 +368,28 @@ spec §5.5)."
 
 ;; --- takeover (spec §5.2 protocol 4) -----------------------------------------
 
+(defun %checkpoint-matches-session-p (adopted local)
+  "A4 marker: do the identity+progress fields of ADOPTED (the checkpoint this
+tick is adopting) and LOCAL (a checkpoint snapshot of the live local handle)
+coincide? Five fields — student, problem, model, step-count, last-seq. Our
+own half-completed adopt was built FROM the checkpoint, so all five coincide;
+a foreign session (cross-process sid collision) differs in at least one. A
+true collision matching all five IS the same session twice — redoing the
+idempotent flip is then also correct."
+  (and (equalp (getf adopted :student-id) (getf local :student-id))
+       (equalp (getf adopted :problem-id) (getf local :problem-id))
+       (equalp (getf adopted :model-id) (getf local :model-id))
+       (= (or (getf adopted :step-count) 0) (or (getf local :step-count) 0))
+       (= (or (getf adopted :last-seq) 0) (or (getf local :last-seq) 0))))
+
 (defun cluster-adopt-session (m sid checkpoint dead-worker)
   "Rebuild the session locally from CHECKPOINT and flip the routes to this
 worker. Composition of exported core/server APIs only (spec §4.1): the
-student's redis event log continues where the dead worker left it."
+student's redis event log continues where the dead worker left it.
+Phase 14 A4: the route flip is one atomic Lua unit; order is
+handle-first-then-flip, and a flip failure leaves consistent state (routes
+untouched, claim held until TTL) — the retry is closed by the five-field
+marker in cluster-takeover-tick."
   (let* ((server (cluster-server m))
          (model-id (getf checkpoint :model-id))
          (entry (gethash model-id (mtt/server:server-models server))))
@@ -392,11 +410,26 @@ student's redis event log continues where the dead worker left it."
                                   (format nil "session-~a" sid))
                            :adapter adapter))
       (with-cluster-redis (m)
-        (cluster-route-set (cluster-sess-key m sid) (cluster-worker-id m))
-        (cluster-route-set (cluster-student-key m student-id) (cluster-worker-id m))
-        (redis:red-srem (cluster-worker-sess-key m dead-worker) sid)
-        (redis:red-sadd (cluster-worker-sess-key m (cluster-worker-id m)) sid)
-        (redis:red-del (cluster-claim-key m sid)))
+        ;; A4 (phase 14): the route flip — both routes (HSET+HINCRBY each),
+        ;; the reverse index (SREM/SADD), and the claim delete — is ONE
+        ;; atomic Lua unit. All-or-nothing: the previous command-at-a-time
+        ;; shape stranded a live handle with half-flipped routes on a
+        ;; mid-block redis error; the stranded retry is closed by the
+        ;; five-field marker in cluster-takeover-tick. KEYS: sess student
+        ;; ws-dead ws-me claim — ARGV: me sid.
+        (redis:red-eval
+         "local old = redis.call('HGET', KEYS[1], 'worker')
+redis.call('HSET', KEYS[1], 'worker', ARGV[1]) redis.call('HINCRBY', KEYS[1], 'epoch', 1)
+redis.call('HSET', KEYS[2], 'worker', ARGV[1]) redis.call('HINCRBY', KEYS[2], 'epoch', 1)
+redis.call('SREM', KEYS[3], ARGV[2]) redis.call('SADD', KEYS[4], ARGV[2])
+redis.call('DEL', KEYS[5])
+return old"
+         5 (cluster-sess-key m sid)
+         (cluster-student-key m student-id)
+         (cluster-worker-sess-key m dead-worker)
+         (cluster-worker-sess-key m (cluster-worker-id m))
+         (cluster-claim-key m sid)
+         (cluster-worker-id m) sid))
       sid)))
 
 (defun cluster-takeover-tick (m)
@@ -456,16 +489,25 @@ return 0"
                        (redis:red-smembers (cluster-worker-sess-key m w))))
           (handler-case
               (when (claim sid)
-                (cond
-                  ;; local sid already live (cross-process gensym collision): skip
-                  ((gethash sid (mtt/server:server-sessions (cluster-server m)))
-                   (format *error-output*
-                           "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%" sid)
-                   (drop-claim sid))
-                  (t (let ((cp (load-checkpoint (cluster-store m) sid)))  ; store lock
-                       (cond
-                         (cp (cluster-adopt-session m sid cp w) (incf taken))
-                         (t (drop-claim sid)))))))       ; no-ckpt window
+                ;; A4 (phase 14): checkpoint loads BEFORE the local-collision
+                ;; check — the five-field marker needs it. Branch order: no
+                ;; checkpoint -> drop; local sid occupied -> OUR half-adopt
+                ;; (marker matches) retries the idempotent flip, a foreign
+                ;; collision skips with a warning; else adopt.
+                (let ((cp (load-checkpoint (cluster-store m) sid)))
+                  (cond
+                    ((null cp) (drop-claim sid))
+                    ((gethash sid (mtt/server:server-sessions (cluster-server m)))
+                     (let ((h (gethash sid (mtt/server:server-sessions (cluster-server m)))))
+                       (if (%checkpoint-matches-session-p
+                            cp (mtt:checkpoint-session (mtt/server:handle-session h)))
+                           (progn (cluster-adopt-session m sid cp w) (incf taken))
+                           (progn
+                             (format *error-output*
+                                     "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%"
+                                     sid)
+                             (drop-claim sid)))))
+                    (t (cluster-adopt-session m sid cp w) (incf taken)))))
             ;; Isolation (final review): one poisoned sid (unreadable
             ;; checkpoint, unregistered model-id, ...) must not abort the
             ;; whole takeover pass for the remaining sids — report, continue.

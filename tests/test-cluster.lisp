@@ -404,11 +404,25 @@ with a warning; the local session is untouched."
       (unwind-protect
            (progn
              ;; plant a fake local session under the same sid on w2
-             (setf (gethash sid (server-sessions s2))
-                   (make-instance 'session-handle
-                                  :session (server-start-session s2 "local" "47-25" "sub")
-                                  :lock (bordeaux-threads:make-lock "fake")
-                                  :adapter (cdr (gethash "sub" (server-models s2)))))
+             ;; [brief defect, run-evidenced (Task 9): the planted handle's
+             ;; :session was the RETURN of server-start-session — the sid
+             ;; STRING, not a session. Phase 13's collision check only did a
+             ;; gethash, so it slipped through; A4's five-field marker calls
+             ;; checkpoint-session on the handle's session and the string
+             ;; signals NO-APPLICABLE-METHOD, routing this test through the
+             ;; tick's isolation handler — a vacuous GREEN that leaves the
+             ;; foreign-collision skip branch untested. Plant the STARTED
+             ;; session object itself: student "local"/problem "47-25" differ
+             ;; from the checkpoint's "tk"/"52-18" on both identity fields, so
+             ;; the marker still mismatches -> clean skip. Assertions
+             ;; unchanged.]
+             (let* ((fake-sid (server-start-session s2 "local" "47-25" "sub")))
+               (setf (gethash sid (server-sessions s2))
+                     (make-instance 'session-handle
+                                    :session (handle-session
+                                              (gethash fake-sid (server-sessions s2)))
+                                    :lock (bordeaux-threads:make-lock "fake")
+                                    :adapter (cdr (gethash "sub" (server-models s2))))))
              (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
                (is (= 0 taken))
                (is (equal '("w1") dead)))
@@ -416,6 +430,38 @@ with a warning; the local session is untouched."
              (is (string= "w1" (first (multiple-value-list
                                       (cluster-route-get
                                        (uiop:strcat "t-co:sess:" sid)))))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
+(test cluster.adopt-retry-after-partial-failure
+  "A4: a prior adopt installed the local handle but died before the atomic
+flip (route still names the dead worker, claim long expired). The retry must
+RECOGNIZE its own half-adopt (five-field checkpoint match) and redo the
+idempotent flip instead of skipping as a foreign collision."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-rs:")
+      (unwind-protect
+           (let* ((cp (load-checkpoint (mtt/cluster::cluster-store m2) sid))
+                  (entry (gethash "sub" (server-models s2)))
+                  (log (mtt:make-redis-event-log
+                        :key (mtt/server:student-events-key "tk")
+                        :host "127.0.0.1" :port port)))
+             ;; plant OUR half-adopt: handle built from the SAME checkpoint,
+             ;; routes never flipped (still w1), claim expired away
+             (setf (gethash sid (server-sessions s2))
+                   (make-instance 'session-handle
+                                  :session (mtt:restore-from-checkpoint
+                                            cp (car entry) log)
+                                  :lock (bordeaux-threads:make-lock "half")
+                                  :adapter (cdr entry)))
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (declare (ignore dead))
+               (is (= 1 taken)))
+             (is (string= "w2" (first (multiple-value-list
+                                       (cluster-route-get
+                                        (uiop:strcat "t-rs:sess:" sid)))))))
         (stop-cluster-manager m1)
         (stop-cluster-manager m2)
         (stop-tutor-server s1)
