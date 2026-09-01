@@ -520,7 +520,14 @@ before the asserted lower bound. Deadline computed in INTEGER seconds
 
 (defun start-cluster-manager (m)
   "Join the registry and spawn the three tick threads (heartbeat / scan /
-takeover). The threads are plain drivers over the single-steppable ticks."
+takeover). The threads are plain drivers over the single-steppable ticks.
+Idempotent (phase 14 C8): an already-running manager returns immediately;
+restart requires stop-cluster-manager first."
+  (when (cluster-threads m)
+    ;; C8 (phase 14): already running — idempotent no-op. The previous
+    ;; behavior overwrote the thread list, orphaning the old threads.
+    ;; Restarting requires stop-cluster-manager first.
+    (return-from start-cluster-manager m))
   (setf (cluster-running m) t
         (cluster-threads m)
         (list (bordeaux-threads:make-thread

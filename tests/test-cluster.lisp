@@ -749,3 +749,27 @@ hanging the leave below)."
       (is (= 1 (mtt/cluster::%stop-tick-threads m)))
       (is (>= (get-universal-time) (+ start 2)))     ; waited the deadline
       (is (< (get-universal-time) (+ start 10))))))  ; but bounded by it
+
+;;; --- Phase 14 C8: start-cluster-manager idempotent -------------------------------
+
+(test cluster.start-idempotent-no-orphans
+  "C8: a second start-cluster-manager returns the manager with the SAME
+thread list — the old call overwrote the slot, orphaning the previous three
+threads (they kept ticking on a manager the operator believed restarted)."
+  (with-test-redis (conn port)
+    (let* ((s (%worker-server port))
+           (m (make-cluster-manager :server s :worker-id "w-id"
+                                    :redis-host "127.0.0.1" :redis-port port
+                                    :prefix "t-id:" :heartbeat-interval 0.2
+                                    :scan-interval 0.2 :takeover-interval 0.2)))
+      (unwind-protect
+           (progn
+             (start-cluster-manager m)
+             (let ((before (cluster-threads m)))
+               (sleep 0.3)
+               (start-cluster-manager m)
+               (is (= 3 (length (cluster-threads m))))
+               (is (eq before (cluster-threads m))))
+             (is (find "w-id" (redis:red-smembers "t-id:workers") :test #'string=)))
+        (stop-cluster-manager m)
+        (stop-tutor-server s)))))
