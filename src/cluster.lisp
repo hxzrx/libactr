@@ -12,7 +12,7 @@
   (:export
    ;; ===== 服务层接口:manager(worker 编排本体) =====
    ;; 库消费者经 make/start/stop-cluster-manager 进入;slot readers
-   ;; (cluster-server/worker-id/threads)为只读检视。实例持全部状态。
+   ;; (cluster-server/worker-id)为只读检视,cluster-threads 为 accessor。实例持全部状态。
    #:cluster-manager #:cluster-manager-p
    #:make-cluster-manager #:start-cluster-manager #:stop-cluster-manager
    #:cluster-server #:cluster-worker-id

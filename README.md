@@ -227,16 +227,19 @@ single-steppable (`cluster-heartbeat-tick` etc.) for deterministic tests.
 | `mtt/addition-tutor` | Reference example tutor (act-r tutorial addition model + buggy library + KC map) | `mtt` |
 | `mtt/fraction-tutor`, `mtt/past-tense-tutor`, `mtt/subtraction-tutor` | Domain tutors: model load + buggy library + declarative KC attribution | `mtt` |
 | `mtt/addition-adapter`, `mtt/fraction-adapter`, `mtt/past-tense-adapter`, `mtt/subtraction-adapter` | Domain adapters — the domain brain on the `standard-domain-adapter` base | `mtt/server` + the matching tutor |
-| `mtt/test`, `mtt/server-test`, `mtt/*-adapter-test`, `mtt/*-tutor-test`, `mtt/redis-store-test`, `mtt/empirical-test`, `mtt/cluster-test` | FiveAM suites | fiveam (+ dexador, cl-redis where the layer needs them) |
+| `mtt/test`, `mtt/redis-store-test`, `mtt/empirical-test`, `mtt/cluster-test` | FiveAM suites (suite name = system name minus `-test`) | fiveam (+ cl-redis where the layer needs it) |
+| `mtt/server-test`, `mtt/*-adapter-test`, `mtt/*-tutor-test` | FiveAM suites joining `:mtt/server` — NOTE: the full server count requires loading the FOUR `*-adapter-test` systems first (fraction, addition, past-tense, subtraction — they share the suite) | fiveam, dexador |
 | `mtt/dual` | Dual-track regression (joins the `:mtt` suite with the oracle loaded) | `mtt/test`, `mtt/oracle` |
 | `mtt/concurrent` | Concurrent-isolation proof (joins the `:mtt` suite with bordeaux loaded) | `mtt/test`, bordeaux-threads |
 | `mtt/image` | Portable image-dump smoke | `mtt` |
 
 ## Domains shipped
 
-Each domain = a model in `models/` + a tutor (`examples/`, model load +
-buggy library + KC map) + an adapter (`src/`, the domain brain: action
-parsing, arithmetic, bug detection, retrieval priming).
+Each domain = a model + a tutor (`examples/`, model load + buggy library + KC
+map) + an adapter (`src/`, the domain brain: action parsing, arithmetic, bug
+detection, retrieval priming). The model lives in `models/<domain>.lisp` for
+fraction / past-tense / subtraction; addition reuses the act-r tutorial
+model (loaded via `mtt/addition-tutor`'s `examples/addition-tutor.lisp`).
 
 - **addition** — counting-on strategy (act-r tutorial model); a `next-total`
   action drives a visible `increment-sum` + hidden `increment-count` pair.

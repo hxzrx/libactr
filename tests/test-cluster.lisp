@@ -85,7 +85,7 @@ logs (the cluster deployment shape, spec §5.4)."
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w1"
                                     :redis-host "127.0.0.1" :redis-port port
-                                    :prefix "t-hb:")))
+                                    :prefix "t-hb:" :heartbeat-ttl 15)))
       (unwind-protect
            (progn
              (cluster-join m)
@@ -99,7 +99,7 @@ logs (the cluster deployment shape, spec §5.4)."
              ;; lease from the TEST makes before a positive ttl independent of
              ;; the tick fn, so a no-ttl refresh reads -1 and -1 >= 15 is RED —
              ;; the brief's own predicted mechanism.]
-             (let ((before (progn (redis:red-setex "t-hb:worker:w1" 15 "seed") ; 15 = default heartbeat-ttl
+             (let ((before (progn (redis:red-setex "t-hb:worker:w1" 15 "seed") ; 15 = the explicit :heartbeat-ttl above (decoupled from any default)
                                   (redis:red-ttl "t-hb:worker:w1"))))
                (sleep 1.2)
                (cluster-heartbeat-tick m)
@@ -948,3 +948,73 @@ NON-sticky implementation would deterministically pick the OTHER worker
         (stop-cluster-manager m2)
         (stop-tutor-server s1)
         (stop-tutor-server s2)))))
+
+(test proxy.no-retry-when-route-unchanged
+  "cosmetic#5: on a transport failure with an UNCHANGED route, the proxy
+makes exactly ONE connection attempt before 503 — the must-change condition
+prevents a redundant retry to the same dead worker. A counting listener is
+the sentinel (the plain 503 assertion cannot distinguish no-retry from
+retry-to-same-worker-fails-again)."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-rr:"))
+           (sid (progn (cluster-join m1)
+                       (let ((sid (server-start-session s1 "rr" "52-18" "sub")))
+                         (redis:red-hset (uiop:strcat "t-rr:sess:" sid) "worker" "w1")
+                         sid)))
+           (count 0)
+           (sentinel-port (%find-free-port))
+           (sentinel-sock (usocket:socket-listen "127.0.0.1" sentinel-port
+                                                 :reuse-address t))
+           (sentinel-th (bordeaux-threads:make-thread
+                         (lambda ()
+                           (loop :repeat 4 :do
+                             (ignore-errors
+                              (let ((c (usocket:socket-accept sentinel-sock)))
+                                (incf count)
+                                (usocket:socket-close c)))))))
+           (p (make-tutor-proxy :port (%find-free-port)
+                                :redis-host "127.0.0.1" :redis-port port
+                                :prefix "t-rr:")))
+      (unwind-protect
+           (progn
+             ;; the route's "worker" is a ghost whose metadata points at the
+             ;; counting listener (accepts then drops -> transport failure)
+             (let ((h (make-hash-table :test 'equal)))
+               (setf (gethash "host" h) "127.0.0.1"
+                     (gethash "port" h) sentinel-port)
+               (redis:red-set (uiop:strcat "t-rr:worker:ghost")
+                              (with-output-to-string (out) (yason:encode h out))))
+             (redis:red-hset (uiop:strcat "t-rr:sess:" sid) "worker" "ghost")
+             (multiple-value-bind (body status)
+                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                        (format nil
+                                "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
+                                sid))
+               (declare (ignore body))
+               (is (= 503 status))
+               (is (= 1 count))))                    ; exactly one attempt
+        ;; [deviation from brief, repro-evidenced (SBCL 2.6.8/Linux, isolated
+        ;; repro: join-thread on a thread blocked in accept(2) does not return
+        ;; after socket-close): the brief's close-then-join cleanup hangs —
+        ;; closing the listening socket does NOT wake a blocked accept. The
+        ;; doom test's close-then-join works only because its thread is
+        ;; ONE-SHOT (already finished by cleanup). Fix: flush this counting
+        ;; LOOP with dummy connections (each consumes exactly one accept; the
+        ;; TCP backlog completes the handshake even while the thread is
+        ;; between accepts) until the thread exits, then close+join (join on
+        ;; a finished thread is instant). Assertions have already run, so the
+        ;; extra counted accepts are harmless.]
+        (ignore-errors
+          (loop :while (bordeaux-threads:thread-alive-p sentinel-th)
+                :do (ignore-errors
+                      (usocket:socket-close
+                       (usocket:socket-connect "127.0.0.1" sentinel-port)))
+                    (sleep 0.05)))
+        (ignore-errors (usocket:socket-close sentinel-sock))
+        (ignore-errors (bordeaux-threads:join-thread sentinel-th))
+        (stop-tutor-proxy p)
+        (stop-cluster-manager m1)
+        (stop-tutor-server s1)))))
