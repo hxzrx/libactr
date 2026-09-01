@@ -94,35 +94,43 @@ compiled model serves any verb). Returns the session."
   incl. unknown verbs — design behavior)."
   (flet ((gi (name) (mtt:adapter-intern a name)))
     (let* ((type (cdr (assoc "type" action :test #'string=)))
-           (answer (string-upcase (cdr (assoc "value" action :test #'string=))))
-           (verb-sym (mtt:adapter-goal-slot a session "VERB"))
-           (verb (and verb-sym (symbol-name verb-sym))))
-      (unless (string= type "answer")
-        (mtt:signal-bad-request "mtt/past-tense-adapter: unknown action type ~a" type))
-      (multiple-value-bind (regular-p correct) (mtt/past-tense-tutor:verb-info verb)
-        (let ((answer-sym (mtt:adapter-intern a answer)))
-          (labels ((intent () `((,(gi "GOAL") ,(gi "PAST") ,answer-sym))))
-            (cond
-              ;; 1-2 correct: verb-fact whose class slot literal routes the
-              ;; production (regular -> apply-regular, irregular ->
-              ;; retrieve-irregular); spec §3 amended (isa is not tested by
-              ;; act-r in buffer conditions, class IS in both engines).
-              ((and correct (string= answer correct))
-               (mtt:adapter-primed-intent
-                a (intent)
-                (mtt:adapter-fact a "VERB-FACT"
-                                  :verb verb-sym
-                                  :class (gi (if regular-p "REGULAR" "IRREGULAR"))
-                                  :past answer-sym)))
-              ;; 3-5 bugs via the DSL; 6 unclassified (incl. unknown verbs)
-              (t
-               (let* ((answers (list answer-sym))
-                      (env (append (list (cons (gi "REGULAR-P") regular-p)
-                                         (cons (gi "KNOWN-P") (and correct t)))
-                                   (mtt:bug-goal-env a session)))
-                      (spec (mtt:detect-bug (mtt/past-tense-tutor:bug-specs)
-                                            answers env
-                                            :predicates (bug-predicates))))
-                 (if spec
-                     (mtt:bug-intent a session spec answers)
-                     (mtt:make-step-intent :assignments (intent))))))))))))
+           (raw-answer (cdr (assoc "value" action :test #'string=))))
+      ;; B1 (phase 14): missing value / unset verb were TYPE-ERROR 500s.
+      (unless raw-answer
+        (mtt:signal-bad-request
+         "mtt/past-tense-adapter: answer action is missing \"value\""))
+      (let* ((answer (string-upcase raw-answer))
+             (verb-sym (mtt:adapter-goal-slot a session "VERB")))
+        (unless verb-sym
+          (mtt:signal-bad-request
+           "mtt/past-tense-adapter: goal VERB is unset (session not prepared?)"))
+        (let ((verb (symbol-name verb-sym)))
+          (unless (string= type "answer")
+            (mtt:signal-bad-request "mtt/past-tense-adapter: unknown action type ~a" type))
+          (multiple-value-bind (regular-p correct) (mtt/past-tense-tutor:verb-info verb)
+            (let ((answer-sym (mtt:adapter-intern a answer)))
+              (labels ((intent () `((,(gi "GOAL") ,(gi "PAST") ,answer-sym))))
+                (cond
+                  ;; 1-2 correct: verb-fact whose class slot literal routes the
+                  ;; production (regular -> apply-regular, irregular ->
+                  ;; retrieve-irregular); spec §3 amended (isa is not tested by
+                  ;; act-r in buffer conditions, class IS in both engines).
+                  ((and correct (string= answer correct))
+                   (mtt:adapter-primed-intent
+                    a (intent)
+                    (mtt:adapter-fact a "VERB-FACT"
+                                      :verb verb-sym
+                                      :class (gi (if regular-p "REGULAR" "IRREGULAR"))
+                                      :past answer-sym)))
+                  ;; 3-5 bugs via the DSL; 6 unclassified (incl. unknown verbs)
+                  (t
+                   (let* ((answers (list answer-sym))
+                          (env (append (list (cons (gi "REGULAR-P") regular-p)
+                                             (cons (gi "KNOWN-P") (and correct t)))
+                                       (mtt:bug-goal-env a session)))
+                          (spec (mtt:detect-bug (mtt/past-tense-tutor:bug-specs)
+                                                answers env
+                                                :predicates (bug-predicates))))
+                     (if spec
+                         (mtt:bug-intent a session spec answers)
+                         (mtt:make-step-intent :assignments (intent))))))))))))))

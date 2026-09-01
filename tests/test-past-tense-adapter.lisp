@@ -244,3 +244,15 @@ invalid. The explicit loop re-checks the same specs directly."
       (is (null errors)
           "past-tense spec ~a: ~{~a~^; ~}"
           (mtt:bug-spec-name spec) errors))))
+
+;;; --- Phase 14 Task 12: B1 missing-field action is a bad request (500 -> 400) --
+
+(test past-tense-adapter.missing-value-is-bad-request
+  "B1: an answer action missing \"value\" signals bad-tutor-request
+(string-upcase of nil used to TYPE-ERROR -> 500)."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "oo" "go" "pt")))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session s sid '(("type" . "answer")))))
+      (mtt/server:stop-tutor-server s))))

@@ -270,3 +270,20 @@ and 400 over the handler (phase 12 debt #1/#2)."
              (%step s sid 3)
              (signals mtt:bad-tutor-request (%step s sid 9))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 14 Task 12: B1 audit fixture (out-of-order shapes already guarded) --
+
+(test subtraction-adapter.out-of-order-already-400
+  "B1 audit fixture: subtraction's out-of-order shapes are already guarded —
+  a digit after DONE and a missing value both signal bad-tutor-request."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "oo" "52-18" "sub")))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session s sid '(("type" . "digit")))) ; no value
+           (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "4"))) ; ones
+           (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "3"))) ; tens -> done
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session
+              s sid '(("type" . "digit") ("value" . "1")))))              ; stage DONE
+      (mtt/server:stop-tutor-server s))))

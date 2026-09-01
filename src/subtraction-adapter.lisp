@@ -78,8 +78,15 @@ bad-tutor-request (400 over HTTP)."
 
 (defun %action-int (action)
   "The student's reported value (an integer digit; always-borrow answers may
-be two-digit, e.g. 13). A non-integer value signals bad-tutor-request."
+be two-digit, e.g. 13). A missing or non-integer value signals
+bad-tutor-request. B1 (phase 14): the missing entry is checked explicitly —
+(parse-integer nil) signals a TYPE-ERROR in SBCL (nil is not a string), NOT a
+parse-error, so the handler-case alone let it escape as a 500 (the phase-14
+audit's parse-error assumption was falsified by the RED run)."
   (let ((raw (cdr (assoc "value" action :test #'string=))))
+    (unless raw
+      (mtt:signal-bad-request
+       "mtt/subtraction-adapter: action ~s is missing the \"value\" entry" action))
     (handler-case (parse-integer raw)
       (parse-error ()
         (mtt:signal-bad-request

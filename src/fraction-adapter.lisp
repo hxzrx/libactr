@@ -111,6 +111,12 @@ the matching fact (lcm-fact / sum-fact / reduce-fact / bug-fact). See spec §6."
                     (mtt:make-step-intent
                      :assignments `((,(gi "GOAL") ,(gi "CDENOM") ,student)))))))))
         ((string= type "sum")
+         ;; B1 (phase 14): out-of-order guard — cdenom unset means the
+         ;; common-denominator step has not run; (/ cdenom den1) on nil was
+         ;; a TYPE-ERROR 500.
+         (unless cdenom
+           (mtt:signal-bad-request
+            "mtt/fraction-adapter: \"sum\" submitted before the common-denominator step"))
          (let* ((ssnum (%action-int action "num"))
                 (ssdenom (%action-int action "denom"))
                 (cnum1 (* num1 (/ cdenom den1)))
@@ -138,23 +144,28 @@ the matching fact (lcm-fact / sum-fact / reduce-fact / bug-fact). See spec §6."
          (let* ((rnum (%action-int action "num"))
                 (rdenom (%action-int action "denom"))
                 (snum (mtt:adapter-goal-slot a session "SNUM"))
-                (sdenom (mtt:adapter-goal-slot a session "SDENOM"))
-                (g (%gcd snum sdenom)))
-           (cond
-             ((and (> g 1) (= rnum (/ snum g)) (= rdenom (/ sdenom g)))
-              (mtt:adapter-primed-intent
-               a
-               `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
-                 (,(gi "GOAL") ,(gi "RDENOM") ,rdenom))
-               (mtt:adapter-fact a "REDUCE-FACT"
-                                 :num snum :den sdenom :rnum rnum :rdenom rdenom)))
-             ((= g 1)
-              (mtt:signal-bad-request
-               "mtt/fraction-adapter: the sum is already in lowest terms — no simplify step for this problem"))
-             (t                            ; wrong reduction: unclassified off-path
-              (mtt:make-step-intent
-               :assignments `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
-                              (,(gi "GOAL") ,(gi "RDENOM") ,rdenom)))))))
+                (sdenom (mtt:adapter-goal-slot a session "SDENOM")))
+           ;; B1 (phase 14): out-of-order guard — %gcd nil nil was a
+           ;; TYPE-ERROR 500.
+           (unless (and snum sdenom)
+             (mtt:signal-bad-request
+              "mtt/fraction-adapter: \"simplify\" submitted before the sum step"))
+           (let ((g (%gcd snum sdenom)))
+             (cond
+               ((and (> g 1) (= rnum (/ snum g)) (= rdenom (/ sdenom g)))
+                (mtt:adapter-primed-intent
+                 a
+                 `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
+                   (,(gi "GOAL") ,(gi "RDENOM") ,rdenom))
+                 (mtt:adapter-fact a "REDUCE-FACT"
+                                   :num snum :den sdenom :rnum rnum :rdenom rdenom)))
+               ((= g 1)
+                (mtt:signal-bad-request
+                 "mtt/fraction-adapter: the sum is already in lowest terms — no simplify step for this problem"))
+               (t                            ; wrong reduction: unclassified off-path
+                (mtt:make-step-intent
+                 :assignments `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
+                                (,(gi "GOAL") ,(gi "RDENOM") ,rdenom))))))))
         (t
          (mtt:signal-bad-request "mtt/fraction-adapter: unknown action type ~a" type))))))
 
