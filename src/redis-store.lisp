@@ -81,10 +81,13 @@ tightening: the VALUES must carry the tag's types as well — sym is a string
 (uninterned symbols write pkg as JSON null). WIRE CONTRACT (phase-14 spec
 §6): business summaries are POSITIONAL lists (JSON arrays) and never produce
 a 2-key sym/pkg object — a decoded object of exactly this shape IS a symbol
-tag."
+tag. Signal-free (final review): LENGTH would TYPE-ERROR on an improper
+list, so the 2-element shape is checked structurally (CONSP/NULL on the
+cdrs) — a dotted-tail cons whose first cell is (\"sym\" . _) returns NIL,
+never signals; assoc then only ever runs on proper 2-lists."
   (and (consp x)
        (consp (first x)) (stringp (caar x))
-       (= 2 (length x))
+       (consp (rest x)) (null (rest (rest x)))   ; = a proper 2-list, signal-free
        (let ((sym (cdr (assoc "sym" x :test #'string=)))
              (pkg-cell (assoc "pkg" x :test #'string=)))
          (and (stringp sym)
@@ -99,7 +102,8 @@ degrades that entry to the symbol-NAME STRING (never an error). Vectors map
 recursively to lists; every other atom (strings included) passes through —
 legacy rows decode exactly as before. NOTE: unlike the old %coerce-to-list,
 STRINGS pass through as strings (a string IS a vector; mapping over it
-produced the phase-10 char-list tree)."
+produced the phase-10 char-list tree). Circular structure is not handled
+(the same honest exclusion as validate-bug-spec)."
   (cond
     ((and (consp tree) (%sym-tag-p tree))
      (let* ((sym (cdr (assoc "sym" tree :test #'string=)))
@@ -107,21 +111,17 @@ produced the phase-10 char-list tree)."
        (if (and pkg sym) (intern sym pkg) sym)))
     ((stringp tree) tree)                       ; strings pass through (string IS a vector)
     ((vectorp tree) (map 'list #'untag-symbols tree))
+    ;; C6 (phase 14): dotted-safe structural walk — the outer cond's first
+    ;; clause already handled tags, so every cons here is a NON-tag (e.g. a
+    ;; 2-key sym/pkg object with non-string values) that passes through with
+    ;; its shape intact; mapcar on a dotted pair would TYPE-ERROR.
     ((consp tree)
-     (if (%sym-tag-p tree)
-         (let* ((sym (cdr (assoc "sym" tree :test #'string=)))
-                (pkg (find-package (cdr (assoc "pkg" tree :test #'string=)))))
-           (if (and pkg sym) (intern sym pkg) sym))
-         ;; C6 (phase 14): dotted-safe structural walk — a non-tag alist
-         ;; (e.g. a 2-key sym/pkg object with non-string values) passes
-         ;; through with its shape intact; mapcar on a dotted pair would
-         ;; TYPE-ERROR.
-         (let ((vals nil) (tail tree))
-           (loop :while (consp tail)
-                 :do (push (untag-symbols (car tail)) vals)
-                     (setf tail (cdr tail)))
-           (let ((head (nreverse vals)))
-             (if tail (nconc head (untag-symbols tail)) head)))))
+     (let ((vals nil) (tail tree))
+       (loop :while (consp tail)
+             :do (push (untag-symbols (car tail)) vals)
+                 (setf tail (cdr tail)))
+       (let ((head (nreverse vals)))
+         (if tail (nconc head (untag-symbols tail)) head))))
     (t tree)))
 
 (defun log-event-to-json (e)

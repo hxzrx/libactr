@@ -873,7 +873,14 @@ students-lock WITHOUT ending the session (no end-event) and is idempotent."
              (register-model s "add" md adapter))
            (let ((sid (server-start-session s "dz" "5+2" "add")))
              (is (gethash sid (server-sessions s)))
-             (is (string= sid (mtt/server:server-drop-session s sid)))
+             ;; Pin the no-end-event contract (final review): dropping the
+             ;; handle must NOT append to the student's shared event log.
+             (let* ((ss (gethash "dz" (server-students s)))
+                    (before (length (mtt:log-all-events
+                                     (mtt:student-session-log ss)))))
+               (is (string= sid (mtt/server:server-drop-session s sid)))
+               (is (= before (length (mtt:log-all-events
+                                      (mtt:student-session-log ss))))))
              (is (null (gethash sid (server-sessions s))))
              (is (null (mtt/server:server-drop-session s sid)))))  ; idempotent
       (stop-tutor-server s))))

@@ -438,10 +438,12 @@ return old"
 (defun cluster-takeover-tick (m)
   "One takeover scan: find workers in the registry whose lease key has
 expired (simulated cleanly by a DEL in tests — what TTL expiry does), then for
-each sid in their reverse index: atomically claim (SETNX+EXPIRE), skip on a
-local sid collision (warning), skip when no checkpoint exists (route stays —
-the proxy 503s and the client restarts), else adopt. Returns (values taken
-dead-worker-ids).
+each sid in their reverse index: claim it as ONE atomic Lua unit (crash-residue
+reclaim + SETNX + EXPIRE); load the checkpoint BEFORE the local-collision
+check — no checkpoint drops the claim (route stays: the proxy 503s and the
+client restarts); a local sid collision retries via the five-field checkpoint
+marker (own half-adopt) or skips with a warning (foreign); otherwise adopt.
+Returns (values taken dead-worker-ids).
 
 [deviation from brief, lock-discipline-mandated (Task 8 ruling): the brief
 wrapped the whole tick in ONE with-cluster-redis and called
@@ -497,19 +499,23 @@ return 0"
                 ;; checkpoint -> drop; local sid occupied -> OUR half-adopt
                 ;; (marker matches) retries the idempotent flip, a foreign
                 ;; collision skips with a warning; else adopt.
-                (let ((cp (load-checkpoint (cluster-store m) sid)))
+                ;; Single gethash read (final review): the previous shape read
+                ;; the sessions table twice (test + marker arm) — a TOCTOU
+                ;; window if the table changed between the two reads.
+                (let* ((cp (load-checkpoint (cluster-store m) sid))
+                       (h (and cp (gethash sid
+                                          (mtt/server:server-sessions
+                                           (cluster-server m))))))
                   (cond
                     ((null cp) (drop-claim sid))
-                    ((gethash sid (mtt/server:server-sessions (cluster-server m)))
-                     (let ((h (gethash sid (mtt/server:server-sessions (cluster-server m)))))
-                       (if (%checkpoint-matches-session-p
+                    (h (if (%checkpoint-matches-session-p
                             cp (mtt:checkpoint-session (mtt/server:handle-session h)))
                            (progn (cluster-adopt-session m sid cp w) (incf taken))
                            (progn
                              (format *error-output*
                                      "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%"
                                      sid)
-                             (drop-claim sid)))))
+                             (drop-claim sid))))
                     (t (cluster-adopt-session m sid cp w) (incf taken)))))
             ;; Isolation (final review): one poisoned sid (unreadable
             ;; checkpoint, unregistered model-id, ...) must not abort the
@@ -559,6 +565,9 @@ before the asserted lower bound. Deadline computed in INTEGER seconds
             :do (sleep 0.05))
       (when (bordeaux-threads:thread-alive-p th)
         (incf destroyed)
+        (format *error-output*
+                "mtt/cluster: stop deadline reached — destroying tick thread ~a (it may hold the redis lock mid-command)~%"
+                (bordeaux-threads:thread-name th))
         (ignore-errors (bordeaux-threads:destroy-thread th))))
     destroyed))
 
