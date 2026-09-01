@@ -188,6 +188,24 @@ production names) — the Task-1 codec reused (spec §7)."
                           (getf back :path)))))
         (stop-tutor-server s)))))
 
+(test cluster.checkpoint-nil-fields-round-trip-faithfully
+  "cosmetic#4: the redis codec round-trips step_count/last_seq with fidelity
+(nil -> null -> nil, 0 -> 0) — same semantics as the memory backend; the
+integer normalization moved to the consumer (restore-from-checkpoint)."
+  (with-test-redis (conn port)
+    (let ((store (make-redis-checkpoint-store :prefix "t-nl:"
+                                              :host "127.0.0.1" :port port)))
+      (dolist (cp (list (list :session-id "s" :student-id "st" :problem-id "p"
+                              :model-id "m" :step-count nil :last-seq nil
+                              :status :active :state nil :path nil)
+                        (list :session-id "s" :student-id "st" :problem-id "p"
+                              :model-id "m" :step-count 3 :last-seq 7
+                              :status :active :state nil :path nil)))
+        (save-checkpoint store "s" cp)
+        (let ((back (load-checkpoint store "s")))
+          (is (equal (getf cp :step-count) (getf back :step-count)))
+          (is (equal (getf cp :last-seq) (getf back :last-seq))))))))
+
 (test cluster.scan-tick-checkpoints-active-sessions
   "One scan pass: the local active session gains a ckpt:<sid> entry under the
 manager's prefix; a second pass after end (handle gone) reconciles

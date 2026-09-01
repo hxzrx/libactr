@@ -230,8 +230,11 @@ symbols tagged via mtt:tag-symbols — numbers/strings pass through)."
     (dolist (k '(("session_id" . :session-id) ("student_id" . :student-id)
                  ("problem_id" . :problem-id) ("model_id" . :model-id)))
       (setf (gethash (car k) h) (mtt:tag-symbols (getf cp (cdr k)))))
-    (setf (gethash "step_count" h) (or (getf cp :step-count) 0)
-          (gethash "last_seq" h) (or (getf cp :last-seq) 0)
+    ;; cosmetic#4 (phase 14): fidelity, not normalization — nil encodes as
+    ;; JSON null and reads back nil (same semantics as the memory backend);
+    ;; the integer default lives in restore-from-checkpoint.
+    (setf (gethash "step_count" h) (getf cp :step-count)
+          (gethash "last_seq" h) (getf cp :last-seq)
           (gethash "status" h) (mtt:tag-symbols (getf cp :status)))
     ;; :state entries are (buffer isa . slots-alist) — SBCL-probe verified:
     ;; serialize-buffer-state conses the buffer name onto serialize-chunk's
@@ -272,9 +275,9 @@ intern, arrays of tags map to lists, scalars pass through.]"
           :student-id (un (ag "student_id" json))
           :problem-id (un (ag "problem_id" json))
           :model-id   (un (ag "model_id" json))
-          :step-count (or (ag "step_count" json) 0)
+          :step-count (ag "step_count" json)
           :status     (un (ag "status" json))
-          :last-seq   (or (ag "last_seq" json) 0)
+          :last-seq   (ag "last_seq" json)
           :state      (map 'list
                            (lambda (e)
                              (cons (un (ag "buffer" e))

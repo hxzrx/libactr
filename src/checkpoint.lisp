@@ -60,6 +60,9 @@ resets to :active so the session can continue stepping."
                           :problem-id (getf checkpoint :problem-id)
                           :model-id (getf checkpoint :model-id)
                           :session-id (getf checkpoint :session-id))))
+    ;; cosmetic#4 (phase 14): the integer default lives HERE (the consumer),
+    ;; not in the codec — getf's default only fires on an ABSENT key, while a
+    ;; checkpoint restored via the redis codec can carry an explicit nil.
     (setf (session-path s) (getf checkpoint :path)
-          (session-step-count s) (getf checkpoint :step-count 0))
+          (session-step-count s) (or (getf checkpoint :step-count) 0))
     s))  ; status defaults to :active (initform)

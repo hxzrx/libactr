@@ -52,3 +52,15 @@
         ;; but the log retains BOTH steps (mastery recomputation lossless)
         (is (eql 2 (length (log-all-events log))))
         (is (equal '(1 2) (mapcar #'log-event-seq (log-all-events log))))))))
+
+(test checkpoint-restore-normalizes-nil-step-count
+  "cosmetic#4: the integer default lives at the CONSUMER —
+restore-from-checkpoint yields step-count 0 for a present-but-nil field
+(the redis codec now round-trips nil faithfully)."
+  (let* ((md (addition-compiled-model))
+         (restored (restore-from-checkpoint
+                    (list :session-id 's2 :student-id 'alice :problem-id 'p
+                          :model-id 'm :step-count nil :last-seq nil
+                          :status :active :state nil :path nil)
+                    md)))
+    (is (= 0 (session-step-count restored)))))
