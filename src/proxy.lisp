@@ -184,12 +184,27 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
          (live (proxy-live-workers p)))
     (cond
       ((null live) (%respond "{\"error\":\"no live workers\"}" 503))
-      (t (let* (;; [hardening, Task 8 ruling: the round-robin cursor bumps under
-                ;; the instance lock — thread-per-connection handlers would
-                ;; otherwise race the incf.]
-                (idx (bordeaux-threads:with-lock-held ((proxy-redis-lock p))
-                       (incf (proxy-rr p))))
-                (w (nth (mod idx (length live)) live))
+      (t (let* ((sticky (and student-id
+                              (nth-value 0
+                                (with-proxy-redis (p)
+                                  (cluster-route-get
+                                   (uiop:strcat (proxy-prefix p) "student:" student-id))))))
+                ;; A5 (phase 14): an existing LIVE route for this student wins
+                ;; over round-robin — the worker's own same-student
+                ;; idempotency returns the active session, so a repeat start
+                ;; can no longer open a second session on another worker and
+                ;; overwrite the student route. A dead/stale route (worker
+                ;; metadata gone) falls through to round-robin.
+                (w (or (and sticky
+                            (find sticky live :key #'first :test #'string=))
+                       ;; [hardening, Task 8 ruling: the round-robin cursor
+                       ;; bumps under the instance lock — thread-per-connection
+                       ;; handlers would otherwise race the incf.]
+                       (nth (mod (bordeaux-threads:with-lock-held
+                                     ((proxy-redis-lock p))
+                                   (incf (proxy-rr p)))
+                                 (length live))
+                            live)))
                 (url (format nil "http://~a:~a/session/start"
                              (second w) (third w))))
            (multiple-value-bind (body status)
@@ -239,7 +254,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
     (let ((ss (mtt:start-student-session
                student-id
                :event-log (mtt:make-redis-event-log
-                           :key (format nil "mtt:student:~a:events" student-id)
+                           :key (mtt/server:student-events-key student-id)
                            :host (proxy-redis-host p) :port (proxy-redis-port p)))))
       (unwind-protect
            (let* ((events (mtt:log-all-events (mtt:student-session-log ss)))
@@ -250,7 +265,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
                  (%respond
                   (%json (list :student_id student-id
                                :kc (mapcar (lambda (x)
-                                             (list :kc (princ-to-string (getf x :kc))
+                                             (list :kc (mtt/server:kc->json (getf x :kc))
                                                    :correct (getf x :correct)
                                                    :total (getf x :total)
                                                    :accuracy (getf x :accuracy)

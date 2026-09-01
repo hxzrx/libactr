@@ -84,8 +84,13 @@ All failures signal bad-tutor-request (400 over HTTP)."
 (defun %action-value (action a)
   "Read the \"value\" entry of ACTION (an alist with string keys, as decoded by
 the HTTP layer) and intern it as a model-package uppercase symbol via the base
-adapter-intern."
-  (mtt:adapter-intern a (string-upcase (cdr (assoc "value" action :test #'string=)))))
+adapter-intern. B1 (phase 14): a missing value entry signals bad-tutor-request
+(string-upcase of nil used to reach a TYPE-ERROR -> HTTP 500)."
+  (let ((raw (cdr (assoc "value" action :test #'string=))))
+    (unless raw
+      (mtt:signal-bad-request
+       "mtt/addition-adapter: action ~s is missing the \"value\" entry" action))
+    (mtt:adapter-intern a (string-upcase raw))))
 
 ;;; --- adapter protocol ---
 
@@ -127,27 +132,37 @@ PRIME slot (Phase 6 multi-step). Action types:
          ;; the visible, student-facing step.
          (let* ((val           (%action-value action a))
                 (current-sum   (mtt:adapter-goal-slot a session "SUM"))
-                (current-count (mtt:adapter-goal-slot a session "COUNT"))
-                (newcount      (mtt/addition-tutor:dm-next
-                                (mtt:session-model session) current-count)))
-           (list
-            ;; step 1 (visible): increment-sum. retrieval prime = number(current-sum).
-            (mtt:adapter-primed-intent
-             a
-             `((,(gi "GOAL") ,(gi "SUM") ,val))
-             (mtt:adapter-fact a "NUMBER" :number current-sum
-                               :next (mtt/addition-tutor:dm-next (mtt:session-model session) current-sum)))
-            ;; step 2 (bookkeeping): increment-count. retrieval prime = number(current-count).
-            (mtt:adapter-primed-intent
-             a
-             `((,(gi "GOAL") ,(gi "COUNT") ,newcount))
-             (mtt:adapter-fact a "NUMBER" :number current-count :next newcount)))))
+                (current-count (mtt:adapter-goal-slot a session "COUNT")))
+           ;; B1 (phase 14): out-of-order guard — before "start" both slots
+           ;; are nil and dm-next would prime number-facts with nil slots.
+           (unless (and current-sum current-count)
+             (mtt:signal-bad-request
+              "mtt/addition-adapter: \"next-total\" submitted before the \"start\" action"))
+           (let ((newcount (mtt/addition-tutor:dm-next
+                            (mtt:session-model session) current-count)))
+             (list
+              ;; step 1 (visible): increment-sum. retrieval prime = number(current-sum).
+              (mtt:adapter-primed-intent
+               a
+               `((,(gi "GOAL") ,(gi "SUM") ,val))
+               (mtt:adapter-fact a "NUMBER" :number current-sum
+                                 :next (mtt/addition-tutor:dm-next (mtt:session-model session) current-sum)))
+              ;; step 2 (bookkeeping): increment-count. retrieval prime = number(current-count).
+              (mtt:adapter-primed-intent
+               a
+               `((,(gi "GOAL") ,(gi "COUNT") ,newcount))
+               (mtt:adapter-fact a "NUMBER" :number current-count :next newcount))))))
         ((string= type "submit")
          ;; terminate-addition: LHS needs count=arg2, sum=answer, retrieval
          ;; number=answer. Prime retrieval with the current sum (the answer),
          ;; bundled on the intent's PRIME slot (server installs it).
-         (let ((val (%action-value action a))
-               (current-sum (mtt:adapter-goal-slot a session "SUM")))
+         (let* ((val (%action-value action a))
+                (current-sum (mtt:adapter-goal-slot a session "SUM")))
+           ;; B1 (phase 14): out-of-order guard — before "start" SUM is nil and
+           ;; the number-fact prime would carry a nil :number slot.
+           (unless current-sum
+             (mtt:signal-bad-request
+              "mtt/addition-adapter: \"submit\" submitted before the \"start\" action"))
            (mtt:adapter-primed-intent
             a
             `((,(gi "GOAL") ,(gi "COUNT") nil)

@@ -3,6 +3,34 @@
 All notable changes to mtt are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
+## 0.3.0 (2026-08-31) — engine residual hardening
+
+All phase-13 final-review residuals closed at library-consumer standard.
+
+- **A1** zombie self-check: a recovered falsely-dead worker drops local
+  handles adopted away (new exported `server-drop-session`); in-flight-at-flip
+  log interleaving stays a documented bounded contract.
+- **A2** `make-session-id` cross-process uniqueness (time + sub-second +
+  gensym; fresh images used to collide).
+- **A3/A4** atomic claim + atomic route-flip (single Lua EVAL each); the
+  stranded-adopt retry closes via a five-field checkpoint marker.
+- **A5** sticky proxy start (same student -> same worker/session_id).
+- **B1** out-of-order/missing-field actions are 400 (`bad-tutor-request`),
+  was 500; **B2** `validate-bug-spec` never signals on dotted entries.
+- **C1-C8** tick error visibility, poll-join stop, `student-events-key`
+  single source, exported `kc->json`, strict route-epoch parse, tightened
+  symbol-tag predicate (+ wire contract), spec-gate sad-path coverage,
+  idempotent `start-cluster-manager`.
+- Cosmetic: checkpoint codec fidelity (normalization at the consumer),
+  retry sentinel test, e2e launch-in-protect, README/alignment polish.
+- New exports: `mtt/server:kc->json`, `mtt/server:student-events-key`,
+  `mtt/server:server-drop-session`. `make-session-id` output format changed
+  (opaque to consumers). server.lisp exception exercised 4x per spec §8.
+
+**Policy**: 0.3.0 is the feature-complete candidate. Maintenance mode from
+here (defect fixes only, public surface frozen); 1.0.0 will be released
+after the first real consumer validates mtt as a dependency.
+
 ## 0.2.0 (2026-08-28)
 
 Engine completion + library-ization. Five workstreams:

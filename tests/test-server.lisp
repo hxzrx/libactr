@@ -829,3 +829,58 @@ other conditions still propagate (500 semantics unchanged)."
              (signals bad-tutor-request
                       (server-step-session server sid '((type . x))))))
       (stop-tutor-server server))))
+
+(test server.session-id-cross-process-components
+  "Phase 14 A2: make-session-id carries time + sub-second + gensym components
+(cross-process uniqueness root fix — fresh images used to emit colliding
+`sess-s1` sequences). Shape: sess-<ut36>-<irt36>-<gensym>."
+  (let ((a (mtt/server::make-session-id))
+        (b (mtt/server::make-session-id)))
+    (is (string= "sess-" (subseq a 0 5)))
+    ;; two component separators after the prefix (ut | irt | gensym)
+    (is (= 2 (count #\- (subseq a 5))))
+    (is (not (string= a b)))))
+
+(test server.kc->json-exported
+  "Phase 14 C4: kc->json is exported from :mtt/server — the single source for
+KC stringification at data boundaries (the proxy had to inline a copy)."
+  (is (eq :external (nth-value 1 (find-symbol "KC->JSON" :mtt/server))))
+  (is (string= "BORROW" (mtt/server:kc->json :borrow))))
+
+(test server.student-events-key-single-source
+  "Phase 14 C3: the event-log key layout has ONE definition point, exported —
+server event logs, cluster adoption, and the proxy's location-free mastery
+all build it via student-events-key (was: three hardcoded format strings)."
+  (is (eq :external (nth-value 1 (find-symbol "STUDENT-EVENTS-KEY" :mtt/server))))
+  (is (string= "mtt:student:lea:events" (mtt/server:student-events-key "lea"))))
+
+;;; ---------------------------------------------------------------------------
+;;; Phase 14 A1: zombie convergence seam — server-drop-session.
+;;; ---------------------------------------------------------------------------
+
+(test server.drop-session-removes-handle-silently
+  "Phase 14 A1: server-drop-session removes the session-handle under the
+students-lock WITHOUT ending the session (no end-event) and is idempotent."
+  (is (eq :external (nth-value 1 (find-symbol "SERVER-DROP-SESSION" :mtt/server))))
+  (let ((s (start-tutor-server :port 0 :start-acceptor-p nil)))
+    ;; [brief adaptation] this suite's fixtures register the model PER TEST
+    ;; (no shared %server helper pre-registers "add") — the same
+    ;; (multiple-value-bind (md adapter) (%stub-model+adapter) ...) shape every
+    ;; other server-start-session test here uses; assertions verbatim.
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model s "add" md adapter))
+           (let ((sid (server-start-session s "dz" "5+2" "add")))
+             (is (gethash sid (server-sessions s)))
+             ;; Pin the no-end-event contract (final review): dropping the
+             ;; handle must NOT append to the student's shared event log.
+             (let* ((ss (gethash "dz" (server-students s)))
+                    (before (length (mtt:log-all-events
+                                     (mtt:student-session-log ss)))))
+               (is (string= sid (mtt/server:server-drop-session s sid)))
+               (is (= before (length (mtt:log-all-events
+                                      (mtt:student-session-log ss))))))
+             (is (null (gethash sid (server-sessions s))))
+             (is (null (mtt/server:server-drop-session s sid)))))  ; idempotent
+      (stop-tutor-server s))))

@@ -245,9 +245,12 @@ names (e.g. past-tense's regular-p / known-p) AND plain goal-slot names (the
 validator has no chunk-type knowledge, so real specs' top-ones / bot-ones /
 verb ... must be declared here). Robustness: malformed COLLECTIONS (a
 :answers/:fact-slots/:goal-guard that is not a proper list), atom ENTRIES,
-and the enumerated entry shapes degrade to collected errors; dotted or
-otherwise plist-malformed entries (e.g. ((digit . 5)) in :fact-slots) may
-still SIGNAL at a getf/length. Pure: never mutates the spec."
+and the enumerated entry shapes degrade to collected errors; per-ENTRY
+proper-list guards (phase 14 B2) extend the never-signal guarantee to
+dotted/atom ENTRIES in :answers/:fact-slots/:goal-guard. Circular
+(self-referential) structure is the honest exclusion — the CL reader cannot
+produce one in a quoted literal without #n= syntax and validator input is
+programmatic data. Pure: never mutates the spec."
   (let* ((answers (bug-spec-answers spec))
          (fact-slots (bug-spec-fact-slots spec))
          (goal-guard (bug-spec-goal-guard spec))
@@ -259,11 +262,10 @@ still SIGNAL at a getf/length. Pure: never mutates the spec."
       ;;    degrades to a collected error + an empty LOCAL (the spec is never
       ;;    mutated). make-bug-spec's :type list lets improper lists through
       ;;    (any cons is a LIST), and a port without defstruct type checking
-      ;;    would let atoms through too. Scope of the never-signal guarantee:
-      ;;    it covers malformed collections, atom entries, and the enumerated
-      ;;    entry shapes below — a dotted/plist-malformed ENTRY (e.g. an
-      ;;    (atom . val) pair inside :fact-slots) is NOT covered and may
-      ;;    still signal at a getf/length (docstring says the same).
+      ;;    would let atoms through too. Scope of the never-signal guarantee
+      ;;    (phase 14 B2): malformed collections, atom entries, dotted
+      ;;    entries, and the enumerated entry shapes below ALL degrade to
+      ;;    collected errors (per-entry proper-list guards).
       (unless (proper-list-p answers)
         (err ":answers is not a proper list (~s) — treated as empty" answers)
         (setf answers nil))
@@ -283,26 +285,28 @@ still SIGNAL at a getf/length. Pure: never mutates the spec."
         (err "missing required field kc"))
       (unless (and (symbolp (bug-spec-goal-type spec)) (bug-spec-goal-type spec))
         (err "missing required field goal-type"))
-      ;; 2. answers shape + duplicate :slot / :as (an atom ENTRY would make
-      ;;    getf signal — listp-check it first and skip its dup tracking)
+      ;; 2. answers shape + duplicate :slot / :as (a malformed ENTRY — atom
+      ;;    or dotted — degrades to one collected error, no dup tracking)
       (let ((slots-seen nil) (as-seen nil))
         (dolist (entry answers)
-          (unless (and (listp entry)
-                       (stringp (getf entry :action))
-                       (symbolp (getf entry :slot)))
-            (err "malformed answer entry ~s (need :action string + :slot symbol)" entry))
-          (when (listp entry)
-            (let ((slot (getf entry :slot))
-                  (as (or (getf entry :as) (getf entry :slot))))
-              (when (member slot slots-seen)
-                (err "duplicate answer :slot ~a" slot))
-              (when (member as as-seen)
-                (err "duplicate answer :as name ~a (env shadowing)" as))
-              (push slot slots-seen) (push as as-seen)))))
+          (if (not (proper-list-p entry))
+              (err "malformed answer entry ~s (not a proper list)" entry)
+              (progn
+                (unless (and (stringp (getf entry :action))
+                             (symbolp (getf entry :slot)))
+                  (err "malformed answer entry ~s (need :action string + :slot symbol)"
+                       entry))
+                (let ((slot (getf entry :slot))
+                      (as (or (getf entry :as) (getf entry :slot))))
+                  (when (member slot slots-seen)
+                    (err "duplicate answer :slot ~a" slot))
+                  (when (member as as-seen)
+                    (err "duplicate answer :as name ~a (env shadowing)" as))
+                  (push slot slots-seen) (push as as-seen))))))
       ;; 3. fact-slots shape + index range (:literal presence via plist keys —
       ;;    getf cannot distinguish absent from nil-valued)
       (dolist (fs fact-slots)
-        (if (not (and (consp fs) (symbolp (first fs))))
+        (if (not (and (proper-list-p fs) (symbolp (first fs))))
             (err "malformed fact-slot entry ~s (need (name ...))" fs)
             (let ((from (getf (rest fs) :from))
                   (literal-present-p (member :literal (rest fs))))
@@ -325,12 +329,12 @@ still SIGNAL at a getf/length. Pure: never mutates the spec."
                       (first fs)))))))
       ;; 4. goal-guard shape
       (dolist (pair goal-guard)
-        (unless (and (listp pair) (= 2 (length pair)) (symbolp (first pair)))
+        (unless (and (proper-list-p pair) (= 2 (length pair)) (symbolp (first pair)))
           (err "malformed goal-guard entry ~s (need (slot literal))" pair)))
       ;; 5. answer <-> fact-slot cross reference (the headline check)
       (loop :for i :from 0 :below (length answers)
             :unless (some (lambda (fs)
-                            (and (consp fs)
+                            (and (proper-list-p fs)
                                  (equal (getf (rest fs) :from) (list :answer i))))
                           fact-slots)
               :do (err "answer ~d has no fact slot (:answer ~d) — RHS would silently get (slot . nil)"
@@ -340,12 +344,12 @@ still SIGNAL at a getf/length. Pure: never mutates the spec."
       ;;    The mapcars guard entry shape: (first atom) / (getf atom ...) on
       ;;    a malformed entry would signal — the entry is already diagnosed
       ;;    by steps 2-4; here it just contributes no name.
-      (let* ((as-names (mapcar (lambda (e) (and (listp e)
+      (let* ((as-names (mapcar (lambda (e) (and (proper-list-p e)
                                                 (or (getf e :as) (getf e :slot))))
                                answers))
-             (fact-names (mapcar (lambda (fs) (if (consp fs) (first fs) nil))
+             (fact-names (mapcar (lambda (fs) (if (proper-list-p fs) (first fs) nil))
                                  fact-slots))
-             (guard-names (mapcar (lambda (p) (if (consp p) (first p) nil))
+             (guard-names (mapcar (lambda (p) (if (proper-list-p p) (first p) nil))
                                   goal-guard))
              (resolvable (append as-names fact-names guard-names extra-env-names))
              (resolvable-p (lambda (n)

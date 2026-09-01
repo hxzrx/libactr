@@ -287,3 +287,27 @@ reduce-fact prime), so SIMPLIFY cannot match -> :off-path unclassified."
              (is (eq :off-path (mtt:trace-result-status r)))
              (is (null (mtt:trace-result-feedback r)))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 14 Task 12: B1 out-of-order actions are bad requests (500 -> 400) --
+
+(test fraction-adapter.out-of-order-sum-and-simplify-are-bad-requests
+  "B1: \"sum\" before common-denom (cdenom nil) and \"simplify\" before sum
+(snum nil) signal bad-tutor-request (400 over HTTP) — they used to reach
+TYPE-ERROR 500s at (/ cdenom den1) / (%gcd nil nil)."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "oo" "1/2+1/3" "frac")))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session
+              s sid '(("type" . "sum") ("num" . "5") ("denom" . "6"))))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session
+              s sid '(("type" . "simplify") ("num" . "1") ("denom" . "1"))))
+           ;; http-level mapping for one leg
+           (multiple-value-bind (plist status)
+               (mtt/server::handle-step
+                s `(("session_id" . ,sid)
+                    ("action" . (("type" . "sum") ("num" . "5") ("denom" . "6")))))
+             (declare (ignore plist))
+             (is (= 400 status))))
+      (mtt/server:stop-tutor-server s))))

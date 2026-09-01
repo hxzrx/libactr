@@ -51,3 +51,16 @@ production names land in :mtt/past-tense-tutor."
   "The vowel-analogy table holds the two documented wrong forms."
   (is (string= "BRANG"  (cdr (assoc "BRING" (analogy-bugs) :test #'string=))))
   (is (string= "COUGHT" (cdr (assoc "CATCH" (analogy-bugs) :test #'string=)))))
+
+(test past-tense-adapter-gate-rejects-invalid-spec
+  "C7: the adapter-construction gate actually signals on errors (the gate
+lives in make-past-tense-adapter; its %validate-specs! is directly driven
+here — mirrors fraction-loader-rejects-invalid-spec)."
+  (is (fboundp 'mtt/past-tense-adapter::%validate-specs!))
+  (signals error
+    (mtt/past-tense-adapter::%validate-specs!
+     (list (mtt:make-bug-spec
+            :name 'buggy-x :kind :x :kc :x :goal-type 'past-tense-task
+            :answers '((:action "value" :slot past :as answer))
+            :fact-slots '((verb :from (:goal verb)))
+            :when '(frobnicate answer))))))          ; unknown operator

@@ -85,7 +85,7 @@ logs (the cluster deployment shape, spec §5.4)."
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w1"
                                     :redis-host "127.0.0.1" :redis-port port
-                                    :prefix "t-hb:")))
+                                    :prefix "t-hb:" :heartbeat-ttl 15)))
       (unwind-protect
            (progn
              (cluster-join m)
@@ -99,7 +99,7 @@ logs (the cluster deployment shape, spec §5.4)."
              ;; lease from the TEST makes before a positive ttl independent of
              ;; the tick fn, so a no-ttl refresh reads -1 and -1 >= 15 is RED —
              ;; the brief's own predicted mechanism.]
-             (let ((before (progn (redis:red-setex "t-hb:worker:w1" 15 "seed") ; 15 = default heartbeat-ttl
+             (let ((before (progn (redis:red-setex "t-hb:worker:w1" 15 "seed") ; 15 = the explicit :heartbeat-ttl above (decoupled from any default)
                                   (redis:red-ttl "t-hb:worker:w1"))))
                (sleep 1.2)
                (cluster-heartbeat-tick m)
@@ -187,6 +187,24 @@ production names) — the Task-1 codec reused (spec §7)."
                                           (symbol-package p)))
                           (getf back :path)))))
         (stop-tutor-server s)))))
+
+(test cluster.checkpoint-nil-fields-round-trip-faithfully
+  "cosmetic#4: the redis codec round-trips step_count/last_seq with fidelity
+(nil -> null -> nil, 0 -> 0) — same semantics as the memory backend; the
+integer normalization moved to the consumer (restore-from-checkpoint)."
+  (with-test-redis (conn port)
+    (let ((store (make-redis-checkpoint-store :prefix "t-nl:"
+                                              :host "127.0.0.1" :port port)))
+      (dolist (cp (list (list :session-id "s" :student-id "st" :problem-id "p"
+                              :model-id "m" :step-count nil :last-seq nil
+                              :status :active :state nil :path nil)
+                        (list :session-id "s" :student-id "st" :problem-id "p"
+                              :model-id "m" :step-count 3 :last-seq 7
+                              :status :active :state nil :path nil)))
+        (save-checkpoint store "s" cp)
+        (let ((back (load-checkpoint store "s")))
+          (is (equal (getf cp :step-count) (getf back :step-count)))
+          (is (equal (getf cp :last-seq) (getf back :last-seq))))))))
 
 (test cluster.scan-tick-checkpoints-active-sessions
   "One scan pass: the local active session gains a ckpt:<sid> entry under the
@@ -351,6 +369,28 @@ WITH a TTL still blocks (the mutex semantics claim-mutex tests above)."
         (stop-tutor-server s1)
         (stop-tutor-server s2)))))
 
+(test cluster.claim-wins-atomically-with-ttl
+  "A3: when the claim is won, SETNX and EXPIRE land as ONE atomic unit —
+observable through the error path (adopt fails on an unregistered model, so
+the claim survives) with a positive TTL bounded by claim-ttl. The RED probe
+(EXPIRE omitted from the script) reads -1."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-tl:")
+      (declare (ignore s1 m1))
+      (unwind-protect
+           (progn
+             (remhash "sub" (server-models s2))     ; adopt errors post-claim
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (declare (ignore dead))
+               (is (= 0 taken))
+               (let ((ttl (redis:red-ttl (uiop:strcat "t-tl:claim:" sid))))
+                 (is (plusp ttl))
+                 (is (<= ttl (mtt/cluster::cluster-claim-ttl m2))))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
 (test cluster.no-checkpoint-leaves-route-alone
   "A dead worker's sid with NO checkpoint (died before the first scan) is not
 adopted: no claim residue, routes untouched (the proxy will 503 and the
@@ -382,11 +422,25 @@ with a warning; the local session is untouched."
       (unwind-protect
            (progn
              ;; plant a fake local session under the same sid on w2
-             (setf (gethash sid (server-sessions s2))
-                   (make-instance 'session-handle
-                                  :session (server-start-session s2 "local" "47-25" "sub")
-                                  :lock (bordeaux-threads:make-lock "fake")
-                                  :adapter (cdr (gethash "sub" (server-models s2)))))
+             ;; [brief defect, run-evidenced (Task 9): the planted handle's
+             ;; :session was the RETURN of server-start-session — the sid
+             ;; STRING, not a session. Phase 13's collision check only did a
+             ;; gethash, so it slipped through; A4's five-field marker calls
+             ;; checkpoint-session on the handle's session and the string
+             ;; signals NO-APPLICABLE-METHOD, routing this test through the
+             ;; tick's isolation handler — a vacuous GREEN that leaves the
+             ;; foreign-collision skip branch untested. Plant the STARTED
+             ;; session object itself: student "local"/problem "47-25" differ
+             ;; from the checkpoint's "tk"/"52-18" on both identity fields, so
+             ;; the marker still mismatches -> clean skip. Assertions
+             ;; unchanged.]
+             (let* ((fake-sid (server-start-session s2 "local" "47-25" "sub")))
+               (setf (gethash sid (server-sessions s2))
+                     (make-instance 'session-handle
+                                    :session (handle-session
+                                              (gethash fake-sid (server-sessions s2)))
+                                    :lock (bordeaux-threads:make-lock "fake")
+                                    :adapter (cdr (gethash "sub" (server-models s2))))))
              (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
                (is (= 0 taken))
                (is (equal '("w1") dead)))
@@ -398,6 +452,111 @@ with a warning; the local session is untouched."
         (stop-cluster-manager m2)
         (stop-tutor-server s1)
         (stop-tutor-server s2)))))
+
+(test cluster.adopt-retry-after-partial-failure
+  "A4: a prior adopt installed the local handle but died before the atomic
+flip (route still names the dead worker, claim long expired). The retry must
+RECOGNIZE its own half-adopt (five-field checkpoint match) and redo the
+idempotent flip instead of skipping as a foreign collision."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-rs:")
+      (unwind-protect
+           (let* ((cp (load-checkpoint (mtt/cluster::cluster-store m2) sid))
+                  (entry (gethash "sub" (server-models s2)))
+                  (log (mtt:make-redis-event-log
+                        :key (mtt/server:student-events-key "tk")
+                        :host "127.0.0.1" :port port)))
+             ;; plant OUR half-adopt: handle built from the SAME checkpoint,
+             ;; routes never flipped (still w1), claim expired away
+             (setf (gethash sid (server-sessions s2))
+                   (make-instance 'session-handle
+                                  :session (mtt:restore-from-checkpoint
+                                            cp (car entry) log)
+                                  :lock (bordeaux-threads:make-lock "half")
+                                  :adapter (cdr entry)))
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (declare (ignore dead))
+               (is (= 1 taken)))
+             (is (string= "w2" (first (multiple-value-list
+                                       (cluster-route-get
+                                        (uiop:strcat "t-rs:sess:" sid)))))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
+;;; --- Phase 14 C5: strict route-epoch parse -------------------------------------
+
+(test cluster.route-epoch-strict-parse
+  "C5: a malformed epoch (\"12abc\") reads as 0 — junk-allowed parsing used to
+silently read it as 12. A well-formed epoch still parses."
+  (with-test-redis (conn port)
+    (redis:red-hset "t-ep:sess:x" "worker" "w1")
+    (redis:red-hset "t-ep:sess:x" "epoch" "12abc")
+    (multiple-value-bind (w e) (cluster-route-get "t-ep:sess:x")
+      (is (string= "w1" w))
+      (is (= 0 e)))
+    (redis:red-hset "t-ep:sess:x" "epoch" "7")
+    (is (= 7 (nth-value 1 (cluster-route-get "t-ep:sess:x"))))
+    (redis:red-hdel "t-ep:sess:x" "epoch")
+    (is (= 0 (nth-value 1 (cluster-route-get "t-ep:sess:x"))))))
+
+;;; --- Phase 14 A1: zombie self-check -----------------------------------------
+;; [brief defect, reader-evidenced (COMPILE-FILE "unmatched close parenthesis",
+;; line 429 col 34) + task-4 review round 1: each test's extra paren sits on
+;; the LAST-ASSERTION line, not the tail — its 5th close would close the
+;; unwind-protect itself, pushing stop-cluster-manager/stop-tutor-server out
+;; of the cleanup clauses into the let* body (an error in the protected body
+;; would then skip teardown and leak the acceptor/redis against a with-test-
+;; redis about to shut down). One close moved from each last-assert line to
+;; the brief's own 5-paren tail — cleanup sits INSIDE unwind-protect at depth
+;; 4, the same shape as cluster.heartbeat-refreshes-lease (lines 112-113).
+;; Assertions unchanged.]
+
+(test cluster.zombie-self-check-quiesces-adopted
+  "A1: w1 is falsely declared dead (lease DELed) and its session adopted
+(route flipped to w2). On w1's NEXT heartbeat the lease is gone (ttl -2) and
+beats>=1, so the sweep drops the stale local handle; the route and the
+refreshed lease are untouched by the sweep itself."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-zb:")))
+      (unwind-protect
+           (let ((sid (progn (cluster-join m1)        ; first beat: beats=1, no sweep
+                             (server-start-session s1 "zb" "52-18" "sub"))))
+             (redis:red-hset (uiop:strcat "t-zb:sess:" sid) "worker" "w1")
+             ;; false death + adoption by another worker
+             (redis:red-del "t-zb:worker:w1")
+             (redis:red-hset (uiop:strcat "t-zb:sess:" sid) "worker" "w2")
+             ;; recovery heartbeat: sweep fires (lease gone, beats>=1)
+             (cluster-heartbeat-tick m1)
+             (is (null (gethash sid (server-sessions s1))))          ; handle dropped
+             (is (string= "w2" (first (multiple-value-list
+                                       (cluster-route-get (uiop:strcat "t-zb:sess:" sid))))))
+             (is (redis:red-exists "t-zb:worker:w1"))                 ; lease refreshed
+             (is (= 2 (mtt/cluster::cluster-beats m1))))
+        (stop-cluster-manager m1)
+        (stop-tutor-server s1)))))
+
+(test cluster.zombie-sweep-skips-own-sessions
+  "A1 negative control: the same recovery shape but the route still names
+THIS worker — nothing is dropped."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-zn:")))
+      (unwind-protect
+           (let ((sid (progn (cluster-join m1)
+                             (server-start-session s1 "zn" "52-18" "sub"))))
+             (redis:red-hset (uiop:strcat "t-zn:sess:" sid) "worker" "w1")
+             (redis:red-del "t-zn:worker:w1")          ; lease lapsed
+             (cluster-heartbeat-tick m1)               ; recovery sweep: route=me
+             (is (gethash sid (server-sessions s1)))) ; untouched
+        (stop-cluster-manager m1)
+        (stop-tutor-server s1)))))
 
 ;;; --- Task 10: thin front proxy -------------------------------------------------
 
@@ -621,3 +780,241 @@ student -> 404."
                  (is (= 404 status))))
           (stop-tutor-proxy p)
           (stop-tutor-server s))))))
+
+;;; --- Phase 14 C1: tick error visibility ---------------------------------------
+
+;; [brief defect, run-evidenced (RED: UNDEFINED-FUNCTION (SETF
+;; CLUSTER-RUNNING) — the test package :use does not inherit internal
+;; symbols): cluster-running is an INTERNAL accessor (unlike cluster-threads,
+;; which is exported), so the brief's bare (setf (cluster-running m) …) reads
+;; as mtt/cluster-test::cluster-running. Qualified with the same double-colon
+;; prefix the brief itself uses for %tick-loop; assertions unchanged.]
+(test cluster.tick-loop-survives-and-logs-errors
+  "C1: a throwing tick is reported (tick name + condition, one line on
+*error-output*) and the loop keeps running until the running flag clears
+(the old ignore-errors swallowed everything silently)."
+  (let* ((n 0)
+         (m (make-cluster-manager
+             :server (start-tutor-server :port 0 :start-acceptor-p nil)
+             :worker-id "w-err")))
+    (setf (mtt/cluster::cluster-running m) t)
+    (flet ((bad-tick (mm)
+             (declare (ignore mm))
+             (incf n)
+             (if (>= n 2)
+                 (setf (mtt/cluster::cluster-running m) nil)  ; clean exit on 2nd call
+                 (error "boom-~a" n))))
+      (let ((out (with-output-to-string (*error-output*)
+                   (mtt/cluster::%tick-loop m "test" #'bad-tick 0))))
+        (is (= 2 n))
+        (is (and (search "test tick failed" out)
+                 (search "boom-1" out)
+                 t))))))
+
+;;; --- Phase 14 C2: stop-cluster-manager poll-join --------------------------------
+
+;; [brief defect, run-evidenced (same class as C1 above: UNDEFINED-FUNCTION
+;; (SETF CLUSTER-RUNNING) — cluster-running is an internal accessor, invisible
+;; to this package's :use): qualified with the same double-colon prefix the
+;; brief uses for %stop-tick-threads; assertions unchanged.]
+(test cluster.stop-poll-joins-without-destroy
+  "C2: well-behaved tick threads are given the deadline to observe the flag
+and exit on their own — the destroy count is 0 (the old always-destroy
+shape returns 3 and could kill a thread holding the redis lock mid-command,
+hanging the leave below)."
+  (let ((m (make-cluster-manager
+            :server (start-tutor-server :port 0 :start-acceptor-p nil)
+            :worker-id "w-pj"
+            :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1)))
+    (setf (mtt/cluster::cluster-running m) t
+          (cluster-threads m)
+          (loop :repeat 3 :collect
+                (bordeaux-threads:make-thread
+                 (lambda () (loop :while (mtt/cluster::cluster-running m)
+                                  :do (sleep 0.05))))))
+    (setf (mtt/cluster::cluster-running m) nil)
+    (is (= 0 (mtt/cluster::%stop-tick-threads m)))
+    (is (every (lambda (th) (not (bordeaux-threads:thread-alive-p th)))
+               (cluster-threads m)))))
+
+(test cluster.stop-deadline-fallback-destroys
+  "C2: a thread that never observes the flag is destroyed at the deadline
+(fallback = the old behavior, bounded by it). Intervals 0.1 -> deadline ~2.1s."
+  (let* ((m (make-cluster-manager
+             :server (start-tutor-server :port 0 :start-acceptor-p nil)
+             :worker-id "w-df"
+             :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1))
+         (th (bordeaux-threads:make-thread (lambda () (sleep 100)))))
+    (setf (mtt/cluster::cluster-running m) nil
+          (cluster-threads m) (list th))
+    (let ((start (get-universal-time)))
+      (is (= 1 (mtt/cluster::%stop-tick-threads m)))
+      (is (>= (get-universal-time) (+ start 2)))     ; waited the deadline
+      (is (< (get-universal-time) (+ start 10))))))  ; but bounded by it
+
+;;; --- Phase 14 C8: start-cluster-manager idempotent -------------------------------
+
+(test cluster.start-idempotent-no-orphans
+  "C8: a second start-cluster-manager returns the manager with the SAME
+thread list — the old call overwrote the slot, orphaning the previous three
+threads (they kept ticking on a manager the operator believed restarted)."
+  (with-test-redis (conn port)
+    (let* ((s (%worker-server port))
+           (m (make-cluster-manager :server s :worker-id "w-id"
+                                    :redis-host "127.0.0.1" :redis-port port
+                                    :prefix "t-id:" :heartbeat-interval 0.2
+                                    :scan-interval 0.2 :takeover-interval 0.2)))
+      (unwind-protect
+           (progn
+             (start-cluster-manager m)
+             (let ((before (cluster-threads m)))
+               (sleep 0.3)
+               (start-cluster-manager m)
+               (is (= 3 (length (cluster-threads m))))
+               (is (eq before (cluster-threads m))))
+             (is (find "w-id" (redis:red-smembers "t-id:workers") :test #'string=)))
+        (stop-cluster-manager m)
+        (stop-tutor-server s)))))
+
+;;; --- Phase 14 A5: sticky proxy start --------------------------------------------
+
+;; [brief defect, compile-evidenced (same class as C1/C2 above: the brief's
+;; bare (proxy-live-workers p) reads as mtt/cluster-test::proxy-live-workers —
+;; UNDEFINED-FUNCTION, the symbol is internal to :mtt/cluster and this
+;; package's :use only sees exports): qualified with the same double-colon
+;; prefix the brief itself uses for proxy-rr; assertions unchanged.]
+(test proxy.sticky-start-same-worker-and-sid
+  "A5: a repeat /session/start for the same student through the proxy lands
+on the SAME worker and returns the SAME session_id (the worker's own
+same-student idempotency); when that worker's lease metadata is gone (dead),
+a start still succeeds on a live worker. The rr cursor is pre-set so a
+NON-sticky implementation would deterministically pick the OTHER worker
+(the RED shape)."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (s2 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "wa"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-sy:"))
+           (m2 (make-cluster-manager :server s2 :worker-id "wb"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-sy:"))
+           (p (make-tutor-proxy :port (%find-free-port)
+                                :redis-host "127.0.0.1" :redis-port port
+                                :prefix "t-sy:")))
+      (unwind-protect
+           (progn
+             (cluster-join m1)
+             (cluster-join m2)
+             (multiple-value-bind (b1 st1)
+                 (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                        "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+               (is (= 200 st1))
+               (let* ((sid1 (cdr (assoc "session_id" (yason:parse b1 :object-as :alist)
+                                         :test #'string=)))
+                      (owner1 (first (multiple-value-list
+                                      (with-proxy-redis (p)
+                                        (cluster-route-get "t-sy:student:sy"))))))
+                 (is (and sid1 owner1 t))
+                 ;; force the rr cursor: a non-sticky next pick would be the
+                 ;; OTHER worker (deterministic RED)
+                 (let* ((live (mtt/cluster::proxy-live-workers p))
+                        (other-pos (position owner1 live :key #'first
+                                             :test (complement #'string=))))
+                   (is (and other-pos t))
+                   (setf (mtt/cluster::proxy-rr p) (1- other-pos)))
+                 (multiple-value-bind (b2 st2)
+                     (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                            "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+                   (is (= 200 st2))
+                   (is (string= sid1 (cdr (assoc "session_id"
+                                                 (yason:parse b2 :object-as :alist)
+                                                 :test #'string=))))
+                   (is (string= owner1 (first (multiple-value-list
+                                               (with-proxy-redis (p)
+                                                 (cluster-route-get "t-sy:student:sy")))))))
+                 ;; dead sticky route: DEL the owner's lease metadata -> rr
+                 (redis:red-del (uiop:strcat "t-sy:worker:" owner1))
+                 (multiple-value-bind (b3 st3)
+                     (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                            "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
+                   (is (= 200 st3))
+                   (is (and (cdr (assoc "session_id"
+                                        (yason:parse b3 :object-as :alist)
+                                        :test #'string=))
+                            t))))))
+        (stop-tutor-proxy p)
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
+(test proxy.no-retry-when-route-unchanged
+  "cosmetic#5: on a transport failure with an UNCHANGED route, the proxy
+makes exactly ONE connection attempt before 503 — the must-change condition
+prevents a redundant retry to the same dead worker. A counting listener is
+the sentinel (the plain 503 assertion cannot distinguish no-retry from
+retry-to-same-worker-fails-again)."
+  (with-test-redis (conn port)
+    (let* ((s1 (%worker-server port))
+           (m1 (make-cluster-manager :server s1 :worker-id "w1"
+                                     :redis-host "127.0.0.1" :redis-port port
+                                     :prefix "t-rr:"))
+           (sid (progn (cluster-join m1)
+                       (let ((sid (server-start-session s1 "rr" "52-18" "sub")))
+                         (redis:red-hset (uiop:strcat "t-rr:sess:" sid) "worker" "w1")
+                         sid)))
+           (count 0)
+           (sentinel-port (%find-free-port))
+           (sentinel-sock (usocket:socket-listen "127.0.0.1" sentinel-port
+                                                 :reuse-address t))
+           (sentinel-th (bordeaux-threads:make-thread
+                         (lambda ()
+                           (loop :repeat 4 :do
+                             (ignore-errors
+                              (let ((c (usocket:socket-accept sentinel-sock)))
+                                (incf count)
+                                (usocket:socket-close c)))))))
+           (p (make-tutor-proxy :port (%find-free-port)
+                                :redis-host "127.0.0.1" :redis-port port
+                                :prefix "t-rr:")))
+      (unwind-protect
+           (progn
+             ;; the route's "worker" is a ghost whose metadata points at the
+             ;; counting listener (accepts then drops -> transport failure)
+             (let ((h (make-hash-table :test 'equal)))
+               (setf (gethash "host" h) "127.0.0.1"
+                     (gethash "port" h) sentinel-port)
+               (redis:red-set (uiop:strcat "t-rr:worker:ghost")
+                              (with-output-to-string (out) (yason:encode h out))))
+             (redis:red-hset (uiop:strcat "t-rr:sess:" sid) "worker" "ghost")
+             (multiple-value-bind (body status)
+                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                        (format nil
+                                "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
+                                sid))
+               (declare (ignore body))
+               (is (= 503 status))
+               (is (= 1 count))))                    ; exactly one attempt
+        ;; [deviation from brief, repro-evidenced (SBCL 2.6.8/Linux, isolated
+        ;; repro: join-thread on a thread blocked in accept(2) does not return
+        ;; after socket-close): the brief's close-then-join cleanup hangs —
+        ;; closing the listening socket does NOT wake a blocked accept. The
+        ;; doom test's close-then-join works only because its thread is
+        ;; ONE-SHOT (already finished by cleanup). Fix: flush this counting
+        ;; LOOP with dummy connections (each consumes exactly one accept; the
+        ;; TCP backlog completes the handshake even while the thread is
+        ;; between accepts) until the thread exits, then close+join (join on
+        ;; a finished thread is instant). Assertions have already run, so the
+        ;; extra counted accepts are harmless.]
+        (ignore-errors
+          (loop :while (bordeaux-threads:thread-alive-p sentinel-th)
+                :do (ignore-errors
+                      (usocket:socket-close
+                       (usocket:socket-connect "127.0.0.1" sentinel-port)))
+                    (sleep 0.05)))
+        (ignore-errors (usocket:socket-close sentinel-sock))
+        (ignore-errors (bordeaux-threads:join-thread sentinel-th))
+        (stop-tutor-proxy p)
+        (stop-cluster-manager m1)
+        (stop-tutor-server s1)))))

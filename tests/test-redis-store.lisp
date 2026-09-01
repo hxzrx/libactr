@@ -377,3 +377,12 @@ still works."
       (log-append rlog ev)                              ; encode happens with sym still valid
       (let ((e (first (log-all-events rlog))))
         (is (string= "WIDGET" (third (first (log-event-intent-summary e)))))))))
+
+(test redis.sym-tag-non-string-values-pass-through
+  "C6: a 2-key sym/pkg object with non-string values is no longer misread as
+a tag ((find-package 7) used to signal TYPE-ERROR); it passes through
+unchanged, dotted pairs included."
+  (let* ((json "{\"intent\":[{\"sym\":5,\"pkg\":7}]}")
+         (a (let ((yason:*parse-object-as* :alist)) (yason:parse json)))
+         (decoded (untag-symbols (cdr (assoc "intent" a :test #'string=)))))
+    (is (equal '((("sym" . 5) ("pkg" . 7))) decoded))))

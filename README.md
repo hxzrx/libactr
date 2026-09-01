@@ -192,17 +192,21 @@ session — the event log is unharmed.
   `register-model` calls per worker, only `:worker-id`/`:port` differ.
 - *Isolate a worker after declaring it dead.* Lease expiry + takeover is how
   death is detected; once a worker is declared dead, remove it from the health
-  check / kill the process. **Known residual (fencing boundary)**: a zombie
-  worker (falsely declared dead) can still append to the shared event log —
-  appends are atomic `RPUSH` with contiguous seqs, so the stream stays
-  replayable, but it is polluted. Per-request epoch fencing was deliberately
-  not implemented (it would add a Redis round-trip to every step and churn
-  existing worker/store code); the `epoch` counter in route values is reserved
-  for a future opt-in fence.
-- *Start once per student-problem.* The proxy picks a worker round-robin at
-  `/session/start`; per-worker same-student idempotency does not span workers,
-  so a repeat start through the proxy can land on a different worker and open
-  a second session. Clients should start a session once and reuse its id.
+  check / kill the process. **Fencing (phase 14 A1)**: a worker whose lease
+  lapsed (GC pause, heartbeat jitter) and whose sessions were adopted away
+  drops those stale local handles at its next heartbeat (zombie self-check) —
+  it can no longer step them or clobber the new owner's checkpoints. Residual
+  contract: steps in flight at the takeover instant may interleave in the
+  shared log (atomic `RPUSH`, contiguous seqs, replay-safe), and the window
+  between takeover and the zombie's next heartbeat is bounded by the heartbeat
+  interval. Per-request epoch fencing remains out of scope (hot-path cost);
+  the `epoch` route field stays reserved for it.
+- *Repeat starts are sticky.* At `/session/start` the proxy first consults
+  the student's existing route: when that worker is still live, the request
+  is forwarded to it and the worker's own same-student idempotency returns
+  the active session (same session_id) — clients may retry start freely.
+  Only when the routed worker is dead does the proxy fall back to
+  round-robin, which can open a new session on another worker.
 
 **Tuning.** `make-cluster-manager`: `heartbeat-ttl` (15s),
 `heartbeat-interval` (5s), `scan-interval` (2s — also the takeover loss
@@ -210,6 +214,13 @@ window a restored student must re-solve), `takeover-interval` (5s),
 `claim-ttl` (30s), `advertise-host`, Redis host/port/prefix. `make-tutor-proxy`:
 `:port`, `:forward-timeout` (5s), `:kt-params`, prefix. The ticks are
 single-steppable (`cluster-heartbeat-tick` etc.) for deterministic tests.
+
+## Versioning
+
+`0.3.0` is the feature-complete candidate. From here the library is in
+maintenance mode: defects are fixed, the public surface does not move.
+`1.0.0` will be cut once a real consumer project has validated mtt as a
+dependency in production shape.
 
 ## System matrix
 
@@ -223,16 +234,19 @@ single-steppable (`cluster-heartbeat-tick` etc.) for deterministic tests.
 | `mtt/addition-tutor` | Reference example tutor (act-r tutorial addition model + buggy library + KC map) | `mtt` |
 | `mtt/fraction-tutor`, `mtt/past-tense-tutor`, `mtt/subtraction-tutor` | Domain tutors: model load + buggy library + declarative KC attribution | `mtt` |
 | `mtt/addition-adapter`, `mtt/fraction-adapter`, `mtt/past-tense-adapter`, `mtt/subtraction-adapter` | Domain adapters — the domain brain on the `standard-domain-adapter` base | `mtt/server` + the matching tutor |
-| `mtt/test`, `mtt/server-test`, `mtt/*-adapter-test`, `mtt/*-tutor-test`, `mtt/redis-store-test`, `mtt/empirical-test`, `mtt/cluster-test` | FiveAM suites | fiveam (+ dexador, cl-redis where the layer needs them) |
+| `mtt/test`, `mtt/redis-store-test`, `mtt/empirical-test`, `mtt/cluster-test` | FiveAM suites (suite name = system name minus `-test`) | fiveam (+ cl-redis where the layer needs it) |
+| `mtt/server-test`, `mtt/*-adapter-test`, `mtt/*-tutor-test` | FiveAM suites joining `:mtt/server` — NOTE: the full server count requires loading the FOUR `*-adapter-test` systems first (fraction, addition, past-tense, subtraction — they share the suite) | fiveam, dexador |
 | `mtt/dual` | Dual-track regression (joins the `:mtt` suite with the oracle loaded) | `mtt/test`, `mtt/oracle` |
 | `mtt/concurrent` | Concurrent-isolation proof (joins the `:mtt` suite with bordeaux loaded) | `mtt/test`, bordeaux-threads |
 | `mtt/image` | Portable image-dump smoke | `mtt` |
 
 ## Domains shipped
 
-Each domain = a model in `models/` + a tutor (`examples/`, model load +
-buggy library + KC map) + an adapter (`src/`, the domain brain: action
-parsing, arithmetic, bug detection, retrieval priming).
+Each domain = a model + a tutor (`examples/`, model load + buggy library + KC
+map) + an adapter (`src/`, the domain brain: action parsing, arithmetic, bug
+detection, retrieval priming). The model lives in `models/<domain>.lisp` for
+fraction / past-tense / subtraction; addition reuses the act-r tutorial
+model (loaded via `mtt/addition-tutor`'s `examples/addition-tutor.lisp`).
 
 - **addition** — counting-on strategy (act-r tutorial model); a `next-total`
   action drives a visible `increment-sum` + hidden `increment-count` pair.

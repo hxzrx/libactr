@@ -73,9 +73,7 @@ all with the SAME session_id (transparent continuation)."
            ;; w1 launches and is polled up BEFORE w2 launches, so at most one
            ;; subprocess compiles at a time; the second boot overlaps no
            ;; compilation (cache warm) and costs nothing.]
-           (w1 (progn (ensure-directories-exist (uiop:ensure-directory-pathname dir))
-                      (uiop:launch-program (%worker-command worker-file p1 port "w1")
-                                           :output log1 :error-output log1)))
+           (w1 nil)
            (w2 nil)
            (proxy (make-tutor-proxy :port (%find-free-port)
                                     :redis-host "127.0.0.1" :redis-port port)))
@@ -85,6 +83,12 @@ all with the SAME session_id (transparent continuation)."
                  (declare (ignore b)) (and (numberp s) (= 200 s)))))
         (unwind-protect
              (progn
+               ;; cosmetic#6: launch INSIDE the protect — the old let*-binding
+               ;; launch leaked w1 if anything signaled between launch and
+               ;; protect entry (poll failure burned 90s then leaked).
+               (ensure-directories-exist (uiop:ensure-directory-pathname dir))
+               (setf w1 (uiop:launch-program (%worker-command worker-file p1 port "w1")
+                                             :output log1 :error-output log1))
                ;; worker 1 up (FASL-cold worst case ~60s; warm ~5-15s)
                (is (%poll-until (lambda () (worker-up-p p1)) 90))
                ;; then worker 2 — serialized (see the let* note above)

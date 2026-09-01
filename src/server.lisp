@@ -16,6 +16,12 @@
            #:server-start-session #:server-step-session
            #:server-end-session #:server-student-mastery
            #:server-health
+           ;; Phase 14 C4 — KC stringification at data boundaries (proxy reuse)
+           #:kc->json
+           ;; Phase 14 C3 — canonical per-student event-log key
+           #:student-events-key
+           ;; Phase 14 A1 — zombie convergence: drop a stale local handle
+           #:server-drop-session
            ;; slot readers/accessors used by tests and (Task 4) HTTP handlers
            #:server-acceptor #:server-port
            #:server-students #:server-sessions #:server-models
@@ -113,8 +119,27 @@ student-session/event-log or push a duplicate session onto the shared list."))
   (typep x 'tutor-server))
 
 (defun make-session-id ()
-  "Generate a unique session-id string."
-  (format nil "sess-~(~a~)" (gensym "s")))
+  "Generate a unique session-id string. Cross-process uniqueness (phase 14
+A2): universal time (seconds) + get-internal-real-time (sub-second wall-clock
+resolution at call time — microseconds on SBCL) + the per-image gensym counter.
+Fresh SBCL images used to emit colliding `sess-s1` sequences (per-image gensym
+counter AND a deterministically seeded *random-state* — probed 2026-08-31), so
+the two time components carry the cross-image entropy: a collision requires
+two images calling in the same microsecond with aligned gensym counters
+(workers additionally burn a worker-id-derived gensym offset first —
+examples/cluster-worker.lisp — as defense-in-depth). No global counter is
+introduced (this file stays zero-defvar/defparameter). The sid remains an
+opaque string to consumers."
+  (format nil "sess-~36r-~36r-~a"
+          (get-universal-time)
+          (get-internal-real-time)
+          (gensym "s")))
+
+(defun student-events-key (student-id)
+  "Canonical redis key for STUDENT-ID's shared event log — the single source
+of the mtt:student:<id>:events layout (phase 14 C3; used by event-log-for
+here, cluster adoption, and the proxy's location-free mastery)."
+  (format nil "mtt:student:~a:events" student-id))
 
 (defun event-log-for (server student-id)
   "Return the event-log to attach to a new student-session. If SERVER has a
@@ -128,7 +153,7 @@ taken when the operator passes :redis-config at start-tutor-server time, in
 which case the deployment is expected to have loaded mtt/redis-store."
   (let ((rc (server-redis-config server)))
     (if rc
-        (mtt:make-redis-event-log :key (format nil "mtt:student:~a:events" student-id)
+        (mtt:make-redis-event-log :key (student-events-key student-id)
                                   :host (getf rc :host) :port (getf rc :port))
         (mtt:make-event-log))))
 
@@ -309,6 +334,19 @@ Serialized by the session-handle's lock."
       (bt:with-lock-held (lock)
         (prog1 (mtt:end-session (handle-session handle))
           (remhash session-id (server-sessions server)))))))
+
+(defun server-drop-session (server session-id)
+  "Remove the session-handle registered under SESSION-ID WITHOUT ending the
+underlying cognitive-session — no end-event is appended, the shared student
+event log is untouched. Phase 14 A1 zombie convergence: a worker whose lease
+lapsed and whose sessions were adopted away drops those stale local handles
+so it can no longer step or checkpoint them (also usable for admin eviction).
+Serialized under the server's students-lock. Returns SESSION-ID when a
+handle was present and removed, nil otherwise."
+  (bt:with-lock-held ((server-students-lock server))
+    (when (gethash session-id (server-sessions server))
+      (remhash session-id (server-sessions server))
+      session-id)))
 
 (defun server-student-mastery (server student-id)
   "Aggregate mastery for STUDENT-ID across all of that student's cognitive-

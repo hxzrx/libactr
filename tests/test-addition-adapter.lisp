@@ -100,3 +100,23 @@ debt #1/#2)."
                (mtt/server:server-step-session
                 s sid '(("type" . "wat") ("value" . "5"))))))
       (mtt/server:stop-tutor-server s))))
+
+;;; --- Phase 14 Task 12: B1 out-of-order / missing-field actions are 400s -------
+
+(test addition-adapter.out-of-order-and-missing-value-are-bad-requests
+  "B1: \"next-total\"/\"submit\" before \"start\" (sum/count nil) and a
+missing \"value\" entry signal bad-tutor-request — string-upcase of nil and
+dm-next of nil used to be 500-shaped."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (mtt/server:server-start-session s "oo" "5+2" "add")))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session
+              s sid '(("type" . "next-total") ("value" . "6"))))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session
+              s sid '(("type" . "submit") ("value" . "7"))))
+           (signals mtt:bad-tutor-request
+             (mtt/server:server-step-session
+              s sid '(("type" . "next-total")))))
+      (mtt/server:stop-tutor-server s))))

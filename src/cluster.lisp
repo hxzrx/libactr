@@ -12,7 +12,7 @@
   (:export
    ;; ===== 服务层接口:manager(worker 编排本体) =====
    ;; 库消费者经 make/start/stop-cluster-manager 进入;slot readers
-   ;; (cluster-server/worker-id/threads)为只读检视。实例持全部状态。
+   ;; (cluster-server/worker-id)为只读检视,cluster-threads 为 accessor。实例持全部状态。
    #:cluster-manager #:cluster-manager-p
    #:make-cluster-manager #:start-cluster-manager #:stop-cluster-manager
    #:cluster-server #:cluster-worker-id
@@ -53,6 +53,7 @@
    (redis-lock         :reader cluster-redis-lock
                        :initform (bordeaux-threads:make-lock "cluster-redis"))
    (threads            :accessor cluster-threads :initform nil)
+   (beats              :accessor cluster-beats :initform 0)
    (running            :accessor cluster-running :initform nil))
   (:documentation "Per-server orchestration state container (spec §4.2). All
 state instance-held; zero global mutable state in this system."))
@@ -96,11 +97,42 @@ every command (controller-mandated, Task 7 review ruling)."
     (with-output-to-string (s) (yason:encode h s))))
 
 (defun cluster-heartbeat-tick (m)
-  "One heartbeat: refresh this worker's lease key (SETEX = atomic set+ttl)."
+  "One heartbeat: refresh this worker's lease key (SETEX = atomic set+ttl).
+Phase 14 A1 zombie self-check: when the lease key is GONE (red-ttl -2 — it
+expired or was DELed while we were falsely dead) and this is not our first
+beat, sweep the local sessions — any sid whose sess: route now names ANOTHER
+worker was adopted away while we were down; drop the stale local handle
+(server-drop-session — silent, no end-event) so this worker stops stepping
+and checkpoint-clobbering it. Steady state costs one extra TTL read per
+heartbeat; the per-request hot path is untouched (spec §4.1)."
   (with-cluster-redis (m)
-    (redis:red-setex (cluster-worker-key m (cluster-worker-id m))
-                     (cluster-ttl m)
-                     (worker-metadata-json m))))
+    (let ((lease (cluster-worker-key m (cluster-worker-id m))))
+      (when (and (>= (cluster-beats m) 1)
+                 (= -2 (redis:red-ttl lease)))
+        (%zombie-sweep m))
+      (redis:red-setex lease (cluster-ttl m) (worker-metadata-json m))
+      (incf (cluster-beats m)))))
+
+(defun %zombie-sweep (m)
+  "A1: drop local session-handles whose sess: route names another worker.
+Runs under the manager redis lock (caller holds it); takes NO session locks
+(an in-flight step racing the remhash is the documented bounded residual).
+Collect-then-drop (maphash must not run concurrent remhash on the same
+table). server-drop-session nests the students-lock inside the manager lock
+— safe: no code path takes them in the opposite order (server-start-session
+issues zero redis commands while holding students-lock)."
+  (let ((stale nil))
+    (maphash (lambda (sid handle)
+               (declare (ignore handle))
+               (let ((owner (redis:red-hget (cluster-sess-key m sid) "worker")))
+                 (when (and owner (not (string= owner (cluster-worker-id m))))
+                   (push sid stale))))
+             (mtt/server:server-sessions (cluster-server m)))
+    (dolist (sid stale)
+      (mtt/server:server-drop-session (cluster-server m) sid)
+      (format *error-output*
+              "mtt/cluster: zombie self-check dropped local session ~a (route now owned by ~a)~%"
+              sid (redis:red-hget (cluster-sess-key m sid) "worker")))))
 
 (defun cluster-join (m)
   "Register in the workers set + first heartbeat."
@@ -198,8 +230,11 @@ symbols tagged via mtt:tag-symbols — numbers/strings pass through)."
     (dolist (k '(("session_id" . :session-id) ("student_id" . :student-id)
                  ("problem_id" . :problem-id) ("model_id" . :model-id)))
       (setf (gethash (car k) h) (mtt:tag-symbols (getf cp (cdr k)))))
-    (setf (gethash "step_count" h) (or (getf cp :step-count) 0)
-          (gethash "last_seq" h) (or (getf cp :last-seq) 0)
+    ;; cosmetic#4 (phase 14): fidelity, not normalization — nil encodes as
+    ;; JSON null and reads back nil (same semantics as the memory backend);
+    ;; the integer default lives in restore-from-checkpoint.
+    (setf (gethash "step_count" h) (getf cp :step-count)
+          (gethash "last_seq" h) (getf cp :last-seq)
           (gethash "status" h) (mtt:tag-symbols (getf cp :status)))
     ;; :state entries are (buffer isa . slots-alist) — SBCL-probe verified:
     ;; serialize-buffer-state conses the buffer name onto serialize-chunk's
@@ -240,9 +275,9 @@ intern, arrays of tags map to lists, scalars pass through.]"
           :student-id (un (ag "student_id" json))
           :problem-id (un (ag "problem_id" json))
           :model-id   (un (ag "model_id" json))
-          :step-count (or (ag "step_count" json) 0)
+          :step-count (ag "step_count" json)
           :status     (un (ag "status" json))
-          :last-seq   (or (ag "last_seq" json) 0)
+          :last-seq   (ag "last_seq" json)
           :state      (map 'list
                            (lambda (e)
                              (cons (un (ag "buffer" e))
@@ -310,7 +345,12 @@ dropped)."
 
 (defun cluster-route-get (key)
   "Route table read: (values worker-id epoch) for a sess:/student: hash key,
-nil when unrouted. [brief defect, run-evidenced: the brief parse-integer'd the
+nil when unrouted. Epoch parses STRICTLY (phase 14 C5): a missing, null, or
+malformed epoch field reads as 0. Junk-allowed parsing previously read
+\"12abc\" as 12 — a silent misread; the field is written only by our own
+route-set, so garbage means corruption or tampering, and it is tolerated as
+0 (never guessed at).
+[brief defect, run-evidenced: the brief parse-integer'd the
 epoch field unconditionally — TYPE-ERROR on parse-integer's STRING parameter
 when the hash carries only the worker field (the pre-takeover shape the tests
 seed); a missing/garbled epoch reads as 0, the same default route-set's
@@ -318,7 +358,9 @@ HINCRBY counts up from.]"
   (let ((w (redis:red-hget key "worker")))
     (when w
       (let ((e (redis:red-hget key "epoch")))
-        (values w (if e (or (parse-integer e :junk-allowed t) 0) 0))))))
+        (values w (if e (handler-case (parse-integer e)
+                          (parse-error () 0))
+                      0))))))
 
 (defun cluster-route-set (key worker-id)
   "Point KEY at WORKER-ID and bump its epoch (the future-fencing counter,
@@ -329,10 +371,28 @@ spec §5.5)."
 
 ;; --- takeover (spec §5.2 protocol 4) -----------------------------------------
 
+(defun %checkpoint-matches-session-p (adopted local)
+  "A4 marker: do the identity+progress fields of ADOPTED (the checkpoint this
+tick is adopting) and LOCAL (a checkpoint snapshot of the live local handle)
+coincide? Five fields — student, problem, model, step-count, last-seq. Our
+own half-completed adopt was built FROM the checkpoint, so all five coincide;
+a foreign session (cross-process sid collision) differs in at least one. A
+true collision matching all five IS the same session twice — redoing the
+idempotent flip is then also correct."
+  (and (equalp (getf adopted :student-id) (getf local :student-id))
+       (equalp (getf adopted :problem-id) (getf local :problem-id))
+       (equalp (getf adopted :model-id) (getf local :model-id))
+       (= (or (getf adopted :step-count) 0) (or (getf local :step-count) 0))
+       (= (or (getf adopted :last-seq) 0) (or (getf local :last-seq) 0))))
+
 (defun cluster-adopt-session (m sid checkpoint dead-worker)
   "Rebuild the session locally from CHECKPOINT and flip the routes to this
 worker. Composition of exported core/server APIs only (spec §4.1): the
-student's redis event log continues where the dead worker left it."
+student's redis event log continues where the dead worker left it.
+Phase 14 A4: the route flip is one atomic Lua unit; order is
+handle-first-then-flip, and a flip failure leaves consistent state (routes
+untouched, claim held until TTL) — the retry is closed by the five-field
+marker in cluster-takeover-tick."
   (let* ((server (cluster-server m))
          (model-id (getf checkpoint :model-id))
          (entry (gethash model-id (mtt/server:server-models server))))
@@ -343,7 +403,7 @@ student's redis event log continues where the dead worker left it."
            (adapter (cdr entry))
            (student-id (getf checkpoint :student-id))
            (log (mtt:make-redis-event-log
-                 :key (format nil "mtt:student:~a:events" student-id)
+                 :key (mtt/server:student-events-key student-id)
                  :host (cluster-redis-host m) :port (cluster-redis-port m)))
            (session (mtt:restore-from-checkpoint checkpoint model log)))
       (setf (gethash sid (mtt/server:server-sessions server))
@@ -353,20 +413,37 @@ student's redis event log continues where the dead worker left it."
                                   (format nil "session-~a" sid))
                            :adapter adapter))
       (with-cluster-redis (m)
-        (cluster-route-set (cluster-sess-key m sid) (cluster-worker-id m))
-        (cluster-route-set (cluster-student-key m student-id) (cluster-worker-id m))
-        (redis:red-srem (cluster-worker-sess-key m dead-worker) sid)
-        (redis:red-sadd (cluster-worker-sess-key m (cluster-worker-id m)) sid)
-        (redis:red-del (cluster-claim-key m sid)))
+        ;; A4 (phase 14): the route flip — both routes (HSET+HINCRBY each),
+        ;; the reverse index (SREM/SADD), and the claim delete — is ONE
+        ;; atomic Lua unit. All-or-nothing: the previous command-at-a-time
+        ;; shape stranded a live handle with half-flipped routes on a
+        ;; mid-block redis error; the stranded retry is closed by the
+        ;; five-field marker in cluster-takeover-tick. KEYS: sess student
+        ;; ws-dead ws-me claim — ARGV: me sid.
+        (redis:red-eval
+         "local old = redis.call('HGET', KEYS[1], 'worker')
+redis.call('HSET', KEYS[1], 'worker', ARGV[1]) redis.call('HINCRBY', KEYS[1], 'epoch', 1)
+redis.call('HSET', KEYS[2], 'worker', ARGV[1]) redis.call('HINCRBY', KEYS[2], 'epoch', 1)
+redis.call('SREM', KEYS[3], ARGV[2]) redis.call('SADD', KEYS[4], ARGV[2])
+redis.call('DEL', KEYS[5])
+return old"
+         5 (cluster-sess-key m sid)
+         (cluster-student-key m student-id)
+         (cluster-worker-sess-key m dead-worker)
+         (cluster-worker-sess-key m (cluster-worker-id m))
+         (cluster-claim-key m sid)
+         (cluster-worker-id m) sid))
       sid)))
 
 (defun cluster-takeover-tick (m)
   "One takeover scan: find workers in the registry whose lease key has
 expired (simulated cleanly by a DEL in tests — what TTL expiry does), then for
-each sid in their reverse index: atomically claim (SETNX+EXPIRE), skip on a
-local sid collision (warning), skip when no checkpoint exists (route stays —
-the proxy 503s and the client restarts), else adopt. Returns (values taken
-dead-worker-ids).
+each sid in their reverse index: claim it as ONE atomic Lua unit (crash-residue
+reclaim + SETNX + EXPIRE); load the checkpoint BEFORE the local-collision
+check — no checkpoint drops the claim (route stays: the proxy 503s and the
+client restarts); a local sid collision retries via the five-field checkpoint
+marker (own half-adopt) or skips with a warning (foreign); otherwise adopt.
+Returns (values taken dead-worker-ids).
 
 [deviation from brief, lock-discipline-mandated (Task 8 ruling): the brief
 wrapped the whole tick in ONE with-cluster-redis and called
@@ -379,17 +456,29 @@ before adopt's own manager-lock scope — never nested (the scan tick already
 sequences store-then-manager the same way).]"
   (labels ((claim (sid)
              (with-cluster-redis (m)
-               (or (and (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
-                        (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m)))
-                   ;; Crash gap (final review): a taker that died between SETNX
-                   ;; and EXPIRE leaves a claim with NO TTL — SETNX then fails
-                   ;; for every future taker, blocking this sid's takeover
-                   ;; forever. On the losing path, reclaim the residue ONCE
-                   ;; (single retry, no loop): TTL -1 = exists with no expiry.
-                   (and (= -1 (redis:red-ttl (cluster-claim-key m sid)))
-                        (redis:red-del (cluster-claim-key m sid))
-                        (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
-                        (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m))))))
+               ;; A3 (phase 14): the WHOLE claim — TTL-less crash-residue
+               ;; reclaim + SETNX + EXPIRE — is ONE atomic Lua unit (single
+               ;; round-trip). Closes both the multi-roundtrip composite race
+               ;; of the previous TTL->DEL->SETNX->EXPIRE losing path AND the
+               ;; crash gap between SETNX and EXPIRE (a taker dying exactly
+               ;; there leaves the no-TTL residue this script's first line
+               ;; reclaims — self-healing). Truthy = we hold the claim,
+               ;; exactly the previous contract.
+               ;; [brief defect, probe-evidenced (live redis, 2026-09-01):
+               ;; the brief returned the raw red-eval result — the script's
+               ;; LOSING path is Lua `return 0`, an INTEGER, and only nil is
+               ;; false in CL, so (when (claim sid)) adopted WITHOUT holding
+               ;; the claim (claim-mutex-blocks-second-taker RED under the
+               ;; verbatim form; probe: win => 1, lose => 0, (if 0 ...) =>
+               ;; truthy branch, while the previous SETNX/EXPIRE :boolean
+               ;; replies were t/nil). Script byte-identical; the Lisp side
+               ;; compares to 1, restoring the t/nil contract.]
+               (= 1 (redis:red-eval
+                "if redis.call('TTL', KEYS[1]) == -1 then redis.call('DEL', KEYS[1]) end
+if redis.call('SETNX', KEYS[1], ARGV[1]) == 1 then redis.call('EXPIRE', KEYS[1], ARGV[2]) return 1 end
+return 0"
+                1 (cluster-claim-key m sid)
+                (cluster-worker-id m) (princ-to-string (cluster-claim-ttl m))))))
            (drop-claim (sid)
              (with-cluster-redis (m)
                (redis:red-del (cluster-claim-key m sid)))))
@@ -405,16 +494,29 @@ sequences store-then-manager the same way).]"
                        (redis:red-smembers (cluster-worker-sess-key m w))))
           (handler-case
               (when (claim sid)
-                (cond
-                  ;; local sid already live (cross-process gensym collision): skip
-                  ((gethash sid (mtt/server:server-sessions (cluster-server m)))
-                   (format *error-output*
-                           "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%" sid)
-                   (drop-claim sid))
-                  (t (let ((cp (load-checkpoint (cluster-store m) sid)))  ; store lock
-                       (cond
-                         (cp (cluster-adopt-session m sid cp w) (incf taken))
-                         (t (drop-claim sid)))))))       ; no-ckpt window
+                ;; A4 (phase 14): checkpoint loads BEFORE the local-collision
+                ;; check — the five-field marker needs it. Branch order: no
+                ;; checkpoint -> drop; local sid occupied -> OUR half-adopt
+                ;; (marker matches) retries the idempotent flip, a foreign
+                ;; collision skips with a warning; else adopt.
+                ;; Single gethash read (final review): the previous shape read
+                ;; the sessions table twice (test + marker arm) — a TOCTOU
+                ;; window if the table changed between the two reads.
+                (let* ((cp (load-checkpoint (cluster-store m) sid))
+                       (h (and cp (gethash sid
+                                          (mtt/server:server-sessions
+                                           (cluster-server m))))))
+                  (cond
+                    ((null cp) (drop-claim sid))
+                    (h (if (%checkpoint-matches-session-p
+                            cp (mtt:checkpoint-session (mtt/server:handle-session h)))
+                           (progn (cluster-adopt-session m sid cp w) (incf taken))
+                           (progn
+                             (format *error-output*
+                                     "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%"
+                                     sid)
+                             (drop-claim sid))))
+                    (t (cluster-adopt-session m sid cp w) (incf taken)))))
             ;; Isolation (final review): one poisoned sid (unreadable
             ;; checkpoint, unregistered model-id, ...) must not abort the
             ;; whole takeover pass for the remaining sids — report, continue.
@@ -426,10 +528,48 @@ sequences store-then-manager the same way).]"
 
 ;; --- thread lifecycle (thin timers over the tick fns) ------------------------
 
-(defun %tick-loop (m tick interval)
+(defun %tick-loop (m name tick interval)
   (loop :while (cluster-running m)
-        :do (ignore-errors (funcall tick m))
+        :do (handler-case (funcall tick m)
+              (error (c)
+                ;; C1 (phase 14): per-tick visibility — the name + condition on
+                ;; one line; the loop itself must keep running forever.
+                (format *error-output* "mtt/cluster: ~a tick failed: ~a~%" name c)))
             (sleep interval)))
+
+(defun %stop-tick-threads (m)
+  "Phase 14 C2 poll-join: give each tick thread until DEADLINE (longest tick
+interval + 2s) to observe the running flag and exit on its own; destroy only
+what is still alive at the deadline. Returns the number of destroyed threads
+(0 on the normal path). Rationale: destroying a thread that holds the redis
+lock mid-command leaves the lock held forever (bordeaux locks are not
+released on destroy) and the cluster-leave below would hang — the
+millisecond teardown window this closes.
+
+[brief defect, run-evidenced (flaky RED with ~2s margins, then probed: (+
+3997214052 0.1 2) => 3.997214e9 SINGLE-FLOAT, delta-from-now 0.0): universal
+time (~4e9) exceeds the single-float mantissa, so the brief's float-contaged
+deadline is quantized to 256s and (>) against it exits at a random offset —
+sometimes immediately, leaving live threads to be destroyed / returning
+before the asserted lower bound. Deadline computed in INTEGER seconds
+(ceiling of the interval max) instead.]"
+  (let ((deadline (+ (get-universal-time)
+                     (ceiling (max (cluster-heartbeat-interval m)
+                                   (max (cluster-scan-interval m)
+                                        (cluster-takeover-interval m))))
+                     2))
+        (destroyed 0))
+    (dolist (th (cluster-threads m))
+      (loop :until (or (not (bordeaux-threads:thread-alive-p th))
+                       (> (get-universal-time) deadline))
+            :do (sleep 0.05))
+      (when (bordeaux-threads:thread-alive-p th)
+        (incf destroyed)
+        (format *error-output*
+                "mtt/cluster: stop deadline reached — destroying tick thread ~a (it may hold the redis lock mid-command)~%"
+                (bordeaux-threads:thread-name th))
+        (ignore-errors (bordeaux-threads:destroy-thread th))))
+    destroyed))
 
 (defun make-cluster-manager (&key server worker-id redis-host redis-port
                              (prefix "mtt:cluster:") (heartbeat-ttl 15)
@@ -453,32 +593,40 @@ sequences store-then-manager the same way).]"
 
 (defun start-cluster-manager (m)
   "Join the registry and spawn the three tick threads (heartbeat / scan /
-takeover). The threads are plain drivers over the single-steppable ticks."
+takeover). The threads are plain drivers over the single-steppable ticks.
+Idempotent (phase 14 C8): an already-running manager returns immediately;
+restart requires stop-cluster-manager first."
+  (when (cluster-threads m)
+    ;; C8 (phase 14): already running — idempotent no-op. The previous
+    ;; behavior overwrote the thread list, orphaning the old threads.
+    ;; Restarting requires stop-cluster-manager first.
+    (return-from start-cluster-manager m))
   (setf (cluster-running m) t
         (cluster-threads m)
         (list (bordeaux-threads:make-thread
-               (lambda () (%tick-loop m #'cluster-heartbeat-tick
+               (lambda () (%tick-loop m "heartbeat" #'cluster-heartbeat-tick
                                       (cluster-heartbeat-interval m)))
                :name (uiop:strcat "cluster-heartbeat-" (cluster-worker-id m)))
               (bordeaux-threads:make-thread
-               (lambda () (%tick-loop m #'cluster-scan-tick (cluster-scan-interval m)))
+               (lambda () (%tick-loop m "scan" #'cluster-scan-tick
+                                      (cluster-scan-interval m)))
                :name (uiop:strcat "cluster-scan-" (cluster-worker-id m)))
               (bordeaux-threads:make-thread
-               (lambda () (%tick-loop m #'cluster-takeover-tick
+               (lambda () (%tick-loop m "takeover" #'cluster-takeover-tick
                                       (cluster-takeover-interval m)))
                :name (uiop:strcat "cluster-takeover-" (cluster-worker-id m)))))
   (cluster-join m)
   m)
 
 (defun stop-cluster-manager (m)
-  "Stop the tick threads (they observe the running flag within one interval),
-gracefully leave, disconnect redis — the MANAGER's connection and the default
-store's (controller-mandated, Task 8 review ruling: the store holds its own
-lazy redis conn that would otherwise outlive the manager). Safe to call
-multiple times."
+  "Stop the tick threads (they observe the running flag within one interval)
+(phase 14 C2: poll-join with a deadline — destroy only as the bounded
+fallback, see %stop-tick-threads), gracefully leave, disconnect redis — the
+MANAGER's connection and the default store's (controller-mandated, Task 8
+review ruling: the store holds its own lazy redis conn that would otherwise
+outlive the manager). Safe to call multiple times."
   (setf (cluster-running m) nil)
-  (dolist (th (cluster-threads m))
-    (ignore-errors (bordeaux-threads:destroy-thread th)))
+  (%stop-tick-threads m)
   (setf (cluster-threads m) nil)
   (ignore-errors (cluster-leave m))
   (when (cluster-conn m)
