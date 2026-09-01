@@ -18,6 +18,8 @@
            #:server-health
            ;; Phase 14 C4 — KC stringification at data boundaries (proxy reuse)
            #:kc->json
+           ;; Phase 14 C3 — canonical per-student event-log key
+           #:student-events-key
            ;; slot readers/accessors used by tests and (Task 4) HTTP handlers
            #:server-acceptor #:server-port
            #:server-students #:server-sessions #:server-models
@@ -127,6 +129,12 @@ zero-defvar/defparameter). The sid remains an opaque string to consumers."
           (get-internal-real-time)
           (gensym "s")))
 
+(defun student-events-key (student-id)
+  "Canonical redis key for STUDENT-ID's shared event log — the single source
+of the mtt:student:<id>:events layout (phase 14 C3; used by event-log-for
+here, cluster adoption, and the proxy's location-free mastery)."
+  (format nil "mtt:student:~a:events" student-id))
+
 (defun event-log-for (server student-id)
   "Return the event-log to attach to a new student-session. If SERVER has a
 redis-config, build a redis-event-log keyed per-student (durable); otherwise a
@@ -139,7 +147,7 @@ taken when the operator passes :redis-config at start-tutor-server time, in
 which case the deployment is expected to have loaded mtt/redis-store."
   (let ((rc (server-redis-config server)))
     (if rc
-        (mtt:make-redis-event-log :key (format nil "mtt:student:~a:events" student-id)
+        (mtt:make-redis-event-log :key (student-events-key student-id)
                                   :host (getf rc :host) :port (getf rc :port))
         (mtt:make-event-log))))
 

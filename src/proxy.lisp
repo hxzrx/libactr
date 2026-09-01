@@ -239,7 +239,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
     (let ((ss (mtt:start-student-session
                student-id
                :event-log (mtt:make-redis-event-log
-                           :key (format nil "mtt:student:~a:events" student-id)
+                           :key (mtt/server:student-events-key student-id)
                            :host (proxy-redis-host p) :port (proxy-redis-port p)))))
       (unwind-protect
            (let* ((events (mtt:log-all-events (mtt:student-session-log ss)))

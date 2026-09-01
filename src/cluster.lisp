@@ -343,7 +343,7 @@ student's redis event log continues where the dead worker left it."
            (adapter (cdr entry))
            (student-id (getf checkpoint :student-id))
            (log (mtt:make-redis-event-log
-                 :key (format nil "mtt:student:~a:events" student-id)
+                 :key (mtt/server:student-events-key student-id)
                  :host (cluster-redis-host m) :port (cluster-redis-port m)))
            (session (mtt:restore-from-checkpoint checkpoint model log)))
       (setf (gethash sid (mtt/server:server-sessions server))

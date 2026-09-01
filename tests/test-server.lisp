@@ -846,3 +846,10 @@ other conditions still propagate (500 semantics unchanged)."
 KC stringification at data boundaries (the proxy had to inline a copy)."
   (is (eq :external (nth-value 1 (find-symbol "KC->JSON" :mtt/server))))
   (is (string= "BORROW" (mtt/server:kc->json :borrow))))
+
+(test server.student-events-key-single-source
+  "Phase 14 C3: the event-log key layout has ONE definition point, exported —
+server event logs, cluster adoption, and the proxy's location-free mastery
+all build it via student-events-key (was: three hardcoded format strings)."
+  (is (eq :external (nth-value 1 (find-symbol "STUDENT-EVENTS-KEY" :mtt/server))))
+  (is (string= "mtt:student:lea:events" (mtt/server:student-events-key "lea"))))
