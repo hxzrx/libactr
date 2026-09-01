@@ -840,3 +840,9 @@ other conditions still propagate (500 semantics unchanged)."
     ;; two component separators after the prefix (ut | irt | gensym)
     (is (= 2 (count #\- (subseq a 5))))
     (is (not (string= a b)))))
+
+(test server.kc->json-exported
+  "Phase 14 C4: kc->json is exported from :mtt/server — the single source for
+KC stringification at data boundaries (the proxy had to inline a copy)."
+  (is (eq :external (nth-value 1 (find-symbol "KC->JSON" :mtt/server))))
+  (is (string= "BORROW" (mtt/server:kc->json :borrow))))

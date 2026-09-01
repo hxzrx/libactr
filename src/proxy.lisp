@@ -250,7 +250,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
                  (%respond
                   (%json (list :student_id student-id
                                :kc (mapcar (lambda (x)
-                                             (list :kc (princ-to-string (getf x :kc))
+                                             (list :kc (mtt/server:kc->json (getf x :kc))
                                                    :correct (getf x :correct)
                                                    :total (getf x :total)
                                                    :accuracy (getf x :accuracy)

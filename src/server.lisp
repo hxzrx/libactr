@@ -16,6 +16,8 @@
            #:server-start-session #:server-step-session
            #:server-end-session #:server-student-mastery
            #:server-health
+           ;; Phase 14 C4 — KC stringification at data boundaries (proxy reuse)
+           #:kc->json
            ;; slot readers/accessors used by tests and (Task 4) HTTP handlers
            #:server-acceptor #:server-port
            #:server-students #:server-sessions #:server-models
