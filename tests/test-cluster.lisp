@@ -678,3 +678,33 @@ student -> 404."
                  (is (= 404 status))))
           (stop-tutor-proxy p)
           (stop-tutor-server s))))))
+
+;;; --- Phase 14 C1: tick error visibility ---------------------------------------
+
+;; [brief defect, run-evidenced (RED: UNDEFINED-FUNCTION (SETF
+;; CLUSTER-RUNNING) — the test package :use does not inherit internal
+;; symbols): cluster-running is an INTERNAL accessor (unlike cluster-threads,
+;; which is exported), so the brief's bare (setf (cluster-running m) …) reads
+;; as mtt/cluster-test::cluster-running. Qualified with the same double-colon
+;; prefix the brief itself uses for %tick-loop; assertions unchanged.]
+(test cluster.tick-loop-survives-and-logs-errors
+  "C1: a throwing tick is reported (tick name + condition, one line on
+*error-output*) and the loop keeps running until the running flag clears
+(the old ignore-errors swallowed everything silently)."
+  (let* ((n 0)
+         (m (make-cluster-manager
+             :server (start-tutor-server :port 0 :start-acceptor-p nil)
+             :worker-id "w-err")))
+    (setf (mtt/cluster::cluster-running m) t)
+    (flet ((bad-tick (mm)
+             (declare (ignore mm))
+             (incf n)
+             (if (>= n 2)
+                 (setf (mtt/cluster::cluster-running m) nil)  ; clean exit on 2nd call
+                 (error "boom-~a" n))))
+      (let ((out (with-output-to-string (*error-output*)
+                   (mtt/cluster::%tick-loop m "test" #'bad-tick 0))))
+        (is (= 2 n))
+        (is (and (search "test tick failed" out)
+                 (search "boom-1" out)
+                 t))))))

@@ -458,9 +458,13 @@ sequences store-then-manager the same way).]"
 
 ;; --- thread lifecycle (thin timers over the tick fns) ------------------------
 
-(defun %tick-loop (m tick interval)
+(defun %tick-loop (m name tick interval)
   (loop :while (cluster-running m)
-        :do (ignore-errors (funcall tick m))
+        :do (handler-case (funcall tick m)
+              (error (c)
+                ;; C1 (phase 14): per-tick visibility — the name + condition on
+                ;; one line; the loop itself must keep running forever.
+                (format *error-output* "mtt/cluster: ~a tick failed: ~a~%" name c)))
             (sleep interval)))
 
 (defun make-cluster-manager (&key server worker-id redis-host redis-port
@@ -489,14 +493,15 @@ takeover). The threads are plain drivers over the single-steppable ticks."
   (setf (cluster-running m) t
         (cluster-threads m)
         (list (bordeaux-threads:make-thread
-               (lambda () (%tick-loop m #'cluster-heartbeat-tick
+               (lambda () (%tick-loop m "heartbeat" #'cluster-heartbeat-tick
                                       (cluster-heartbeat-interval m)))
                :name (uiop:strcat "cluster-heartbeat-" (cluster-worker-id m)))
               (bordeaux-threads:make-thread
-               (lambda () (%tick-loop m #'cluster-scan-tick (cluster-scan-interval m)))
+               (lambda () (%tick-loop m "scan" #'cluster-scan-tick
+                                      (cluster-scan-interval m)))
                :name (uiop:strcat "cluster-scan-" (cluster-worker-id m)))
               (bordeaux-threads:make-thread
-               (lambda () (%tick-loop m #'cluster-takeover-tick
+               (lambda () (%tick-loop m "takeover" #'cluster-takeover-tick
                                       (cluster-takeover-interval m)))
                :name (uiop:strcat "cluster-takeover-" (cluster-worker-id m)))))
   (cluster-join m)
