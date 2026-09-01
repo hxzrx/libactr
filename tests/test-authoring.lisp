@@ -452,3 +452,33 @@ the collection now degrades to one collected error."
       (declare (ignore warnings))
       (is (= 1 (length errors)))
       (is (and (search ":answers" (first errors)) t)))))
+
+(test validator.dotted-answer-entry-degrades-to-error
+  "B2: a dotted answer entry ((5 . 5)) is a COLLECTED error, not a signal
+(getf used to TYPE-ERROR)."
+  (multiple-value-bind (errors warnings)
+      (mtt:validate-bug-spec
+       (mtt:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
+                          :answers '((5 . 5)) :when t))
+    (declare (ignore warnings))
+    (is (find-if (lambda (e) (search "malformed answer entry" e)) errors))))
+
+(test validator.dotted-fact-slot-entry-degrades-to-error
+  "B2: a dotted fact-slot entry ((digit . 5)) is a collected error, not a
+signal."
+  (multiple-value-bind (errors warnings)
+      (mtt:validate-bug-spec
+       (mtt:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
+                          :fact-slots '((digit . 5)) :when t))
+    (declare (ignore warnings))
+    (is (find-if (lambda (e) (search "malformed fact-slot entry" e)) errors))))
+
+(test validator.dotted-goal-guard-entry-degrades-to-error
+  "B2: a dotted goal-guard entry ((ones . 4)) is a collected error, not a
+signal (length used to TYPE-ERROR)."
+  (multiple-value-bind (errors warnings)
+      (mtt:validate-bug-spec
+       (mtt:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
+                          :goal-guard '((ones . 4)) :when t))
+    (declare (ignore warnings))
+    (is (find-if (lambda (e) (search "malformed goal-guard entry" e)) errors))))
