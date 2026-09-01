@@ -55,3 +55,15 @@ tens slots are a harmless superset — only the ones slots appear in :when)."
       (is (null errors)
           "subtraction spec ~a: ~{~a~^; ~}"
           (mtt:bug-spec-name spec) errors))))
+
+(test subtraction-loader-rejects-invalid-spec
+  "C7: the loader's validation gate actually signals on errors (mirrors
+fraction-loader-rejects-invalid-spec). The fboundp IS the wiring assertion."
+  (is (fboundp 'mtt/subtraction-tutor::%validate-specs!))
+  (signals error
+    (mtt/subtraction-tutor::%validate-specs!
+     (list (mtt:make-bug-spec
+            :name 'buggy-x :kind :x :kc :x :goal-type 'sub2
+            :answers '((:action "value" :slot res-ones :as d))
+            :fact-slots '((num :from (:answer 1)))   ; out of range for 1 answer
+            :when '(= d num))))))

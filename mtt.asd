@@ -150,7 +150,11 @@
   :components ((:file "examples/past-tense-tutor")))
 
 (asdf:defsystem "mtt/past-tense-tutor-test"
-  :depends-on ("mtt/past-tense-tutor" "fiveam")
+  ;; phase 14 C7: the sad-path gate test drives the ADAPTER's
+  ;; %validate-specs! (the gate lives in make-past-tense-adapter, not the
+  ;; tutor loader), so the adapter system must be in the image for the test
+  ;; file to even read the symbol.
+  :depends-on ("mtt/past-tense-tutor" "mtt/past-tense-adapter" "fiveam")
   :components ((:file "tests/test-past-tense-tutor")))
 
 ;;; Phase 10 Task 3 — third domain adapter (past-tense). Reuses
