@@ -411,17 +411,29 @@ before adopt's own manager-lock scope — never nested (the scan tick already
 sequences store-then-manager the same way).]"
   (labels ((claim (sid)
              (with-cluster-redis (m)
-               (or (and (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
-                        (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m)))
-                   ;; Crash gap (final review): a taker that died between SETNX
-                   ;; and EXPIRE leaves a claim with NO TTL — SETNX then fails
-                   ;; for every future taker, blocking this sid's takeover
-                   ;; forever. On the losing path, reclaim the residue ONCE
-                   ;; (single retry, no loop): TTL -1 = exists with no expiry.
-                   (and (= -1 (redis:red-ttl (cluster-claim-key m sid)))
-                        (redis:red-del (cluster-claim-key m sid))
-                        (redis:red-setnx (cluster-claim-key m sid) (cluster-worker-id m))
-                        (redis:red-expire (cluster-claim-key m sid) (cluster-claim-ttl m))))))
+               ;; A3 (phase 14): the WHOLE claim — TTL-less crash-residue
+               ;; reclaim + SETNX + EXPIRE — is ONE atomic Lua unit (single
+               ;; round-trip). Closes both the multi-roundtrip composite race
+               ;; of the previous TTL->DEL->SETNX->EXPIRE losing path AND the
+               ;; crash gap between SETNX and EXPIRE (a taker dying exactly
+               ;; there leaves the no-TTL residue this script's first line
+               ;; reclaims — self-healing). Truthy = we hold the claim,
+               ;; exactly the previous contract.
+               ;; [brief defect, probe-evidenced (live redis, 2026-09-01):
+               ;; the brief returned the raw red-eval result — the script's
+               ;; LOSING path is Lua `return 0`, an INTEGER, and only nil is
+               ;; false in CL, so (when (claim sid)) adopted WITHOUT holding
+               ;; the claim (claim-mutex-blocks-second-taker RED under the
+               ;; verbatim form; probe: win => 1, lose => 0, (if 0 ...) =>
+               ;; truthy branch, while the previous SETNX/EXPIRE :boolean
+               ;; replies were t/nil). Script byte-identical; the Lisp side
+               ;; compares to 1, restoring the t/nil contract.]
+               (= 1 (redis:red-eval
+                "if redis.call('TTL', KEYS[1]) == -1 then redis.call('DEL', KEYS[1]) end
+if redis.call('SETNX', KEYS[1], ARGV[1]) == 1 then redis.call('EXPIRE', KEYS[1], ARGV[2]) return 1 end
+return 0"
+                1 (cluster-claim-key m sid)
+                (cluster-worker-id m) (princ-to-string (cluster-claim-ttl m))))))
            (drop-claim (sid)
              (with-cluster-redis (m)
                (redis:red-del (cluster-claim-key m sid)))))

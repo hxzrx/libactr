@@ -351,6 +351,28 @@ WITH a TTL still blocks (the mutex semantics claim-mutex tests above)."
         (stop-tutor-server s1)
         (stop-tutor-server s2)))))
 
+(test cluster.claim-wins-atomically-with-ttl
+  "A3: when the claim is won, SETNX and EXPIRE land as ONE atomic unit —
+observable through the error path (adopt fails on an unregistered model, so
+the claim survives) with a positive TTL bounded by claim-ttl. The RED probe
+(EXPIRE omitted from the script) reads -1."
+  (with-test-redis (conn port)
+    (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-tl:")
+      (declare (ignore s1 m1))
+      (unwind-protect
+           (progn
+             (remhash "sub" (server-models s2))     ; adopt errors post-claim
+             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+               (declare (ignore dead))
+               (is (= 0 taken))
+               (let ((ttl (redis:red-ttl (uiop:strcat "t-tl:claim:" sid))))
+                 (is (plusp ttl))
+                 (is (<= ttl (mtt/cluster::cluster-claim-ttl m2))))))
+        (stop-cluster-manager m1)
+        (stop-cluster-manager m2)
+        (stop-tutor-server s1)
+        (stop-tutor-server s2)))))
+
 (test cluster.no-checkpoint-leaves-route-alone
   "A dead worker's sid with NO checkpoint (died before the first scan) is not
 adopted: no claim residue, routes untouched (the proxy will 503 and the
