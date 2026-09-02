@@ -2,7 +2,7 @@
 
 (asdf:defsystem "libactr"
   :version "0.4.0"
-  :description "Independent, multi-user-safe model-tracing production engine"
+  :description "An independent Common Lisp engine that turns models written in a subset of the ACT-R production language into a multi-user-safe tutoring runtime: each student step is traced against the model's productions (on-path / buggy / off-path) and folded into Bayesian per-skill mastery, served over HTTP and cluster-scalable. It is not ACT-R and never loads ACT-R at runtime — a vendored snapshot of the official architecture is used only as its development-time verification oracle."
   :long-description "libactr is an independent, multi-user-safe model-tracing tutor engine for cognitive-tutor deployments, following the Carnegie Learning / MATHia lineage of authoring models in ACT-R and shipping a dedicated runtime: a declarative production-language kernel (reader, compiler, matcher, tracer), Bayesian knowledge tracing, an HTTP service layer with Redis-backed event logs, and multi-worker cluster orchestration with checkpoint takeover. Four tutor domains ship as reference adapters with declarative bug libraries (addition, fraction, past-tense, subtraction). The core holds zero global mutable state — every piece of per-session and per-student state lives on CLOS instances and locks stay in the service layer — so one Lisp image can trace many students concurrently; the core system itself has no dependencies. A vendored frozen ACT-R snapshot (vendor/act-r/, LGPL-2.1) serves as the development-time dual-track oracle (libactr/oracle, libactr/dual); the repository is self-contained — a fresh clone runs all ten test suites — and runtime deployments never load the oracle."
   :license "MIT"
   :author "The libactr authors"
