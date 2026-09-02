@@ -3,7 +3,7 @@
 (asdf:defsystem "libactr"
   :version "0.4.0"
   :description "Independent, multi-user-safe model-tracing production engine"
-  :long-description "libactr is the Path-B deliverable of the ACT-R project: an independent, multi-user-safe model-tracing tutor engine for cognitive-tutor deployments, following the Carnegie Learning / MATHia lineage of authoring models in ACT-R and shipping a dedicated runtime. The core holds zero global mutable state — every piece of per-session and per-student state lives on CLOS instances and locks stay in the service layer — so one Lisp image can trace many students concurrently; the core system itself has no dependencies. act-r/ is used strictly as a development-time dual-track oracle (libactr/oracle, libactr/dual); runtime deployments never load it."
+  :long-description "libactr is an independent, multi-user-safe model-tracing tutor engine for cognitive-tutor deployments, following the Carnegie Learning / MATHia lineage of authoring models in ACT-R and shipping a dedicated runtime: a declarative production-language kernel (reader, compiler, matcher, tracer), Bayesian knowledge tracing, an HTTP service layer with Redis-backed event logs, and multi-worker cluster orchestration with checkpoint takeover. Four tutor domains ship as reference adapters with declarative bug libraries (addition, fraction, past-tense, subtraction). The core holds zero global mutable state — every piece of per-session and per-student state lives on CLOS instances and locks stay in the service layer — so one Lisp image can trace many students concurrently; the core system itself has no dependencies. A vendored frozen ACT-R snapshot (vendor/act-r/, LGPL-2.1) serves as the development-time dual-track oracle (libactr/oracle, libactr/dual); the repository is self-contained — a fresh clone runs all ten test suites — and runtime deployments never load the oracle."
   :license "MIT"
   :author "The libactr authors"
   :depends-on ()
@@ -22,7 +22,8 @@
                (:file "src/authoring"))
   :in-order-to ((test-op (test-op "libactr/test"))))
 
-;;; act-r/ dual-track oracle — dev-time only, pulls in act-r.
+;;; Dual-track oracle — dev-time only; the act-r dependency resolves to the
+;;; vendored snapshot under vendor/act-r/.
 (asdf:defsystem "libactr/oracle"
   :description "act-r/ dual-track oracle adapter (dev-time)"
   :depends-on ("libactr" "act-r")

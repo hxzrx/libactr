@@ -21,6 +21,11 @@ the maintenance-mode public-surface freeze. Nothing in this repository or
 its tests/examples referenced the nicknames by prefix; all ten suite
 baselines are unchanged.
 
+Refreshed the asd `:long-description` to the current state: dropped the
+internal project jargon and the stale sibling-`act-r/` reference, and now
+describes the shipped surface (kernel, KT, service layer, cluster,
+four domain adapters) and the self-contained vendored oracle.
+
 ## 0.4.0 (2026-09-02) — project-wide rename; behavior unchanged
 
 The library took its current name and identity across every public
