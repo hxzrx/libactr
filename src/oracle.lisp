@@ -51,7 +51,6 @@
 
 (defpackage :libactr/oracle
   (:use :cl)
-  (:nicknames :model-tracing/oracle)
   (:export #:oracle-load-model
            #:oracle-production-names
            #:oracle-set-goal-from-chunk

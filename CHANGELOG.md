@@ -14,6 +14,13 @@ alone runs all ten suites with no sibling `act-r/` checkout. Development
 infrastructure only: no code, public-surface, or ASDF system-name changes,
 and all suite baselines are identical (381/316/51/407/414/22/24/21/35/128).
 
+Removed the legacy descriptive package nicknames `:model-tracing` (for
+`:libactr`) and `:model-tracing/oracle` (for `:libactr/oracle`) — the last
+public traces of the former project identity, a user-directed exception to
+the maintenance-mode public-surface freeze. Nothing in this repository or
+its tests/examples referenced the nicknames by prefix; all ten suite
+baselines are unchanged.
+
 ## 0.4.0 (2026-09-02) — project-wide rename; behavior unchanged
 
 The library took its current name and identity across every public

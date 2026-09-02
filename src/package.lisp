@@ -4,7 +4,6 @@
 ;;;; should use each group and what stability it promises.
 (defpackage :libactr
   (:use :cl)
-  (:nicknames :model-tracing)
   (:export
    ;; ===== 稳定契约:核心引擎(types/reader/compiler/matcher/tracer) =====
    ;; 最内层 API:模型数据结构 + read/compile/match/trace。库消费者(含 act-r
