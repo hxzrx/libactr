@@ -11,14 +11,15 @@ student steps against them at service throughput.
 
 ## Status
 
-v0.2.0 — feature-complete engine + cluster orchestration (see
-[CHANGELOG](CHANGELOG.md)). Four domains shipped (addition, fraction,
-past-tense, subtraction), each as a tutor + adapter pair with a declarative
-bug library.
+v0.3.0 — feature-complete candidate; maintenance mode from here (defect
+fixes only, public surface frozen — see [CHANGELOG](CHANGELOG.md)). Four
+domains shipped (addition, fraction, past-tense, subtraction), each as a
+tutor + adapter pair with a declarative bug library.
 
 ## Requirements
 
-- SBCL (developed and tested on 2.6.7); any ANSI CL with ASDF 3.3+ should work.
+- SBCL (developed and tested on 2.6.7; baselines re-verified on 2.6.8); any
+  ANSI CL with ASDF 3.3+ should work.
 - [Quicklisp](https://www.quicklisp.org/) for the service-layer deps:
   hunchentoot, bordeaux-threads, yason (server); cl-redis (redis-store);
   dexador (cluster); fiveam (tests).
@@ -57,7 +58,7 @@ bug library.
         (mtt:compute-mastery (mtt:log-all-events (mtt:session-log session)))))
 ```
 
-Result (SBCL 2.6.7):
+Result (SBCL 2.6.7 / 2.6.8 — identical):
 
 ```lisp
 (:ON-PATH FIND-COMMON-DENOMINATOR :ON-PATH
@@ -381,11 +382,11 @@ sbcl --non-interactive --eval '(ql:quickload :mtt/cluster-test)' --eval '(5am:ru
 # :mtt/past-tense-tutor, :mtt/subtraction-tutor, :mtt/empirical
 ```
 
-Green baseline at v0.2.0 (SBCL 2.6.7, assertion-level FiveAM counts, 0
-failures / 0 skips): `:mtt` 377, `:mtt/server` 294, `:mtt/cluster` 83,
-`:mtt/redis-store` 50, `:mtt/empirical` 35, `:mtt/fraction-tutor` 22,
-`:mtt/past-tense-tutor` 22, `:mtt/subtraction-tutor` 19; the concurrent and
-dual legs rerun the `:mtt` suite with bordeaux/act-r loaded (403 / 410 as
+Green baseline at v0.3.0 (SBCL 2.6.8, assertion-level FiveAM counts, 0
+failures / 0 skips): `:mtt` 381, `:mtt/server` 316, `:mtt/cluster` 126,
+`:mtt/redis-store` 51, `:mtt/empirical` 35, `:mtt/fraction-tutor` 22,
+`:mtt/past-tense-tutor` 24, `:mtt/subtraction-tutor` 21; the concurrent and
+dual legs rerun the `:mtt` suite with bordeaux/act-r loaded (407 / 414 as
 run). The cluster e2e spawns real SBCL worker subprocesses and kills one
 mid-problem.
 
