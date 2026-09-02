@@ -400,9 +400,14 @@ client restarts — spec §5.2 protocol 4)."
       (unwind-protect
            (progn
              (redis:red-del (uiop:strcat "t-nc:ckpt:" sid))   ; no checkpoint
-             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
-               (is (= 0 taken))
-               (is (equal '("w1") dead)))
+             (let ((out (with-output-to-string (*error-output*)
+                          (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+                            (is (= 0 taken))
+                            (is (equal '("w1") dead))))))
+               ;; P09 (parked-minors cleanup): the no-checkpoint claim drop is
+               ;; no longer silent — one log line, the same observability the
+               ;; foreign-skip and error-isolation branches already have.
+               (is (and (search "no checkpoint" out) t)))
              (is (null (gethash sid (server-sessions s2))))
              (is (string= "w1" (first (multiple-value-list
                                       (cluster-route-get

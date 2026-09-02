@@ -507,7 +507,15 @@ return 0"
                                           (mtt/server:server-sessions
                                            (cluster-server m))))))
                   (cond
-                    ((null cp) (drop-claim sid))
+                    ((null cp)
+                     ;; P09 (parked-minors cleanup): not silent — the same
+                     ;; observability the foreign-skip and error-isolation
+                     ;; branches have (why a takeover didn't happen must be
+                     ;; greppable when an operator debugs a 503ing route).
+                     (format *error-output*
+                             "mtt/cluster: takeover of ~a skipped — no checkpoint (claim dropped; route stays: the proxy 503s and the client restarts)~%"
+                             sid)
+                     (drop-claim sid))
                     (h (if (%checkpoint-matches-session-p
                             cp (mtt:checkpoint-session (mtt/server:handle-session h)))
                            (progn (cluster-adopt-session m sid cp w) (incf taken))
