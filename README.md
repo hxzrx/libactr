@@ -12,10 +12,12 @@ student steps against them at service throughput.
 
 ## Status
 
-v0.3.0 — feature-complete candidate; maintenance mode from here (defect
-fixes only, public surface frozen — see [CHANGELOG](CHANGELOG.md)). Four
-domains shipped (addition, fraction, past-tense, subtraction), each as a
-tutor + adapter pair with a declarative bug library.
+0.4.x — maintenance mode (defect fixes only, public surface frozen — see
+[CHANGELOG](CHANGELOG.md); user-directed exceptions are recorded there).
+Four domains shipped (addition, fraction, past-tense, subtraction), each
+as a tutor + adapter pair with a declarative bug library. The dev-time
+oracle ships vendored (`vendor/act-r/`), so the repository is
+self-contained: a fresh clone runs all ten test suites standalone.
 
 ## Requirements
 
@@ -220,10 +222,11 @@ single-steppable (`cluster-heartbeat-tick` etc.) for deterministic tests.
 
 ## Versioning
 
-`0.3.0` is the feature-complete candidate. From here the library is in
-maintenance mode: defects are fixed, the public surface does not move.
-`1.0.0` will be cut once a real consumer project has validated libactr as a
-dependency in production shape.
+Feature-complete since `0.3.0`; the library is in maintenance mode:
+defects are fixed, the public surface does not move (user-directed
+exceptions are recorded in the CHANGELOG). `1.0.0` will be cut once a
+real consumer project has validated libactr as a dependency in
+production shape.
 
 ## System matrix
 
@@ -388,7 +391,8 @@ sbcl --non-interactive --eval '(ql:quickload :libactr/cluster-test)' --eval '(5a
 # :libactr/past-tense-tutor, :libactr/subtraction-tutor, :libactr/empirical
 ```
 
-Green baseline at v0.3.1 (SBCL 2.6.8, assertion-level FiveAM counts, 0
+Green baseline at 0.4.0, re-verified 2026-09-02 against the vendored
+oracle (SBCL 2.6.8, assertion-level FiveAM counts, 0
 failures / 0 skips): `:libactr` 381, `:libactr/server` 316, `:libactr/cluster` 128,
 `:libactr/redis-store` 51, `:libactr/empirical` 35, `:libactr/fraction-tutor` 22,
 `:libactr/past-tense-tutor` 24, `:libactr/subtraction-tutor` 21; the concurrent and
