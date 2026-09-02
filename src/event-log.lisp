@@ -3,7 +3,7 @@
 ;;;; deterministic derivation of the kc-event stream it holds. Append-only and
 ;;;; serializable. The in-memory log's vector is per-session PRIVATE mutable
 ;;;; state (held inside a cognitive-session), NOT global.
-(in-package :mtt)
+(in-package :libactr)
 
 ;; --- log-event: one record per traced step; pure data ------------------------
 (defstruct log-event

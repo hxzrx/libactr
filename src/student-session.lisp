@@ -3,7 +3,7 @@
 ;;;; shared across all of that student's cognitive-sessions (via Phase 4's
 ;;;; start-session :event-log injection point) so cross-problem mastery is one
 ;;;; read. Pure: no HTTP, no Redis, no locks, no global variables.
-(in-package :mtt)
+(in-package :libactr)
 
 (defclass student-session ()
   ((student-id :reader student-session-student-id :initarg :student-id)

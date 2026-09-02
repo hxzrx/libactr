@@ -2,7 +2,7 @@
 ;;;; Phase 8: KC attribution (apply-kc-map). Future authoring utilities land here.
 ;;;; Phase 12: minimal bug-DSL core — bug-spec data / bug-answer-env / eval-bug-form.
 ;;;; NO global mutable state — pure transforms of their argument.
-(in-package :mtt)
+(in-package :libactr)
 
 (defun apply-kc-map (model-definition kc-map)
   "Attribute production-kc on MODEL-DEFINITION's productions per KC-MAP.
@@ -71,7 +71,7 @@ signals an error (authoring typo); bound-to-nil is a legal value."
   (let ((cell (assoc name env :key #'symbol-name :test #'string=)))
     (if cell
         (cdr cell)
-        (error "mtt: eval-bug-form: unbound name ~a in bug :when form" name))))
+        (error "libactr: eval-bug-form: unbound name ~a in bug :when form" name))))
 
 (defun eval-bug-form (form env &key (predicates nil))
   "Evaluate the restricted bug-detection S-expr FORM against ENV (alist of
@@ -98,7 +98,7 @@ Returns a generalized boolean."
                      (let ((fn (cdr (assoc op predicates
                                            :key #'symbol-name :test #'string=))))
                        (unless fn
-                         (error "mtt: eval-bug-form: unknown operator ~a in bug :when form"
+                         (error "libactr: eval-bug-form: unknown operator ~a in bug :when form"
                                 op))
                        (apply fn (mapcar #'ev args)))))))
                (t f))))
@@ -120,7 +120,7 @@ KIND keyword literal + one VARIABLE test per :from fact slot, numbered =v1,
 one (slot . =vN) pair per answer, N = the variable of the fact slot sourcing
 that answer. All GENERATED symbols (GOAL/RETRIEVAL/BUG-FACT/KIND/=vN) intern
 in the package of the spec's NAME (= the model package): authoring.lisp's
-own 'goal would be MTT::GOAL and silently never match a model-package
+own 'goal would be LIBACTR::GOAL and silently never match a model-package
 buffer."
   (let* ((name (bug-spec-name spec))
          (pkg (symbol-package name))

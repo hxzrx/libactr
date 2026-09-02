@@ -24,7 +24,7 @@
 ;;;; compile-model MUTATES its argument (overwriting production lhs/rhs and
 ;;;; rewriting chunk-type-def slots) but takes no global state — it is a pure
 ;;;; transform of its argument and returns that same argument.
-(in-package :mtt)
+(in-package :libactr)
 
 ;; ------------------------------------------------------------------ helpers
 

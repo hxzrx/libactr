@@ -1,6 +1,6 @@
 ;;;; tests/test-checkpoint.lisp — Phase 4 checkpoint/restore unit tests.
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (test checkpoint-restore-roundtrips-solving-state
   "checkpoint-session then restore-from-checkpoint reproduces state/path/step-count/

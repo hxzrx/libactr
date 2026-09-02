@@ -7,13 +7,13 @@
 ;;;; Plus an end-to-end tie (test 8): drive a real fraction problem 3x via the
 ;;;; server and read P(L) back from server-student-mastery, so P(L) validation is
 ;;;; not ONLY on hand-constructed events.
-;;;; Suite :mtt/empirical (own system, does NOT join :mtt).
-(defpackage :mtt/empirical-test
-  (:use :cl :5am :mtt))
-(in-package :mtt/empirical-test)
+;;;; Suite :libactr/empirical (own system, does NOT join :libactr).
+(defpackage :libactr/empirical-test
+  (:use :cl :5am :libactr))
+(in-package :libactr/empirical-test)
 
-(def-suite :mtt/empirical :description "empirical validation: tracing + P(L) behavior")
-(in-suite :mtt/empirical)
+(def-suite :libactr/empirical :description "empirical validation: tracing + P(L) behavior")
+(in-suite :libactr/empirical)
 
 ;;; --- P(L) math leg: drive compute-mastery directly with synthetic events ----
 
@@ -75,9 +75,9 @@ via per-KC override. The slow KC ends strictly lower."
 ;;; --- tracing leg: drive server-step-session with known-correct/buggy steps ---
 
 (defun %frac-server ()
-  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
-    (mtt/server:register-model s "frac" (mtt/fraction-adapter:build-fraction-model)
-                               (mtt/fraction-adapter:make-fraction-adapter))
+  (let ((s (libactr/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (libactr/server:register-model s "frac" (libactr/fraction-adapter:build-fraction-model)
+                               (libactr/fraction-adapter:make-fraction-adapter))
     s))
 
 (test tracing.fraction-on-path-and-buggy
@@ -85,19 +85,19 @@ via per-KC override. The slow KC ends strictly lower."
 planted add-across sum -> off-path-buggy."
   (let ((s (%frac-server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "e" "1/2+1/3" "frac")))
+         (let ((sid (libactr/server:server-start-session s "e" "1/2+1/3" "frac")))
            ;; on-path: 6 then 5/6
-           (is (eq :on-path (mtt:trace-result-status
-                             (nth-value 0 (mtt/server:server-step-session
+           (is (eq :on-path (libactr:trace-result-status
+                             (nth-value 0 (libactr/server:server-step-session
                                            s sid '(("type" . "common-denom") ("value" . "6")))))))
            ;; planted bug: after correct cdenom, sum 2/5 -> off-path-buggy
-           (let ((sid2 (mtt/server:server-start-session s "e2" "1/2+1/3" "frac")))
-             (mtt/server:server-step-session s sid2 '(("type" . "common-denom") ("value" . "6")))
+           (let ((sid2 (libactr/server:server-start-session s "e2" "1/2+1/3" "frac")))
+             (libactr/server:server-step-session s sid2 '(("type" . "common-denom") ("value" . "6")))
              (is (eq :off-path-buggy
-                     (mtt:trace-result-status
-                      (nth-value 0 (mtt/server:server-step-session
+                     (libactr:trace-result-status
+                      (nth-value 0 (libactr/server:server-step-session
                                     s sid2 '(("type" . "sum") ("num" . "2") ("denom" . "5")))))))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- end-to-end P(L) tie: real traced log -> compute-mastery -> P(L) -----------
 ;;; Validates that P(L) math isn't only exercised on hand-constructed events: the
@@ -115,26 +115,26 @@ rose above L0=0.1 after 3 correct observations. (1/2+1/3: cdenom 6, sum 5/6.)"
     (unwind-protect
          (progn
            (dotimes (i 3)
-             (let ((sid (mtt/server:server-start-session s "rz" "1/2+1/3" "frac")))
-               (mtt/server:server-step-session s sid
+             (let ((sid (libactr/server:server-start-session s "rz" "1/2+1/3" "frac")))
+               (libactr/server:server-step-session s sid
                  '(("type" . "common-denom") ("value" . "6")))
-               (mtt/server:server-step-session s sid
+               (libactr/server:server-step-session s sid
                  '(("type" . "sum") ("num" . "5") ("denom" . "6")))
-               (mtt/server:server-end-session s sid)))
-           (let ((m (mtt/server:server-student-mastery s "rz")))
+               (libactr/server:server-end-session s sid)))
+           (let ((m (libactr/server:server-student-mastery s "rz")))
              (is (= 2 (length m)))
              (dolist (entry m)
                (let ((pl (getf entry :p-l)))
                  (is (and (realp pl) (< 0.0d0 pl 1.0d0)))
                  (is (> pl 0.1d0) "P(L) should rise above L0 after 3 correct")))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- cross-domain sanity: addition still behaves (regression guard) ---------
 
 (defun %add-server ()
-  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
-    (mtt/server:register-model s "add" (mtt/addition-adapter:build-addition-model)
-                               (mtt/addition-adapter:make-addition-adapter))
+  (let ((s (libactr/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (libactr/server:register-model s "add" (libactr/addition-adapter:build-addition-model)
+                               (libactr/addition-adapter:make-addition-adapter))
     s))
 
 (test cross-domain.addition-p-l-sane
@@ -148,20 +148,20 @@ rose above L0=0.1 after 3 correct observations. (1/2+1/3: cdenom 6, sum 5/6.)"
 ;;; --- Phase 10: third domain (past-tense) — KC routing by problem variable ---
 
 (defun %pt-server ()
-  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
-    (mtt/server:register-model s "pt" (mtt/past-tense-adapter:build-past-tense-model)
-                               (mtt/past-tense-adapter:make-past-tense-adapter))
+  (let ((s (libactr/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (libactr/server:register-model s "pt" (libactr/past-tense-adapter:build-past-tense-model)
+                               (libactr/past-tense-adapter:make-past-tense-adapter))
     s))
 
 (defun %pt-answer-correct (s student)
-  (let ((sid (mtt/server:server-start-session s student "go" "pt")))
-    (mtt/server:server-step-session s sid '(("type" . "answer") ("value" . "went")))
-    (mtt/server:server-end-session s sid)))
+  (let ((sid (libactr/server:server-start-session s student "go" "pt")))
+    (libactr/server:server-step-session s sid '(("type" . "answer") ("value" . "went")))
+    (libactr/server:server-end-session s sid)))
 
 (defun %pt-answer-buggy (s student)
-  (let ((sid (mtt/server:server-start-session s student "go" "pt")))
-    (mtt/server:server-step-session s sid '(("type" . "answer") ("value" . "goed")))
-    (mtt/server:server-end-session s sid)))
+  (let ((sid (libactr/server:server-start-session s student "go" "pt")))
+    (libactr/server:server-step-session s sid '(("type" . "answer") ("value" . "goed")))
+    (libactr/server:server-end-session s sid)))
 
 (test p-l.past-tense-kc-routes-by-problem-variable
   "KC-routing evidence (spec §9.5): one student answers the IRREGULAR verb 'go'
@@ -173,12 +173,12 @@ class, not the step type."
     (unwind-protect
          (progn
            (dotimes (i 3) (%pt-answer-correct s "kcr"))
-           (let ((m (mtt/server:server-student-mastery s "kcr")))
+           (let ((m (libactr/server:server-student-mastery s "kcr")))
              (is (= 1 (length m)))
              (is (eq :irregular-retrieval (getf (first m) :kc)))
              (is (> (getf (first m) :p-l) 0.1d0))
              (is (< (getf (first m) :p-l) 1.0d0))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 (test p-l.past-tense-buggy-lower-than-correct
   "Over-regularizing (go->goed, 3x) yields a strictly LOWER P(L) on
@@ -190,9 +190,9 @@ kc-event stream feeds KT with correct-p=nil on buggy steps."
            (dotimes (i 3) (%pt-answer-correct s "kcc"))
            (dotimes (i 3) (%pt-answer-buggy s "kcb"))
            (flet ((pl (student)
-                    (getf (first (mtt/server:server-student-mastery s student)) :p-l)))
+                    (getf (first (libactr/server:server-student-mastery s student)) :p-l)))
              (is (< (pl "kcb") (pl "kcc")))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 (test p-l.past-tense-third-domain-sanity
   "Cross-domain harness now spans THREE domains (addition / fraction /
@@ -206,32 +206,32 @@ in (0,1)."
 ;;; --- Phase 11: fourth domain (subtraction) — KC divergence by problem mix ---
 
 (defun %sub-server ()
-  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
-    (mtt/server:register-model s "sub"
-                               (mtt/subtraction-adapter:build-subtraction-model)
-                               (mtt/subtraction-adapter:make-subtraction-adapter))
+  (let ((s (libactr/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (libactr/server:register-model s "sub"
+                               (libactr/subtraction-adapter:build-subtraction-model)
+                               (libactr/subtraction-adapter:make-subtraction-adapter))
     s))
 
 (defun %sub-solve-no-borrow (s student)
   "One full no-borrow problem (47-25: ones 2, tens 2), start->steps->end closed."
-  (let ((sid (mtt/server:server-start-session s student "47-25" "sub")))
-    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "2")))
-    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "2")))
-    (mtt/server:server-end-session s sid)))
+  (let ((sid (libactr/server:server-start-session s student "47-25" "sub")))
+    (libactr/server:server-step-session s sid '(("type" . "digit") ("value" . "2")))
+    (libactr/server:server-step-session s sid '(("type" . "digit") ("value" . "2")))
+    (libactr/server:server-end-session s sid)))
 
 (defun %sub-solve-borrow (s student)
   "One full borrow problem (52-18: ones 4, tens 3), start->steps->end closed."
-  (let ((sid (mtt/server:server-start-session s student "52-18" "sub")))
-    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "4")))
-    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "3")))
-    (mtt/server:server-end-session s sid)))
+  (let ((sid (libactr/server:server-start-session s student "52-18" "sub")))
+    (libactr/server:server-step-session s sid '(("type" . "digit") ("value" . "4")))
+    (libactr/server:server-step-session s sid '(("type" . "digit") ("value" . "3")))
+    (libactr/server:server-end-session s sid)))
 
 (defun %sub-planted-borrow-ignore (s student)
   "One borrow problem with a planted borrow-ignore step (43-27: ones 4 = the
 mirror), then end without retry — the buggy kc-event is what feeds KT."
-  (let ((sid (mtt/server:server-start-session s student "43-27" "sub")))
-    (mtt/server:server-step-session s sid '(("type" . "digit") ("value" . "4")))
-    (mtt/server:server-end-session s sid)))
+  (let ((sid (libactr/server:server-start-session s student "43-27" "sub")))
+    (libactr/server:server-step-session s sid '(("type" . "digit") ("value" . "4")))
+    (libactr/server:server-end-session s sid)))
 
 (test p-l.subtraction-kc-divergence-by-problem-mix
   "Per-KC divergence (spec §8.3): a student solving only NO-BORROW problems
@@ -244,18 +244,18 @@ route-by-problem-variable evidence."
     (unwind-protect
          (progn
            (dotimes (i 3) (%sub-solve-no-borrow s "sa"))
-           (let ((m (mtt/server:server-student-mastery s "sa")))
+           (let ((m (libactr/server:server-student-mastery s "sa")))
              (is (= 1 (length m)))
              (is (eq :column-subtract (getf (first m) :kc)))
              (is (> (getf (first m) :p-l) 0.1d0)))
            (dotimes (i 3) (%sub-solve-borrow s "sb"))
-           (let ((m (mtt/server:server-student-mastery s "sb")))
+           (let ((m (libactr/server:server-student-mastery s "sb")))
              (is (= 2 (length m)))
              (is (> (getf (find :borrow m :key (lambda (e) (getf e :kc))) :p-l)
                     0.1d0))
              (is (< (getf (find :borrow m :key (lambda (e) (getf e :kc))) :p-l)
                     1.0d0))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 (test p-l.subtraction-buggy-lower-than-correct
   "Planting borrow-ignore (43-27 ones=4, 3x, no retry) yields a strictly LOWER
@@ -267,11 +267,11 @@ traced kc-event stream feeds KT with correct-p=nil on buggy steps."
            (dotimes (i 3) (%sub-solve-borrow s "sc"))
            (dotimes (i 3) (%sub-planted-borrow-ignore s "sd"))
            (flet ((pl (student)
-                    (getf (find :borrow (mtt/server:server-student-mastery s student)
+                    (getf (find :borrow (libactr/server:server-student-mastery s student)
                                 :key (lambda (e) (getf e :kc)))
                           :p-l)))
              (is (< (pl "sd") (pl "sc")))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 (test p-l.subtraction-fourth-domain-sanity
   "Cross-domain harness now spans FOUR domains (addition / fraction /
@@ -305,20 +305,20 @@ like the others: in (0,1)."
 mastery with THREE fraction KCs — :simplify present with total 1 — while the
 unsimplifiable control (1/2+1/3, two steps) still shows two."
   (flet ((drive (student problem steps)
-             (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+             (let ((s (libactr/server:start-tutor-server :port 0 :start-acceptor-p nil)))
                (unwind-protect
                     (progn
-                      (mtt/server:register-model s "frac"
-                                                 (mtt/fraction-adapter:build-fraction-model)
-                                                 (mtt/fraction-adapter:make-fraction-adapter))
-                      (let ((sid (mtt/server:server-start-session s student problem "frac")))
+                      (libactr/server:register-model s "frac"
+                                                 (libactr/fraction-adapter:build-fraction-model)
+                                                 (libactr/fraction-adapter:make-fraction-adapter))
+                      (let ((sid (libactr/server:server-start-session s student problem "frac")))
                         (dolist (a steps)
-                          (mtt/server:server-step-session s sid a))
+                          (libactr/server:server-step-session s sid a))
                         (multiple-value-bind (m outcome)
-                            (mtt/server:server-student-mastery s student)
+                            (libactr/server:server-student-mastery s student)
                           (declare (ignore outcome))
                           (mapcar (lambda (x) (getf x :kc)) m))))
-                  (mtt/server:stop-tutor-server s)))))
+                  (libactr/server:stop-tutor-server s)))))
     (let ((kcs-simplifiable
             (drive "es" "1/6+1/6"
                    '((("type" . "common-denom") ("value" . "6"))

@@ -3,7 +3,7 @@
 ;;;; state (buffer-state, path) and an authoritative event-log. step-session
 ;;;; threads trace-step's returns back into the session and appends an event.
 ;;;; NEVER global mutable state — all mutability lives in this CLOS instance.
-(in-package :mtt)
+(in-package :libactr)
 
 (defclass cognitive-session ()
   ((model       :reader  session-model       :initarg :model)
@@ -24,7 +24,7 @@
   (:documentation "One student x one problem traced session: a thin wrapper
 over the pure trace-step that holds ALL per-session mutable state (buffer
 state, path, event-log) as instance slots — never global. Concurrency: the
-core session is single-threaded by contract; the service layer (mtt/server's
+core session is single-threaded by contract; the service layer (libactr/server's
 session-handle) owns the per-session lock. Slot comments document each
 reader/accessor."))
 

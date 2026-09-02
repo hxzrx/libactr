@@ -1,5 +1,5 @@
 ;;; subtraction.lisp — 2-digit column subtraction with borrowing, Phase 11
-;;; second arithmetic domain. act-r/mtt common subset. MIXED slot values:
+;;; second arithmetic domain. act-r/libactr common subset. MIXED slot values:
 ;;; digit slots are small integers (fraction precedent), stage is a model-
 ;;; package symbol (past-tense precedent). Discrimination is on slot LITERALS
 ;;; (col-fact kind / sub2 stage) + cross-buffer variable unification — NOT
@@ -7,7 +7,7 @@
 ;;; Borrowing is represented as V1 decrement-in-place: the hidden
 ;;; propagate-borrow production rewrites top-tens to the decremented value
 ;;; supplied by the adapter's primed fact (mirrors addition's increment-sum +
-;;; increment-count pair). add-dm intentionally absent (mtt traces against
+;;; increment-count pair). add-dm intentionally absent (libactr traces against
 ;;; adapter-primed retrieval; dual-track sets retrieval directly). KC
 ;;; attribution is applied post-load by load-subtraction-model.
 (clear-all)

@@ -1,10 +1,10 @@
 ;;;; tests/suite.lisp — FiveAM master suite
-(defpackage :mtt/test
-  (:use :cl :5am :mtt))
+(defpackage :libactr/test
+  (:use :cl :5am :libactr))
 
-(in-package :mtt/test)
+(in-package :libactr/test)
 
-(def-suite :mtt :description "mtt engine tests")
+(def-suite :libactr :description "libactr engine tests")
 
-;; 每个 test-* 文件用 (in-suite :mtt) 加入。run 入口:
-(defun run-all () (5am:run! :mtt))
+;; 每个 test-* 文件用 (in-suite :libactr) 加入。run 入口:
+(defun run-all () (5am:run! :libactr))

@@ -2,7 +2,7 @@
 ;;;
 ;;; The oracle loads a real ACT-R model and reports which productions match a
 ;;; given buffer state, serving as ground truth for Task 7's comparison against
-;;; mtt's own matcher.  It is read-only scaffolding over ACT-R's inherently
+;;; libactr's own matcher.  It is read-only scaffolding over ACT-R's inherently
 ;;; stateful globals — NOT part of the shipped, multi-user-safe engine.
 ;;;
 ;;; KEY ACT-R API FINDINGS (verified live against tutorial/unit1/addition.lisp,
@@ -49,7 +49,7 @@
 ;;; set-buffer-chunk) are package-internal; double-colon works for both internal
 ;;; and external symbols and avoids any CL/ACT-R use-package conflicts.
 
-(defpackage :mtt/oracle
+(defpackage :libactr/oracle
   (:use :cl)
   (:nicknames :model-tracing/oracle)
   (:export #:oracle-load-model
@@ -60,7 +60,7 @@
            #:oracle-matches-p
            #:oracle-fire-and-read-slots))
 
-(in-package :mtt/oracle)
+(in-package :libactr/oracle)
 
 ;;;-----------------------------------------------------------------------------
 ;;; Internals
@@ -89,21 +89,21 @@ uses and returns the matching production names directly as its value; no-output
 suppresses the incidental command-output printing of instantiations."
   (act-r::no-output (act-r::pmatches)))
 
-(defun build-chunk-spec (mtt-chunk)
-  "Translate an mtt:chunk into an ACT-R chunk-definition list suitable for
+(defun build-chunk-spec (libactr-chunk)
+  "Translate an libactr:chunk into an ACT-R chunk-definition list suitable for
 add-dm-fct: (ISA <type> <slot> <value> ...), with every name interned into
 :ACT-R.  The chunk is left unnamed so ACT-R mints a unique name."
-  (let ((isa (mtt:chunk-isa mtt-chunk))
-        (slots (mtt:chunk-slots mtt-chunk)))
+  (let ((isa (libactr:chunk-isa libactr-chunk))
+        (slots (libactr:chunk-slots libactr-chunk)))
     (nconc (list (ar 'isa) (ar isa))
            (loop for (slot . value) in slots
                  nconc (list (ar slot) (ar value))))))
 
-(defun %set-buffer-from-chunk (buffer-name mtt-chunk)
-  "Add MTT-CHUNK to ACT-R declarative memory and copy it into BUFFER-NAME
+(defun %set-buffer-from-chunk (buffer-name libactr-chunk)
+  "Add LIBACTR-CHUNK to ACT-R declarative memory and copy it into BUFFER-NAME
 synchronously via set-buffer-chunk.  Returns the chunk name."
   (let ((chunk-name (first (act-r::no-output
-                             (act-r::add-dm-fct (list (build-chunk-spec mtt-chunk)))))))
+                             (act-r::add-dm-fct (list (build-chunk-spec libactr-chunk)))))))
     (act-r::set-buffer-chunk (ar buffer-name) chunk-name)
     chunk-name))
 
@@ -147,18 +147,18 @@ buffers/modules exist, and return the model's production names as keywords."
   "Return the current model's production names as keywords (re-query, no reset)."
   (production-names-as-keywords))
 
-(defun oracle-set-buffer-from-chunk (buffer-name mtt-chunk)
-  "Place MTT-CHUNK into ACT-R buffer BUFFER-NAME (e.g. :goal, :retrieval).
+(defun oracle-set-buffer-from-chunk (buffer-name libactr-chunk)
+  "Place LIBACTR-CHUNK into ACT-R buffer BUFFER-NAME (e.g. :goal, :retrieval).
 BUFFER-NAME may be a symbol/keyword/string in any package."
-  (%set-buffer-from-chunk buffer-name mtt-chunk))
+  (%set-buffer-from-chunk buffer-name libactr-chunk))
 
-(defun oracle-set-goal-from-chunk (mtt-chunk)
-  "Set ACT-R's goal buffer from an mtt:chunk."
-  (%set-buffer-from-chunk 'goal mtt-chunk))
+(defun oracle-set-goal-from-chunk (libactr-chunk)
+  "Set ACT-R's goal buffer from an libactr:chunk."
+  (%set-buffer-from-chunk 'goal libactr-chunk))
 
-(defun oracle-set-retrieval-from-chunk (mtt-chunk)
-  "Set ACT-R's retrieval buffer from an mtt:chunk."
-  (%set-buffer-from-chunk 'retrieval mtt-chunk))
+(defun oracle-set-retrieval-from-chunk (libactr-chunk)
+  "Set ACT-R's retrieval buffer from an libactr:chunk."
+  (%set-buffer-from-chunk 'retrieval libactr-chunk))
 
 (defun oracle-matches-p (production-name)
   "Return true iff PRODUCTION-NAME matches the current ACT-R buffer state.
@@ -167,17 +167,17 @@ into :ACT-R before the conflict-set membership test."
   (let ((pname (ar production-name)))
     (not (null (member pname (conflict-set) :test #'eq)))))
 
-(defun oracle-fire-and-read-slots (mtt-goal-chunk slot-names &optional mtt-retrieval-chunk)
+(defun oracle-fire-and-read-slots (libactr-goal-chunk slot-names &optional libactr-retrieval-chunk)
   "Set ACT-R goal (+ retrieval if given), run to fire the single matching
 production (timed run — verified sufficient for single-matcher states; tutorial
 models match one production per state), then return an alist of
 (SLOT-NAME-KEYWORD . VALUE-KEYWORD) for the goal's SLOT-NAME symbols.
-SLOT-NAMES are mtt-side symbols; they are re-homed to :ACT-R for the read and
+SLOT-NAMES are libactr-side symbols; they are re-homed to :ACT-R for the read and
 returned as package-neutral keywords. Values likewise keywordized (nil passes
 through). Verified mechanism: set-state → run → buffer-read + chunk-slot-value-fct."
-  (oracle-set-goal-from-chunk mtt-goal-chunk)
-  (when mtt-retrieval-chunk
-    (oracle-set-retrieval-from-chunk mtt-retrieval-chunk))
+  (oracle-set-goal-from-chunk libactr-goal-chunk)
+  (when libactr-retrieval-chunk
+    (oracle-set-retrieval-from-chunk libactr-retrieval-chunk))
   (act-r::no-output (act-r::run 0.05))
   (let ((g (act-r::buffer-read 'act-r::goal)))
     (when g

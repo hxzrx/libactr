@@ -1,26 +1,26 @@
 ;;;; tests/test-past-tense-tutor.lisp — past-tense model load/KC/buggy (Phase 10).
-(defpackage :mtt/past-tense-tutor-test
-  (:use :cl :5am :mtt/past-tense-tutor))
-(in-package :mtt/past-tense-tutor-test)
+(defpackage :libactr/past-tense-tutor-test
+  (:use :cl :5am :libactr/past-tense-tutor))
+(in-package :libactr/past-tense-tutor-test)
 
-(def-suite :mtt/past-tense-tutor :description "past-tense model load + buggy library")
-(in-suite :mtt/past-tense-tutor)
+(def-suite :libactr/past-tense-tutor :description "past-tense model load + buggy library")
+(in-suite :libactr/past-tense-tutor)
 
 (defun %prod-names (md)
-  (mapcar #'mtt:production-name (mtt:model-definition-productions md)))
+  (mapcar #'libactr:production-name (libactr:model-definition-productions md)))
 
 (defun %kc-of (md name)
-  (mtt:production-kc
-   (find name (mtt:model-definition-productions md)
-         :key (lambda (x) (symbol-name (mtt:production-name x)))
+  (libactr:production-kc
+   (find name (libactr:model-definition-productions md)
+         :key (lambda (x) (symbol-name (libactr:production-name x)))
          :test #'string=)))
 
 (test load-past-tense-model.shape
   "load-past-tense-model yields 2 correct + 3 buggy productions; correct ones
 are attributed to the 2 skill KCs; buggy ones to their misapplied-skill KCs;
-production names land in :mtt/past-tense-tutor."
+production names land in :libactr/past-tense-tutor."
   (let ((md (load-past-tense-model)))
-    (is (= 5 (length (mtt:model-definition-productions md))))
+    (is (= 5 (length (libactr:model-definition-productions md))))
     (let ((names (%prod-names md)))
       (dolist (n '(retrieve-irregular apply-regular
                    buggy-over-regularize buggy-no-ed buggy-vowel-analogy))
@@ -32,9 +32,9 @@ production names land in :mtt/past-tense-tutor."
     (is (eq :regular-inflection    (%kc-of md 'buggy-no-ed)))
     (is (eq :irregular-retrieval (%kc-of md 'buggy-vowel-analogy)))
     ;; symbols live in the model package
-    (is (eq (find-package :mtt/past-tense-tutor)
+    (is (eq (find-package :libactr/past-tense-tutor)
             (symbol-package
-             (mtt:chunk-isa (mtt:model-definition-initial-goal md)))))))
+             (libactr:chunk-isa (libactr:model-definition-initial-goal md)))))))
 
 (test verb-info.lexicon
   "verb-info classifies regular/irregular/no-change and rejects unknown verbs."
@@ -56,10 +56,10 @@ production names land in :mtt/past-tense-tutor."
   "C7: the adapter-construction gate actually signals on errors (the gate
 lives in make-past-tense-adapter; its %validate-specs! is directly driven
 here — mirrors fraction-loader-rejects-invalid-spec)."
-  (is (fboundp 'mtt/past-tense-adapter::%validate-specs!))
+  (is (fboundp 'libactr/past-tense-adapter::%validate-specs!))
   (signals error
-    (mtt/past-tense-adapter::%validate-specs!
-     (list (mtt:make-bug-spec
+    (libactr/past-tense-adapter::%validate-specs!
+     (list (libactr:make-bug-spec
             :name 'buggy-x :kind :x :kc :x :goal-type 'past-tense-task
             :answers '((:action "value" :slot past :as answer))
             :fact-slots '((verb :from (:goal verb)))

@@ -8,24 +8,24 @@
 ;;;;   - buffer-pattern with buffer/modifier/type-name/slot-tests
 ;;;;   - chunk with isa + slots (alist)
 ;;;;   - buffer-state hash (eq) of buffer-name -> chunk
-;;;; Accessors for slot-test / buffer-pattern are not exported from :mtt, so the
+;;;; Accessors for slot-test / buffer-pattern are not exported from :libactr, so the
 ;;;; tests reach them via the double-colon internal reader (as test-types /
 ;;;; test-compiler already do).
 ;;;;
 ;;;; Additional tests lock in spec intent for ISA subtyping (with a hand-built
 ;;;; inheritance table), matching-productions returning multiple winners, and
 ;;;; model-matching-productions convenience.
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 ;;; *addition-model* is defined in test-reader.lisp (loaded earlier by the asd
 ;;; serial order); we reuse it here.
 
 (defun load-compiled-addition ()
-  (mtt:compile-model (mtt:read-model-file *addition-model*)))
+  (libactr:compile-model (libactr:read-model-file *addition-model*)))
 
 (defun find-compiled-production (md name)
-  (find name (mtt:model-definition-productions md) :key #'mtt:production-name))
+  (find name (libactr:model-definition-productions md) :key #'libactr:production-name))
 
 ;;; ---------- Binding tests (brief Steps 1 & 6) ----------
 
@@ -34,12 +34,12 @@
   ;; With a fresh goal (arg1 five, arg2 two, sum nil) the matcher must bind
   ;; =num1->five and =num2->two.
   (let* ((md (load-compiled-addition))
-         (goal (mtt:make-chunk :isa 'add
+         (goal (libactr:make-chunk :isa 'add
                                :slots '((arg1 . five) (arg2 . two) (sum . nil))))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'goal) goal)
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'goal) goal)
     (let ((prod (find-compiled-production md 'initialize-addition)))
-      (let ((b (mtt:match-production prod state (mtt:model-definition-chunk-types md))))
+      (let ((b (libactr:match-production prod state (libactr:model-definition-chunk-types md))))
         (is-true b)
         (is (eq (cdr (assoc '=num1 b)) 'five))
         (is (eq (cdr (assoc '=num2 b)) 'two))))))
@@ -47,13 +47,13 @@
 (test non-match-when-sum-not-nil
   ;; Same production, but sum is non-nil -> the :literal test (sum nil) fails.
   (let* ((md (load-compiled-addition))
-         (goal (mtt:make-chunk :isa 'add
+         (goal (libactr:make-chunk :isa 'add
                                :slots '((arg1 . five) (arg2 . two) (sum . seven))))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'goal) goal)
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'goal) goal)
     (let ((prod (find-compiled-production md 'initialize-addition)))
-      (is (null (mtt:match-production prod state
-                                      (mtt:model-definition-chunk-types md)))))))
+      (is (null (libactr:match-production prod state
+                                      (libactr:model-definition-chunk-types md)))))))
 
 (test cross-pattern-unification
   ;; increment-count LHS:
@@ -61,23 +61,23 @@
   ;;   =retrieval> ISA number, number =count, next =newcount
   ;; =count is shared across goal.count and retrieval.number -> must unify.
   (let* ((md (load-compiled-addition))
-         (ct  (mtt:model-definition-chunk-types md))
-         (state (mtt:make-buffer-state))
+         (ct  (libactr:model-definition-chunk-types md))
+         (state (libactr:make-buffer-state))
          (prod (find-compiled-production md 'increment-count)))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add :slots '((sum . five) (count . zero))))
-    (setf (mtt:buffer-chunk state 'retrieval)
-          (mtt:make-chunk :isa 'number :slots '((number . zero) (next . one))))
-    (let ((b (mtt:match-production prod state ct)))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add :slots '((sum . five) (count . zero))))
+    (setf (libactr:buffer-chunk state 'retrieval)
+          (libactr:make-chunk :isa 'number :slots '((number . zero) (next . one))))
+    (let ((b (libactr:match-production prod state ct)))
       (is-true b)
       (is (eq (cdr (assoc '=count b)) 'zero))
       (is (eq (cdr (assoc '=newcount b)) 'one))
       ;; =sum is also bound (to goal.sum = five); lock that in.
       (is (eq (cdr (assoc '=sum b)) 'five)))
     ;; Inconsistent: retrieval.number=one but goal.count=zero -> =count conflict.
-    (setf (mtt:buffer-chunk state 'retrieval)
-          (mtt:make-chunk :isa 'number :slots '((number . one) (next . two))))
-    (is (null (mtt:match-production prod state ct)))))
+    (setf (libactr:buffer-chunk state 'retrieval)
+          (libactr:make-chunk :isa 'number :slots '((number . one) (next . two))))
+    (is (null (libactr:match-production prod state ct)))))
 
 ;;; ---------- Additional tests: spec intent & verified edge cases ----------
 
@@ -86,14 +86,14 @@
   ;; bindings into each other (no global mutable state).  Use a production that
   ;; binds variables, run it twice, and confirm the second result is independent.
   (let* ((md (load-compiled-addition))
-         (ct  (mtt:model-definition-chunk-types md))
-         (goal (mtt:make-chunk :isa 'add
+         (ct  (libactr:model-definition-chunk-types md))
+         (goal (libactr:make-chunk :isa 'add
                                :slots '((arg1 . five) (arg2 . two) (sum . nil))))
-         (state (mtt:make-buffer-state))
+         (state (libactr:make-buffer-state))
          (prod (find-compiled-production md 'initialize-addition)))
-    (setf (mtt:buffer-chunk state 'goal) goal)
-    (let ((b1 (mtt:match-production prod state ct))
-          (b2 (mtt:match-production prod state ct)))
+    (setf (libactr:buffer-chunk state 'goal) goal)
+    (let ((b1 (libactr:match-production prod state ct))
+          (b2 (libactr:match-production prod state ct)))
       (is-true b1)
       (is-true b2)
       ;; Same value but distinct alist objects (not shared state).
@@ -103,20 +103,20 @@
 (test match-fails-when-buffer-empty
   ;; No goal chunk in state -> the goal pattern cannot match.
   (let* ((md (load-compiled-addition))
-         (state (mtt:make-buffer-state))
+         (state (libactr:make-buffer-state))
          (prod (find-compiled-production md 'initialize-addition)))
-    (is (null (mtt:match-production prod state
-                                    (mtt:model-definition-chunk-types md))))))
+    (is (null (libactr:match-production prod state
+                                    (libactr:model-definition-chunk-types md))))))
 
 (test match-fails-on-isa-mismatch
   ;; Chunk of type number in goal, but pattern requires ISA add -> no match.
   (let* ((md (load-compiled-addition))
-         (state (mtt:make-buffer-state))
+         (state (libactr:make-buffer-state))
          (prod (find-compiled-production md 'initialize-addition)))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'number :slots '((number . one))))
-    (is (null (mtt:match-production prod state
-                                    (mtt:model-definition-chunk-types md))))))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'number :slots '((number . one))))
+    (is (null (libactr:match-production prod state
+                                    (libactr:model-definition-chunk-types md))))))
 
 (test isa-subtype-matches-via-parent-chain
   ;; Build a tiny ct-table: animal -> dog.  A pattern requiring ISA animal must
@@ -125,17 +125,17 @@
   ;; (match-production returns non-nil bindings on success).
   (let ((ct (make-hash-table :test 'eq)))
     (setf (gethash 'animal ct)
-          (mtt:make-chunk-type-def :name 'animal :slots '(legs) :parent nil))
+          (libactr:make-chunk-type-def :name 'animal :slots '(legs) :parent nil))
     (setf (gethash 'dog ct)
-          (mtt:make-chunk-type-def :name 'dog :slots '(breed) :parent 'animal))
-    (let* ((bp (mtt::make-buffer-pattern 'goal := 'animal
-              (list (mtt::make-slot-test 'legs :literal 4)
-                    (mtt::make-slot-test 'breed :variable '=breed))))
-           (prod (mtt::make-production 'bark (list bp) nil nil :correct))
-           (state (mtt:make-buffer-state)))
-      (setf (mtt:buffer-chunk state 'goal)
-            (mtt:make-chunk :isa 'dog :slots '((legs . 4) (breed . lab))))
-      (let ((b (mtt:match-production prod state ct)))
+          (libactr:make-chunk-type-def :name 'dog :slots '(breed) :parent 'animal))
+    (let* ((bp (libactr::make-buffer-pattern 'goal := 'animal
+              (list (libactr::make-slot-test 'legs :literal 4)
+                    (libactr::make-slot-test 'breed :variable '=breed))))
+           (prod (libactr::make-production 'bark (list bp) nil nil :correct))
+           (state (libactr:make-buffer-state)))
+      (setf (libactr:buffer-chunk state 'goal)
+            (libactr:make-chunk :isa 'dog :slots '((legs . 4) (breed . lab))))
+      (let ((b (libactr:match-production prod state ct)))
         (is-true b)
         (is (eq (cdr (assoc '=breed b)) 'lab))))))
 
@@ -145,30 +145,30 @@
   ;; test that precedes it), the negation must compare against the bound value.
   ;; goal: arg2 = count value -> negation "arg2 != count-value" FAILS.
   (let* ((md (load-compiled-addition))
-         (ct  (mtt:model-definition-chunk-types md))
-         (state (mtt:make-buffer-state))
+         (ct  (libactr:model-definition-chunk-types md))
+         (state (libactr:make-buffer-state))
          (prod (find-compiled-production md 'increment-sum)))
-    (setf (mtt:buffer-chunk state 'goal)
+    (setf (libactr:buffer-chunk state 'goal)
           ;; count = three, arg2 = three -> "- arg2 =count" means arg2 != three
           ;; -> FALSE, so the production must NOT match (goal side alone fails).
-          (mtt:make-chunk :isa 'add
+          (libactr:make-chunk :isa 'add
                           :slots '((sum . five) (count . three) (arg2 . three))))
-    (setf (mtt:buffer-chunk state 'retrieval)
-          (mtt:make-chunk :isa 'number
+    (setf (libactr:buffer-chunk state 'retrieval)
+          (libactr:make-chunk :isa 'number
                           :slots '((number . five) (next . six))))
-    (is (null (mtt:match-production prod state ct))))
+    (is (null (libactr:match-production prod state ct))))
   ;; And the positive case: arg2 differs from count -> negation passes.
   (let* ((md (load-compiled-addition))
-         (ct  (mtt:model-definition-chunk-types md))
-         (state (mtt:make-buffer-state))
+         (ct  (libactr:model-definition-chunk-types md))
+         (state (libactr:make-buffer-state))
          (prod (find-compiled-production md 'increment-sum)))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add
                           :slots '((sum . five) (count . three) (arg2 . two))))
-    (setf (mtt:buffer-chunk state 'retrieval)
-          (mtt:make-chunk :isa 'number
+    (setf (libactr:buffer-chunk state 'retrieval)
+          (libactr:make-chunk :isa 'number
                           :slots '((number . five) (next . six))))
-    (let ((b (mtt:match-production prod state ct)))
+    (let ((b (libactr:match-production prod state ct)))
       (is-true b)
       (is (eq (cdr (assoc '=count b)) 'three))
       (is (eq (cdr (assoc '=newsum b)) 'six)))))
@@ -178,43 +178,43 @@
   ;; should match.  matching-productions returns a list of (production . bindings)
   ;; pairs.
   (let* ((md (load-compiled-addition))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add
                           :slots '((arg1 . five) (arg2 . two) (sum . nil))))
-    (let ((results (mtt:matching-productions (mtt:model-definition-productions md)
+    (let ((results (libactr:matching-productions (libactr:model-definition-productions md)
                                              state
-                                             (mtt:model-definition-chunk-types md))))
+                                             (libactr:model-definition-chunk-types md))))
       (is (= 1 (length results)))
-      (is (eq (mtt:production-name (caar results)) 'initialize-addition))
+      (is (eq (libactr:production-name (caar results)) 'initialize-addition))
       (is (eq (cdr (assoc '=num1 (cdar results))) 'five)))))
 
 (test model-matching-productions-convenience
   ;; model-matching-productions threads the model's productions + ct-table
   ;; automatically.
   (let* ((md (load-compiled-addition))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add
                           :slots '((arg1 . five) (arg2 . two) (sum . nil))))
-    (let ((results (mtt:model-matching-productions md state)))
+    (let ((results (libactr:model-matching-productions md state)))
       (is (= 1 (length results)))
-      (is (eq (mtt:production-name (caar results)) 'initialize-addition)))))
+      (is (eq (libactr:production-name (caar results)) 'initialize-addition)))))
 
 (test matcher-does-not-mutate-state
   ;; Pure-function guarantee: the buffer-state and its chunks are unchanged
   ;; after matching.  Confirm identity and slot values are preserved.
   (let* ((md (load-compiled-addition))
-         (ct  (mtt:model-definition-chunk-types md))
-         (goal (mtt:make-chunk :isa 'add
+         (ct  (libactr:model-definition-chunk-types md))
+         (goal (libactr:make-chunk :isa 'add
                                :slots '((arg1 . five) (arg2 . two) (sum . nil))))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'goal) goal)
-    (mtt:match-production (find-compiled-production md 'initialize-addition)
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'goal) goal)
+    (libactr:match-production (find-compiled-production md 'initialize-addition)
                           state ct)
-    (is (eq (mtt:buffer-chunk state 'goal) goal))
-    (is (eq (cdr (assoc 'arg1 (mtt:chunk-slots goal))) 'five))
-    (is (eq (cdr (assoc 'sum  (mtt:chunk-slots goal))) 'nil))))
+    (is (eq (libactr:buffer-chunk state 'goal) goal))
+    (is (eq (cdr (assoc 'arg1 (libactr:chunk-slots goal))) 'five))
+    (is (eq (cdr (assoc 'sum  (libactr:chunk-slots goal))) 'nil))))
 
 ;;; ---------- Regression: zero-variable matching productions are kept ----------
 ;;;
@@ -228,11 +228,11 @@
 (defun make-zero-variable-add-production ()
   "A production whose LHS is =goal> ISA add sum five — a single :literal slot
    test, NO variables.  Matches any add chunk whose sum slot is five."
-  (mtt::make-production
+  (libactr::make-production
    'sum-is-five
-   (list (mtt::make-buffer-pattern
+   (list (libactr::make-buffer-pattern
           'goal := 'add
-          (list (mtt::make-slot-test 'sum :literal 'five))))
+          (list (libactr::make-slot-test 'sum :literal 'five))))
    nil nil :correct))
 
 (test matching-productions-keeps-zero-variable-match
@@ -240,46 +240,46 @@
   ;; nothing.  matching-productions MUST include it (with empty bindings),
   ;; not silently drop it.  This is the regression for the collapsed-nil bug.
   (let* ((ct  (make-hash-table :test 'eq))
-         (state (mtt:make-buffer-state))
+         (state (libactr:make-buffer-state))
          (prod (make-zero-variable-add-production)))
     (setf (gethash 'add ct)
-          (mtt:make-chunk-type-def :name 'add :slots '(sum) :parent nil))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add :slots '((sum . five))))
+          (libactr:make-chunk-type-def :name 'add :slots '(sum) :parent nil))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add :slots '((sum . five))))
     ;; Sanity: match-production returns nil here (empty bindings collapse to
     ;; nil by the public contract) — this is the documented trap.
-    (is (null (mtt:match-production prod state ct)))
+    (is (null (libactr:match-production prod state ct)))
     ;; The fix: matching-productions keeps it anyway, with EMPTY bindings.
-    (let ((results (mtt:matching-productions (list prod) state ct)))
+    (let ((results (libactr:matching-productions (list prod) state ct)))
       (is (= 1 (length results)))
-      (is (eq (mtt:production-name (caar results)) 'sum-is-five))
+      (is (eq (libactr:production-name (caar results)) 'sum-is-five))
       (is (null (cdar results))))   ; bindings alist is empty (nil), not absent
 
     ;; Negative control: a non-matching state (sum=six) must still be EXCLUDED.
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add :slots '((sum . six))))
-    (is (null (mtt:matching-productions (list prod) state ct)))))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add :slots '((sum . six))))
+    (is (null (libactr:matching-productions (list prod) state ct)))))
 
 (test model-matching-productions-keeps-zero-variable-match
   ;; model-matching-productions delegates to matching-productions and so also
   ;; keeps zero-variable matches.  Hand-build a model-definition whose only
   ;; production is the literal-only one above.
   (let* ((ct  (make-hash-table :test 'eq))
-         (state (mtt:make-buffer-state))
+         (state (libactr:make-buffer-state))
          (prod (make-zero-variable-add-production))
-         (md  (mtt:make-model-definition
+         (md  (libactr:make-model-definition
                :chunk-types ct
                :chunks (make-hash-table :test 'eq)
                :productions (list prod)
                :initial-goal nil
                :params nil)))
     (setf (gethash 'add ct)
-          (mtt:make-chunk-type-def :name 'add :slots '(sum) :parent nil))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add :slots '((sum . five))))
-    (let ((results (mtt:model-matching-productions md state)))
+          (libactr:make-chunk-type-def :name 'add :slots '(sum) :parent nil))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add :slots '((sum . five))))
+    (let ((results (libactr:model-matching-productions md state)))
       (is (= 1 (length results)))
-      (is (eq (mtt:production-name (caar results)) 'sum-is-five))
+      (is (eq (libactr:production-name (caar results)) 'sum-is-five))
       (is (null (cdar results))))))
 
 ;;; ---------- :? buffer-state-query semantics (Task 7 fix) ----------
@@ -297,9 +297,9 @@
 
 (defun make-state-query-production (buffer slot-tests)
   "Build a production whose LHS is a single ?buf> state query."
-  (mtt::make-production
+  (libactr::make-production
    'query-prod
-   (list (mtt::make-buffer-pattern buffer :? nil slot-tests))
+   (list (libactr::make-buffer-pattern buffer :? nil slot-tests))
    nil nil :correct))
 
 ;;; Helper: does PROD match STATE?  Uses matching-productions (not
@@ -307,53 +307,53 @@
 ;;; successful match collapses to nil through the match-production entry point,
 ;;; and matching-productions is the API dual-track-check consumes.
 (defun query-matches-p (prod state)
-  (not (null (mtt:matching-productions (list prod) state))))
+  (not (null (libactr:matching-productions (list prod) state))))
 
 (test buffer-empty-query-matches-when-buffer-empty
   ;; ?retrieval> buffer empty  -> must match when retrieval is EMPTY.
   (let* ((prod (make-state-query-production
                 'retrieval
-                (list (mtt::make-slot-test 'buffer :literal 'empty))))
-         (state (mtt:make-buffer-state)))  ; no retrieval chunk -> empty
+                (list (libactr::make-slot-test 'buffer :literal 'empty))))
+         (state (libactr:make-buffer-state)))  ; no retrieval chunk -> empty
     (is-true (query-matches-p prod state))))
 
 (test buffer-empty-query-fails-when-buffer-occupied
   ;; ?retrieval> buffer empty  -> must NOT match when retrieval has a chunk.
   (let* ((prod (make-state-query-production
                 'retrieval
-                (list (mtt::make-slot-test 'buffer :literal 'empty))))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'retrieval)
-          (mtt:make-chunk :isa 'number :slots '((number . one))))
+                (list (libactr::make-slot-test 'buffer :literal 'empty))))
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'retrieval)
+          (libactr:make-chunk :isa 'number :slots '((number . one))))
     (is-false (query-matches-p prod state))))
 
 (test buffer-full-query-matches-when-occupied
   ;; ?goal> buffer full  -> must match when goal has a chunk.
   (let* ((prod (make-state-query-production
                 'goal
-                (list (mtt::make-slot-test 'buffer :literal 'full))))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'goal)
-          (mtt:make-chunk :isa 'add :slots '((sum . five))))
+                (list (libactr::make-slot-test 'buffer :literal 'full))))
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'goal)
+          (libactr:make-chunk :isa 'add :slots '((sum . five))))
     (is-true (query-matches-p prod state))))
 
 (test buffer-full-query-fails-when-empty
   ;; ?goal> buffer full  -> must NOT match when goal is empty.
   (let* ((prod (make-state-query-production
                 'goal
-                (list (mtt::make-slot-test 'buffer :literal 'full))))
-         (state (mtt:make-buffer-state)))   ; no goal chunk -> empty
+                (list (libactr::make-slot-test 'buffer :literal 'full))))
+         (state (libactr:make-buffer-state)))   ; no goal chunk -> empty
     (is-false (query-matches-p prod state))))
 
 (test state-free-query-always-matches
   ;; ?imaginal> state free  -> always true in a static snapshot (occupied or not).
   (let* ((prod (make-state-query-production
                 'imaginal
-                (list (mtt::make-slot-test 'state :literal 'free))))
-         (state-empty (mtt:make-buffer-state))
-         (state-full  (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state-full 'imaginal)
-          (mtt:make-chunk :isa 'array :slots '((letter . a))))
+                (list (libactr::make-slot-test 'state :literal 'free))))
+         (state-empty (libactr:make-buffer-state))
+         (state-full  (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state-full 'imaginal)
+          (libactr:make-chunk :isa 'array :slots '((letter . a))))
     (is-true (query-matches-p prod state-empty))
     (is-true (query-matches-p prod state-full))))
 
@@ -361,22 +361,22 @@
   ;; ?manual> state busy  -> never true in a static snapshot.
   (let* ((prod (make-state-query-production
                 'manual
-                (list (mtt::make-slot-test 'state :literal 'busy))))
-         (state (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state 'manual)
-          (mtt:make-chunk :isa 'command :slots '((cmd . press-key))))
+                (list (libactr::make-slot-test 'state :literal 'busy))))
+         (state (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state 'manual)
+          (libactr:make-chunk :isa 'command :slots '((cmd . press-key))))
     (is-false (query-matches-p prod state))))
 
 (test buffer-failure-query-never-matches-in-snapshot
   ;; ?retrieval> buffer failure -> failure is a post-request state; never set
-  ;; in a static snapshot (no retrieval has been issued).  Both mtt and the
+  ;; in a static snapshot (no retrieval has been issued).  Both libactr and the
   ;; oracle start from the same snapshot, so both say FALSE — they agree.
   (let* ((prod (make-state-query-production
                 'retrieval
-                (list (mtt::make-slot-test 'buffer :literal 'failure))))
-         (state-empty (mtt:make-buffer-state))
-         (state-full  (mtt:make-buffer-state)))
-    (setf (mtt:buffer-chunk state-full 'retrieval)
-          (mtt:make-chunk :isa 'number :slots '((number . one))))
+                (list (libactr::make-slot-test 'buffer :literal 'failure))))
+         (state-empty (libactr:make-buffer-state))
+         (state-full  (libactr:make-buffer-state)))
+    (setf (libactr:buffer-chunk state-full 'retrieval)
+          (libactr:make-chunk :isa 'number :slots '((number . one))))
     (is-false (query-matches-p prod state-empty))
     (is-false (query-matches-p prod state-full))))

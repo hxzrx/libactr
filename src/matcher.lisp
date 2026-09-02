@@ -43,16 +43,16 @@
 ;;;;   Bindings are an alist that may legitimately be NIL (empty — no variables
 ;;;;   bound yet).  To keep "matched with empty bindings" distinguishable from
 ;;;;   "failed" DURING the match, the internal helpers (match-slot-test,
-;;;;   match-pattern, %match-production*) return the keyword :mtt-match-fail on
+;;;;   match-pattern, %match-production*) return the keyword :libactr-match-fail on
 ;;;;   failure and the (possibly nil) alist otherwise.  match-production, the
-;;;;   public boundary, collapses :mtt-match-fail back to nil — so by design a
+;;;;   public boundary, collapses :libactr-match-fail back to nil — so by design a
 ;;;;   zero-variable match looks like nil through THAT entry point.  However
 ;;;;   matching-productions consumes %match-production* directly and filters on
-;;;;   (eq b :mtt-match-fail), NOT truthiness, so a zero-variable match (e.g. a
+;;;;   (eq b :libactr-match-fail), NOT truthiness, so a zero-variable match (e.g. a
 ;;;;   literal/ISA/negation-only LHS) IS kept there with its empty bindings.
 ;;;;   model-matching-productions delegates to matching-productions and
 ;;;;   therefore keeps such matches as well.
-(in-package :mtt)
+(in-package :libactr)
 
 ;; ------------------------------------------------------------------ helpers
 
@@ -91,7 +91,7 @@
 (defun match-slot-test (st chunk bindings ct-table)
   "Match one slot-test ST against CHUNK, threading BINDINGS.
    Returns the (possibly nil) bindings alist on success, or the keyword
-   :mtt-match-fail on failure.  CT-TABLE is accepted for symmetry/future use
+   :libactr-match-fail on failure.  CT-TABLE is accepted for symmetry/future use
    (no slot-test kind currently needs it)."
   (declare (ignore ct-table))
   (let ((actual (chunk-slot chunk (slot-test-slot st))))
@@ -99,11 +99,11 @@
       (:literal
        (if (equal actual (slot-test-operand st))
            bindings
-           :mtt-match-fail))
+           :libactr-match-fail))
       (:variable
        (let ((res (bind (slot-test-operand st) actual bindings)))
          (if (eq res :conflict)
-             :mtt-match-fail
+             :libactr-match-fail
              res)))
       (:negation
        (destructuring-bind (inner-kind . inner-val) (slot-test-operand st)
@@ -111,14 +111,14 @@
            (:literal
             (if (not (equal actual inner-val))
                 bindings
-                :mtt-match-fail))
+                :libactr-match-fail))
            (:variable
             ;; Negated variable must be bound elsewhere first; if it is not,
             ;; we cannot decide and conservatively fail.
             (let ((bv (assoc inner-val bindings)))
               (if (and bv (not (equal actual (cdr bv))))
                   bindings
-                  :mtt-match-fail)))))))))
+                  :libactr-match-fail)))))))))
 
 ;; ------------------------------------------------------ pattern / production
 
@@ -156,7 +156,7 @@
 
 (defun match-pattern (bp state bindings ct-table)
   "Match one buffer-pattern BP against STATE, threading BINDINGS.
-   Returns the (possibly nil) bindings alist on success, or :mtt-match-fail."
+   Returns the (possibly nil) bindings alist on success, or :libactr-match-fail."
   (let ((chunk (buffer-chunk state (buffer-pattern-buffer bp))))
     (cond
       ;; :? state queries evaluate buffer occupancy/module state, NOT chunk
@@ -165,24 +165,24 @@
       ((eq (buffer-pattern-modifier bp) :?)
        (if (match-buffer-state-query (buffer-pattern-slot-tests bp) chunk)
            bindings
-           :mtt-match-fail))
-      ((null chunk) :mtt-match-fail)
+           :libactr-match-fail))
+      ((null chunk) :libactr-match-fail)
       ((not (isa-compatible-p (chunk-isa chunk)
                               (buffer-pattern-type-name bp)
                               ct-table))
-       :mtt-match-fail)
+       :libactr-match-fail)
       (t
        (loop :with b := bindings
              :for st :in (buffer-pattern-slot-tests bp)
              :while (not (eq (setf b (match-slot-test st chunk b ct-table))
-                             :mtt-match-fail))
+                             :libactr-match-fail))
              :finally (return b))))))
 
 (defun %match-production* (production state ct-table)
   "Internal: match PRODUCTION's LHS buffer-patterns against STATE, threading a
    single bindings alist across all patterns so a variable shared between
    patterns unifies.  Returns the (possibly nil/empty) bindings alist on
-   success, or the keyword :mtt-match-fail on failure — keeping the two cases
+   success, or the keyword :libactr-match-fail on failure — keeping the two cases
    distinguishable for callers that must treat an empty-but-successful match
    (a zero-variable LHS) differently from no match.  CT-TABLE (from
    model-definition-chunk-types) enables ISA subtype matching.
@@ -191,7 +191,7 @@
   (loop :with b := nil
         :for bp :in (production-lhs production)
         :while (not (eq (setf b (match-pattern bp state b ct-table))
-                        :mtt-match-fail))
+                        :libactr-match-fail))
         :finally (return b)))
 
 (defun match-production (production state &optional (ct-table nil))
@@ -204,19 +204,19 @@
    to observe zero-variable matches.  CT-TABLE (from model-definition-chunk-types)
    enables ISA subtype matching; pass nil to accept exact isa only."
   (let ((r (%match-production* production state ct-table)))
-    (if (eq r :mtt-match-fail) nil r)))
+    (if (eq r :libactr-match-fail) nil r)))
 
 (defun matching-productions (productions state &optional (ct-table nil))
   "Return a list of (production . bindings) for every production in PRODUCTIONS
    whose LHS matches STATE.  Order matches PRODUCTIONS.  Each bindings alist is
    freshly allocated per match.  Consumes %match-production* directly and
-   filters on (eq b :mtt-match-fail) — NOT on truthiness of b — so a
+   filters on (eq b :libactr-match-fail) — NOT on truthiness of b — so a
    zero-variable match (a literal/ISA/negation-only LHS that succeeds while
    binding nothing) IS kept here with empty bindings, rather than being
    silently dropped as it would be through match-production."
   (loop :for p :in productions
         :for b := (%match-production* p state ct-table)
-        :unless (eq b :mtt-match-fail) :collect (cons p b)))
+        :unless (eq b :libactr-match-fail) :collect (cons p b)))
 
 (defun model-matching-productions (model-definition state)
   "Convenience wrapper: match the model's productions against STATE using the

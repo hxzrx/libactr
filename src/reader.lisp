@@ -25,7 +25,7 @@
 ;;; slot names, buffer names) follow *PACKAGE*.  This matches ACT-R's own
 ;;; convention and lets callers compare returned symbols against their own
 ;;; package-local literals.
-(in-package :mtt)
+(in-package :libactr)
 
 ;; ------------------------------------------------------------------ helpers
 

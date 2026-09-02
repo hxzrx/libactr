@@ -1,5 +1,5 @@
-;;;; src/types.lisp — mtt data model (Task 2)
-(in-package :mtt)
+;;;; src/types.lisp — libactr data model (Task 2)
+(in-package :libactr)
 
 ;; chunk-type 定义:name + 合并后的全部槽 + 父类型名
 (defstruct (chunk-type-def (:constructor make-chunk-type-def% (name slots parent)))

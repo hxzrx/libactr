@@ -1,29 +1,29 @@
-;;;; tests/test-server.lisp — mtt/server runtime tests (Phase 5, Task 3).
-;;;; Own FiveAM suite :mtt/server (does NOT join :mtt). Tests the tutor-server
+;;;; tests/test-server.lisp — libactr/server runtime tests (Phase 5, Task 3).
+;;;; Own FiveAM suite :libactr/server (does NOT join :libactr). Tests the tutor-server
 ;;;; container, model registry, per-session lock, and the programmatic ops using
 ;;;; a STUB domain-adapter (the real addition-adapter lands in Task 5).
 (in-package :cl-user)
 
-(defpackage :mtt/server-test
-  (:use :cl :5am :mtt)
-  (:import-from #:mtt/server
+(defpackage :libactr/server-test
+  (:use :cl :5am :libactr)
+  (:import-from #:libactr/server
                 #:tutor-server #:start-tutor-server #:stop-tutor-server
                 #:register-model
                 #:server-start-session #:server-step-session
                 #:server-end-session #:server-student-mastery
                 #:server-health)
-  (:import-from #:mtt/server #:session-handle #:handle-session #:handle-lock #:handle-adapter)
-  (:import-from #:mtt/server #:server-models #:server-sessions #:server-students)
-  ;; session-status is exported from :mtt; re-imported for clarity.
-  (:import-from #:mtt #:session-status))
+  (:import-from #:libactr/server #:session-handle #:handle-session #:handle-lock #:handle-adapter)
+  (:import-from #:libactr/server #:server-models #:server-sessions #:server-students)
+  ;; session-status is exported from :libactr; re-imported for clarity.
+  (:import-from #:libactr #:session-status))
 
-(in-package :mtt/server-test)
+(in-package :libactr/server-test)
 
-(def-suite :mtt/server :description "mtt service layer")
-(in-suite :mtt/server)
+(def-suite :libactr/server :description "libactr service layer")
+(in-suite :libactr/server)
 
 ;;; --- local model loader (mirrors tests/test-tracer.lisp) ---------------------
-;;; We avoid depending on :mtt/test (which would pull in the entire :mtt test
+;;; We avoid depending on :libactr/test (which would pull in the entire :libactr test
 ;;; suite). The model file lives in the act-r/ system (registered in the source
 ;;; registry); asdf:system-relative-pathname resolves the path without loading
 ;;; act-r's code.
@@ -39,21 +39,21 @@
 ;;; compiled addition model (matches the proven-on-path intent from
 ;;; tests/test-concurrent.lisp).
 
-(defclass stub-adapter (mtt:domain-adapter) ()
+(defclass stub-adapter (libactr:domain-adapter) ()
   (:documentation "Test stub: every action maps to the initialize-addition intent."))
 
-(defmethod mtt:prepare-session ((a stub-adapter) session problem-id)
+(defmethod libactr:prepare-session ((a stub-adapter) session problem-id)
   (declare (ignore a problem-id))
   session)
 
-(defmethod mtt:adapt-action ((a stub-adapter) action session)
+(defmethod libactr:adapt-action ((a stub-adapter) action session)
   (declare (ignore a action session))
   ;; Hardcoded on-path intent for the addition model (initialize-addition fires).
-  (mtt:make-step-intent :assignments '((goal sum five) (goal count zero))))
+  (libactr:make-step-intent :assignments '((goal sum five) (goal count zero))))
 
-(defmethod mtt:step-done? ((a stub-adapter) trace-result session)
+(defmethod libactr:step-done? ((a stub-adapter) trace-result session)
   (declare (ignore a session))
-  (eq :on-path (mtt:trace-result-status trace-result)))
+  (eq :on-path (libactr:trace-result-status trace-result)))
 
 (defun %stub-model+adapter ()
   "Return (values compiled-model adapter)."
@@ -68,7 +68,7 @@ stores the (model . adapter) pair in the models registry."
     (unwind-protect
          (progn
            (is (typep server 'tutor-server))
-           (is (null (mtt/server::server-acceptor server)))   ; no acceptor started
+           (is (null (libactr/server::server-acceptor server)))   ; no acceptor started
            (multiple-value-bind (md adapter) (%stub-model+adapter)
              (is (eq server (register-model server "add" md adapter)))
              (is (not (null (gethash "add" (server-models server)))))
@@ -96,9 +96,9 @@ action to an on-path intent), check mastery aggregates, end the session."
              (multiple-value-bind (result adapter-found session)
                  (server-step-session server sid '((type . start)))
                (is (not (null result)))
-               (is (eq :on-path (mtt:trace-result-status result)))
+               (is (eq :on-path (libactr:trace-result-status result)))
                (is (typep adapter-found 'stub-adapter))
-               (is (eq :active (mtt:session-status session)))
+               (is (eq :active (libactr:session-status session)))
                (is (eq session (handle-session (gethash sid (server-sessions server))))))
              ;; mastery aggregates from the shared student log.
              (let ((m (server-student-mastery server "alice")))
@@ -143,10 +143,10 @@ action to an on-path intent), check mastery aggregates, end the session."
              ;; Force the :conflict path: re-insert the handle pointing at the
              ;; ended cognitive-session.
              (let* ((ended-session
-                      (mtt:start-session (%addition-compiled-model) "alice" "5+2"
+                      (libactr:start-session (%addition-compiled-model) "alice" "5+2"
                                          :session-id "ended-1"))
                     (adapter (cdr (gethash "add" (server-models server)))))
-               (mtt:end-session ended-session)
+               (libactr:end-session ended-session)
                (setf (gethash "conflict-1" (server-sessions server))
                      (make-instance 'session-handle
                                     :session ended-session
@@ -220,7 +220,7 @@ shared student log accumulates across all of that student's attempts)."
                ;; step sid2 -> 2 events total on the shared student log
                (server-step-session server sid2 '((type . start)))
                (let ((ss (gethash "alice" (server-students server))))
-                 (is (= 2 (mtt:log-last-seq (mtt:student-session-log ss))))))))
+                 (is (= 2 (libactr:log-last-seq (libactr:student-session-log ss))))))))
       (stop-tutor-server server))))
 
 ;;; --- concurrency tests (cover reviewer findings 1, 2, 3) ---------------------
@@ -269,7 +269,7 @@ are EQUAL. This is deterministic — no flake."
                ;; the single student-session has exactly one cognitive-session id
                (let ((ss (gethash "racer" (server-students server))))
                  (is (not (null ss)))
-                 (is (= 1 (length (mtt:student-session-sessions ss))))))))
+                 (is (= 1 (length (libactr:student-session-sessions ss))))))))
       (stop-tutor-server server))))
 
 (test server-step-session.concurrent-step-vs-end-race
@@ -306,14 +306,14 @@ the assertion covers the contract)."
                    (let ((result (first r))
                          (sentinel (second r)))
                      (is (or (and (not (null result))
-                                  (mtt:trace-result-p result))
+                                  (libactr:trace-result-p result))
                              (eq :conflict sentinel)
                              (eq :not-found sentinel))
                          (format nil "unexpected stepper result: ~a" r))))
                  ;; at least one stepper succeeded (the session was :active when
                  ;; the race began, and the ender cannot win until at least one
                  ;; stepper has finished queueing on the lock).
-                 (is (some (lambda (r) (mtt:trace-result-p (first r))) step-results))
+                 (is (some (lambda (r) (libactr:trace-result-p (first r))) step-results))
                  ;; ender either succeeded (summary plist with :ended) or got
                  ;; :not-found (impossible today, but contract-checked).
                  (let ((summary (first end-result))
@@ -338,7 +338,7 @@ the assertion covers the contract)."
 ;;; DEVIATION FROM BRIEF (noted): the brief's http.handle-start-step-end test
 ;;; asserts that a step AFTER handle-end yields 409 (:conflict). Per Task 3's
 ;;; server-end-session contract, however, end takes the session's lock and
-;;; prog1 (mtt:end-session ...) (remhash ...) — the handle is removed atomically
+;;; prog1 (libactr:end-session ...) (remhash ...) — the handle is removed atomically
 ;;; with the :ended marking. A subsequent step therefore finds NO handle and
 ;;; returns (values nil :not-found) → 404, not 409. The :conflict (409) path is
 ;;; only reachable in the step-vs-end race where a stepper reads the handle
@@ -366,7 +366,7 @@ remhashes the handle, so a sequential post-end step is :not-found, not
            (multiple-value-bind (md adapter) (%stub-model+adapter)
              (register-model server "add" md adapter))
            (multiple-value-bind (resp status)
-               (mtt/server::handle-start server '(("student_id" . "alice")
+               (libactr/server::handle-start server '(("student_id" . "alice")
                                                   ("problem_id" . "5+2")
                                                   ("model_id" . "add")))
              (is (= 200 status))
@@ -374,13 +374,13 @@ remhashes the handle, so a sequential post-end step is :not-found, not
              (let ((sid (getf resp :session_id)))
                ;; step (stub maps to on-path)
                (multiple-value-bind (r2 s2)
-                   (mtt/server::handle-step server `(("session_id" . ,sid)
+                   (libactr/server::handle-step server `(("session_id" . ,sid)
                                                      ("action" ((type . start)))))
                  (is (= 200 s2))
                  (is (eq :on-path (getf r2 :status))))
                ;; end
                (multiple-value-bind (r3 s3)
-                   (mtt/server::handle-end server `(("session_id" . ,sid)))
+                   (libactr/server::handle-end server `(("session_id" . ,sid)))
                  (is (= 200 s3))
                  (is (eql t (getf r3 :ok))))
                ;; step after end -> 404 (NOT 409). server-end-session remhashes
@@ -388,7 +388,7 @@ remhashes the handle, so a sequential post-end step is :not-found, not
                ;; post-end step sees no handle -> :not-found -> 404. Brief said
                ;; 409; see deviation note above.
                (multiple-value-bind (r4 s4)
-                   (mtt/server::handle-step server `(("session_id" . ,sid)
+                   (libactr/server::handle-step server `(("session_id" . ,sid)
                                                      ("action" ((type . start)))))
                  (declare (ignore r4))
                  (is (= 404 s4))))))
@@ -404,18 +404,18 @@ student (mastery) -> 404."
              (register-model server "add" md adapter))
            ;; unknown session -> 404
            (multiple-value-bind (_ s)
-               (mtt/server::handle-step server '(("session_id" . "nope")
+               (libactr/server::handle-step server '(("session_id" . "nope")
                                                  ("action" ((type . start)))))
              (declare (ignore _)) (is (= 404 s)))
            ;; unknown model -> 404
            (multiple-value-bind (_ s)
-               (mtt/server::handle-start server '(("student_id" . "a")
+               (libactr/server::handle-start server '(("student_id" . "a")
                                                   ("problem_id" . "p")
                                                   ("model_id" . "nope")))
              (declare (ignore _)) (is (= 404 s)))
            ;; mastery for unknown student -> 404
            (multiple-value-bind (_ s)
-               (mtt/server::handle-mastery server "ghost")
+               (libactr/server::handle-mastery server "ghost")
              (declare (ignore _)) (is (= 404 s))))
       (stop-tutor-server server))))
 
@@ -436,14 +436,14 @@ layer: a handle exists in the registry pointing at an :ended cognitive-session."
                (is (not (null handle)))
                ;; end: remhashes the handle, marks the cognitive-session :ended.
                (multiple-value-bind (r3 s3)
-                   (mtt/server::handle-end server `(("session_id" . ,sid)))
+                   (libactr/server::handle-end server `(("session_id" . ,sid)))
                  (is (= 200 s3))
                  (is (eql t (getf r3 :ok))))
                (is (null (gethash sid (server-sessions server))))
                ;; re-insert the (now :ended) handle to force the :conflict path.
                (setf (gethash sid (server-sessions server)) handle)
                (multiple-value-bind (r4 s4)
-                   (mtt/server::handle-step server `(("session_id" . ,sid)
+                   (libactr/server::handle-step server `(("session_id" . ,sid)
                                                      ("action" ((type . start)))))
                  (declare (ignore r4))
                  (is (= 409 s4))))))
@@ -459,7 +459,7 @@ counter keys (delegating to server-health)."
              (register-model server "add" md adapter))
            (server-start-session server "alice" "5+2" "add")
            (multiple-value-bind (resp status)
-               (mtt/server::handle-health server)
+               (libactr/server::handle-health server)
              (is (= 200 status))
              (is (equal "ok" (getf resp :status)))
              (is (eql 1 (getf resp :active_sessions)))
@@ -483,7 +483,7 @@ defect."
   (let* ((resp (list :status :on-path
                      :mastery (list (list :kc "add-fractions"
                                           :correct 3 :total 5 :accuracy 0.6 :p_l 2/5))))
-         (json (mtt/server::json-encode resp))
+         (json (libactr/server::json-encode resp))
          (parsed (yason:parse json :object-as :alist)))
     (is (string= "on-path" (cdr (assoc "status" parsed :test #'string=))))
     (let ((mastery (cdr (assoc "mastery" parsed :test #'string=))))
@@ -507,7 +507,7 @@ strings; t -> true; nil -> null; numbers/strings pass through."
   ;; written could not pass under the brief's own implementation. Resolved to
   ;; :kw_val to match the codebase convention + the brief's implementation;
   ;; the value :on-path (hyphen, like every real status value) is unchanged.
-  (let ((parsed (yason:parse (mtt/server::json-encode
+  (let ((parsed (yason:parse (libactr/server::json-encode
                               (list :kw_val :on-path :flag t :absent nil :n 7 :s "x"))
                              :object-as :alist)))
     (is (string= "on-path" (cdr (assoc "kw_val" parsed :test #'string=))))
@@ -529,7 +529,7 @@ strings; t -> true; nil -> null; numbers/strings pass through."
 ;;;
 ;;; NOTES:
 ;;;   * %find-free-port lives in THIS package (the redis-store test file defines
-;;;     its own copy in :mtt/redis-store-test — we don't import across test
+;;;     its own copy in :libactr/redis-store-test — we don't import across test
 ;;;     packages; tests stay decoupled).
 ;;;   * yason:parse is called with :object-as :alist. Verified against
 ;;;     yason-20250622-git/parse.lisp line 280: `parse` accepts (:object-as
@@ -560,12 +560,12 @@ response is 200 + has the expected JSON body shape. Proves the
 tutor-acceptor per-instance dispatch-table is populated and routes hit the
 pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
   (let* ((port (%find-free-port))
-         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+         (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
     (unwind-protect
          (progn
-           (mtt/server:register-model s "add"
-                                      (mtt/addition-adapter:build-addition-model)
-                                      (mtt/addition-adapter:make-addition-adapter))
+           (libactr/server:register-model s "add"
+                                      (libactr/addition-adapter:build-addition-model)
+                                      (libactr/addition-adapter:make-addition-adapter))
            (sleep 0.3)                          ; acceptor is up; brief's paranoia window
            ;; /health -> 200 + JSON {"status": "ok", ...}
            (multiple-value-bind (body status)
@@ -590,7 +590,7 @@ pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
                  (is (= 200 s2))
                  (is (assoc "status" (yason:parse b2 :object-as :alist)
                             :test #'string=))))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 (test http.concurrent-different-sessions-parallel
   "N threads each drive a DIFFERENT session over HTTP; all succeed independently
@@ -603,12 +603,12 @@ under that session's per-session lock — no shared mutable target across
 threads, so all N responses are 200 and there is no crosstalk. This is the
 Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
   (let* ((port (%find-free-port))
-         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+         (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
     (unwind-protect
          (progn
-           (mtt/server:register-model s "add"
-                                      (mtt/addition-adapter:build-addition-model)
-                                      (mtt/addition-adapter:make-addition-adapter))
+           (libactr/server:register-model s "add"
+                                      (libactr/addition-adapter:build-addition-model)
+                                      (libactr/addition-adapter:make-addition-adapter))
            (sleep 0.3)
            (let* ((n 6)
                   ;; Pre-start N sessions SERIALLY under N DIFFERENT student-ids
@@ -643,7 +643,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                (is (= n (length results)))
                (is (every (lambda (x) (= 200 x)) results)
                    (format nil "expected all ~a results to be 200, got ~a" n results)))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 5 Task 7: addition full-problem end-to-end over real HTTP -----------
 ;;;
@@ -662,11 +662,11 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
 
 (test addition.e2e-full-problem
   (let* ((port (%find-free-port))
-         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+         (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
     (unwind-protect
          (progn
-           (mtt/server:register-model s "add" (mtt/addition-adapter:build-addition-model)
-                                      (mtt/addition-adapter:make-addition-adapter))
+           (libactr/server:register-model s "add" (libactr/addition-adapter:build-addition-model)
+                                      (libactr/addition-adapter:make-addition-adapter))
            (sleep 0.3)
            (labels ((post (path json)
                       (multiple-value-bind (body status)
@@ -711,7 +711,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                    (post "/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
                  (declare (ignore body))
                  (is (= 200 status))))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 9 Task 2: tutor-server configurable kt-params ----------------------
 ;;;
@@ -723,14 +723,14 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
 ;;; per-server kt-params slot threads through to BOTH compute-mastery call sites:
 ;;; the GET /student/mastery path (test 1) and the inline :mastery in the step
 ;;; response (test 2). The stub's on-path step produces an initialize-addition KC
-;;; (name-fallback, interned in :mtt/server-test); the tests key the override on
+;;; (name-fallback, interned in :libactr/server-test); the tests key the override on
 ;;; 'initialize-addition (same package symbol -> eql match in kt-params-for).
 
 (test server.kt-params-override-reaches-mastery
   "A tutor-server built with :kt-params carrying a per-KC override yields mastery
 P(L) that reflects the override (proves the slot threads through to
 compute-mastery via server-student-mastery). The stub's on-path step produces an
-initialize-addition KC (name-fallback, interned in :mtt/server-test)."
+initialize-addition KC (name-fallback, interned in :libactr/server-test)."
   (flet ((master-p-l (server)
            (getf (first (server-student-mastery server "alice")) :p-l)))
     (let ((default-server (start-tutor-server :port 0 :start-acceptor-p nil))
@@ -769,7 +769,7 @@ initialize-addition KC (name-fallback, interned in :mtt/server-test)."
              (register-model s "add" md adapter))
            (let ((sid (server-start-session s "alice" "5+2" "add")))
              (multiple-value-bind (resp status)
-                 (mtt/server::handle-step s `(("session_id" . ,sid)
+                 (libactr/server::handle-step s `(("session_id" . ,sid)
                                               ("action" ((type . start)))))
                (is (= 200 status))
                (let ((mastery (getf resp :mastery)))
@@ -811,7 +811,7 @@ other conditions still propagate (500 semantics unchanged)."
              (register-model server "bad-action" md (make-instance 'bad-action-adapter)))
            ;; start -> prepare-session signals -> 400
            (multiple-value-bind (r s)
-               (mtt/server::handle-start server '(("student_id" . "a")
+               (libactr/server::handle-start server '(("student_id" . "a")
                                                   ("problem_id" . "junk")
                                                   ("model_id" . "bad-problem")))
              (is (= 400 s))
@@ -822,7 +822,7 @@ other conditions still propagate (500 semantics unchanged)."
            ;; step -> adapt-action signals -> 400
            (let ((sid (server-start-session server "b" "5+2" "bad-action")))
              (multiple-value-bind (r s)
-                 (mtt/server::handle-step server `(("session_id" . ,sid)
+                 (libactr/server::handle-step server `(("session_id" . ,sid)
                                                    ("action" . (("type" . "x")))))
                (is (= 400 s))
                (is (string= "stub: bad action x" (getf r :error))))
@@ -834,25 +834,25 @@ other conditions still propagate (500 semantics unchanged)."
   "Phase 14 A2: make-session-id carries time + sub-second + gensym components
 (cross-process uniqueness root fix — fresh images used to emit colliding
 `sess-s1` sequences). Shape: sess-<ut36>-<irt36>-<gensym>."
-  (let ((a (mtt/server::make-session-id))
-        (b (mtt/server::make-session-id)))
+  (let ((a (libactr/server::make-session-id))
+        (b (libactr/server::make-session-id)))
     (is (string= "sess-" (subseq a 0 5)))
     ;; two component separators after the prefix (ut | irt | gensym)
     (is (= 2 (count #\- (subseq a 5))))
     (is (not (string= a b)))))
 
 (test server.kc->json-exported
-  "Phase 14 C4: kc->json is exported from :mtt/server — the single source for
+  "Phase 14 C4: kc->json is exported from :libactr/server — the single source for
 KC stringification at data boundaries (the proxy had to inline a copy)."
-  (is (eq :external (nth-value 1 (find-symbol "KC->JSON" :mtt/server))))
-  (is (string= "BORROW" (mtt/server:kc->json :borrow))))
+  (is (eq :external (nth-value 1 (find-symbol "KC->JSON" :libactr/server))))
+  (is (string= "BORROW" (libactr/server:kc->json :borrow))))
 
 (test server.student-events-key-single-source
   "Phase 14 C3: the event-log key layout has ONE definition point, exported —
 server event logs, cluster adoption, and the proxy's location-free mastery
 all build it via student-events-key (was: three hardcoded format strings)."
-  (is (eq :external (nth-value 1 (find-symbol "STUDENT-EVENTS-KEY" :mtt/server))))
-  (is (string= "mtt:student:lea:events" (mtt/server:student-events-key "lea"))))
+  (is (eq :external (nth-value 1 (find-symbol "STUDENT-EVENTS-KEY" :libactr/server))))
+  (is (string= "libactr:student:lea:events" (libactr/server:student-events-key "lea"))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Phase 14 A1: zombie convergence seam — server-drop-session.
@@ -861,7 +861,7 @@ all build it via student-events-key (was: three hardcoded format strings)."
 (test server.drop-session-removes-handle-silently
   "Phase 14 A1: server-drop-session removes the session-handle under the
 students-lock WITHOUT ending the session (no end-event) and is idempotent."
-  (is (eq :external (nth-value 1 (find-symbol "SERVER-DROP-SESSION" :mtt/server))))
+  (is (eq :external (nth-value 1 (find-symbol "SERVER-DROP-SESSION" :libactr/server))))
   (let ((s (start-tutor-server :port 0 :start-acceptor-p nil)))
     ;; [brief adaptation] this suite's fixtures register the model PER TEST
     ;; (no shared %server helper pre-registers "add") — the same
@@ -876,11 +876,11 @@ students-lock WITHOUT ending the session (no end-event) and is idempotent."
              ;; Pin the no-end-event contract (final review): dropping the
              ;; handle must NOT append to the student's shared event log.
              (let* ((ss (gethash "dz" (server-students s)))
-                    (before (length (mtt:log-all-events
-                                     (mtt:student-session-log ss)))))
-               (is (string= sid (mtt/server:server-drop-session s sid)))
-               (is (= before (length (mtt:log-all-events
-                                      (mtt:student-session-log ss))))))
+                    (before (length (libactr:log-all-events
+                                     (libactr:student-session-log ss)))))
+               (is (string= sid (libactr/server:server-drop-session s sid)))
+               (is (= before (length (libactr:log-all-events
+                                      (libactr:student-session-log ss))))))
              (is (null (gethash sid (server-sessions s))))
-             (is (null (mtt/server:server-drop-session s sid)))))  ; idempotent
+             (is (null (libactr/server:server-drop-session s sid)))))  ; idempotent
       (stop-tutor-server s))))

@@ -1,8 +1,8 @@
-;;;; package.lisp — mtt package
+;;;; package.lisp — libactr package
 ;;;; The export surface, tiered (Phase 13 Task 12). The SYMBOL SET is frozen —
 ;;;; this regrouping is annotation only (no adds/removes); tiers state who
 ;;;; should use each group and what stability it promises.
-(defpackage :mtt
+(defpackage :libactr
   (:use :cl)
   (:nicknames :model-tracing)
   (:export
@@ -100,15 +100,15 @@
    #:bug-production #:detect-bug
    ;; Phase 13: authoring validator (spec §6)
    #:validate-bug-spec
-   ;; ===== 服务层接口(mtt/server 与 mtt/redis-store 系统;adapter 协议 + redis 后端) =====
+   ;; ===== 服务层接口(libactr/server 与 libactr/redis-store 系统;adapter 协议 + redis 后端) =====
    ;; 引擎之上的部署形态:领域适配器协议与可复用基座、bug-DSL 运行时半边、
-   ;; 统一 400 条件、Redis 持久事件日志后端。符号仍住在 :mtt(适配器与
-   ;; step-intent/trace-result 并用);行为随 mtt/server 系统加载。
+   ;; 统一 400 条件、Redis 持久事件日志后端。符号仍住在 :libactr(适配器与
+   ;; step-intent/trace-result 并用);行为随 libactr/server 系统加载。
    ;; Phase 14 — server-layer additions: kc->json (C4), student-events-key
    ;; (C3), server-drop-session (A1 zombie convergence / admin eviction).
-   ;; These three live in :mtt/server's own defpackage (src/server.lisp,
-   ;; 23 → 26 exports there), NOT here: :mtt's export count stays 178
-   ;; (grep-verified #: entries in this file — phase 14 added no :mtt symbols).
+   ;; These three live in :libactr/server's own defpackage (src/server.lisp,
+   ;; 23 → 26 exports there), NOT here: :libactr's export count stays 178
+   ;; (grep-verified #: entries in this file — phase 14 added no :libactr symbols).
    ;; adapter 协议(引擎/领域唯一 seam:3 泛函 + tag 基类)
    #:domain-adapter
    #:prepare-session #:adapt-action #:step-done?
@@ -121,9 +121,9 @@
    #:bug-goal-env #:bug-intent
    ;; 统一 malformed-input 条件(适配器 signal;HTTP 层映射 400)
    #:bad-tutor-request #:bad-tutor-request-message #:signal-bad-request
-   ;; Phase 5: Redis durable event-log backend (mtt/redis-store system)
+   ;; Phase 5: Redis durable event-log backend (libactr/redis-store system)
    #:redis-event-log #:redis-event-log-p
    #:make-redis-event-log #:redis-event-log-connection
    #:redis-event-log-key #:redis-event-log-host #:redis-event-log-port))
 
-(in-package :mtt)
+(in-package :libactr)

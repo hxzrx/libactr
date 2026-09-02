@@ -1,13 +1,44 @@
 # Changelog
 
-All notable changes to mtt are documented here. Phase references point at the
+All notable changes to libactr are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
+
+## 0.4.0 (2026-09-02) — renamed mtt → libactr
+
+End-to-end rename of the library; behavior is unchanged (all ten suite
+baselines identical to 0.3.1). A user-directed exception to the 0.3.0
+maintenance-mode public-surface freeze.
+
+- ASDF systems: `mtt` → `libactr` and every `mtt/*` subsystem →
+  `libactr/*` (28 systems; e.g. `mtt/server` → `libactr/server`). The
+  system definition file is now `libactr.asd`.
+- Packages: `:mtt` → `:libactr`, `:mtt/server` → `:libactr/server`, …
+  (26 packages). Nicknames `:mtt-server` / `:mtt-cluster` →
+  `:libactr-server` / `:libactr-cluster`; descriptive nicknames such as
+  `:model-tracing` are unchanged.
+- FiveAM suites: `:mtt`, `:mtt/server`, `:mtt/redis-store`,
+  `:mtt/fraction-tutor`, `:mtt/past-tense-tutor`, `:mtt/subtraction-tutor`,
+  `:mtt/empirical`, `:mtt/cluster` → `:libactr…` prefixes (the concurrent
+  and dual baselines run the core suite with their test files joined via
+  `in-suite`).
+- Renamed symbols: `mtt-chunk` → `libactr-chunk`, `mtt-goal-chunk` →
+  `libactr-goal-chunk`, `mtt-retrieval-chunk` → `libactr-retrieval-chunk`,
+  `:mtt-match-fail` → `:libactr-match-fail`.
+- Redis key prefixes: `mtt:cluster:` / `mtt:cluster:ckpt:` →
+  `libactr:cluster:` / `libactr:cluster:ckpt:`.
+- Error-message prefixes: `mtt/<domain>-adapter: …` →
+  `libactr/<domain>-adapter: …`.
+- **Data compatibility (breaking, intentional):** redis data written by
+  mtt 0.x is not readable by libactr — key prefixes and `kc_package`
+  package names changed. No production data existed; no migration.
+- Docs: all historical specs/plans renamed and rewritten in place in the
+  project docs repository (git rename tracking kept).
 
 ## 0.3.1 (2026-09-02) — parked-minors cleanup
 
 Maintenance-mode quality closeout: every minor the phase-14 final review
 parked (21 ledger rows) is dispositioned — FIXED 8 / CLOSED 13 /
-ALREADY-FIXED 0 (permanent ledger: docs/2026-09-02-mtt-parked-minors-cleanup.md
+ALREADY-FIXED 0 (permanent ledger: docs/2026-09-02-libactr-parked-minors-cleanup.md
 in the project-level docs repository).
 
 - takeover: the no-checkpoint claim drop logs one line (was silent — the
@@ -43,19 +74,19 @@ All phase-13 final-review residuals closed at library-consumer standard.
   idempotent `start-cluster-manager`.
 - Cosmetic: checkpoint codec fidelity (normalization at the consumer),
   retry sentinel test, e2e launch-in-protect, README/alignment polish.
-- New exports: `mtt/server:kc->json`, `mtt/server:student-events-key`,
-  `mtt/server:server-drop-session`. `make-session-id` output format changed
+- New exports: `libactr/server:kc->json`, `libactr/server:student-events-key`,
+  `libactr/server:server-drop-session`. `make-session-id` output format changed
   (opaque to consumers). server.lisp exception exercised 4x per spec §8.
 
 **Policy**: 0.3.0 is the feature-complete candidate. Maintenance mode from
 here (defect fixes only, public surface frozen); 1.0.0 will be released
-after the first real consumer validates mtt as a dependency.
+after the first real consumer validates libactr as a dependency.
 
 ## 0.2.0 (2026-08-28)
 
 Engine completion + library-ization. Five workstreams:
 
-- **Cluster orchestration (`mtt/cluster`).** Multi-worker deployment layer on
+- **Cluster orchestration (`libactr/cluster`).** Multi-worker deployment layer on
   Redis: a per-worker `cluster-manager` (heartbeat TTL lease, periodic
   checkpoint scan under each session's lock, atomic-claim takeover that
   rebuilds dead workers' sessions via `restore-from-checkpoint` and flips the
@@ -82,7 +113,7 @@ Engine completion + library-ization. Five workstreams:
   priming, nil-guard sequencing) plus the adapter's conditional
   `step-done?` — sums are only done when in lowest terms.
 - **Library-ization.** This README with runnable quickstarts, MIT LICENSE,
-  this CHANGELOG, `mtt.asd` metadata (version 0.2.0 / MIT / author /
+  this CHANGELOG, `libactr.asd` metadata (version 0.2.0 / MIT / author /
   long-description), and a tiered export surface with complete docstrings on
   the public API.
 
@@ -92,7 +123,7 @@ Twelve phases, each ending merged and green (see the phase docs for detail):
 
 - **Phase 1 — kernel.** Types, reader, compiler, matcher: ACT-R-subset model
   files compile to pure data; zero global mutable state from day one.
-- **Phase 2 — dual-track validation.** `mtt/oracle` runs the same models
+- **Phase 2 — dual-track validation.** `libactr/oracle` runs the same models
   under act-r; the dual suite cross-checks matcher agreement on the tutorial
   corpus. act-r remains a dev-time oracle only.
 - **Phase 3 — model-tracing layer.** `step-intent` / `covers-p` /
@@ -101,10 +132,10 @@ Twelve phases, each ending merged and green (see the phase docs for detail):
 - **Phase 4 — session layer.** `cognitive-session` (all mutable state on the
   instance), authoritative event log, checkpoint/restore, and the
   concurrent-isolation proof suite.
-- **Phase 5 — service layer.** `mtt/server`: Hunchentoot `tutor-server` with
+- **Phase 5 — service layer.** `libactr/server`: Hunchentoot `tutor-server` with
   5 endpoints, model registry, per-session locks, per-student idempotent
   starts, `student-session` (one shared log per student), and
-  `mtt/redis-store` for AOF-durable event logs.
+  `libactr/redis-store` for AOF-durable event logs.
 - **Phase 6 — knowledge tracing.** Corbett & Anderson four-parameter BKT:
   `compute-mastery` folds the event log into per-KC accuracy + P(L); multi-step
   primed intents (visible + hidden steps).

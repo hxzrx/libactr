@@ -1,11 +1,11 @@
 ;;;; src/redis-store.lisp — Redis (AOF) durable event-log (Phase 5)
 ;;;; Specializes the Phase 4 event-log protocol at the seam. One Redis LIST per
-;;;; log (key provided by caller, e.g. mtt:student:<id>:events); seq is
+;;;; log (key provided by caller, e.g. libactr:student:<id>:events); seq is
 ;;;; STORE-ASSIGNED atomically by RPUSH's returned length (race-free under any
 ;;;; writer topology). cl-redis uses a global redis:*connection*; under
 ;;;; thread-per-request each call dynamically rebinds *connection* to THIS log's
 ;;;; own connection. No global mutable state in this file.
-(in-package :mtt)
+(in-package :libactr)
 
 (defclass redis-event-log ()
   ((key  :reader redis-event-log-key :initarg :key)
@@ -49,7 +49,7 @@ rebind it to nil so each log opens its own independent connection."
 ;; to a lowercase-name converter (mirrors src/http-api.lisp's json-encode).
 ;; Without this, the first real (non-nil-summary) event crashes encoding with
 ;; "No policy for symbols as keys defined".
-;; --- Phase 13: symbol-tagging codec (shared with mtt/cluster checkpoints) ---
+;; --- Phase 13: symbol-tagging codec (shared with libactr/cluster checkpoints) ---
 ;; Wire format upgrade (spec §7): summaries' symbols used to encode as
 ;; downcased strings (package lost). Now every symbol in an intent/result
 ;; summary encodes as a tagged object {"sym": NAME, "pkg": PACKAGE} with
@@ -147,7 +147,7 @@ produced the phase-10 char-list tree). Circular structure is not handled
   (let* ((a (let ((yason:*parse-object-as* :alist)) (yason:parse json-string)))
          (kc (cdr (assoc "kc" a :test #'string=)))
          (kcpkg (cdr (assoc "kc_package" a :test #'string=)))
-         (pkg (or (and kcpkg (find-package kcpkg)) (find-package :mtt))))
+         (pkg (or (and kcpkg (find-package kcpkg)) (find-package :libactr))))
     (make-log-event
      :seq (or (cdr (assoc "seq" a :test #'string=)) 0)
      :student-id (cdr (assoc "student_id" a :test #'string=))
