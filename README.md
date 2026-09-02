@@ -1,8 +1,5 @@
 # libactr — Model-Tracing Tutor Engine
 
-Formerly known as **mtt** — renamed to libactr in 0.4.0 (see
-[CHANGELOG](CHANGELOG.md) for the full old→new mapping).
-
 An independent, multi-user-safe model-tracing production engine in Common
 Lisp. Cognitive models are authored in the ACT-R syntax and validated against
 a vendored frozen ACT-R snapshot (`vendor/act-r/`, system name `act-r`) at
