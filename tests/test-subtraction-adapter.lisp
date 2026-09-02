@@ -271,11 +271,16 @@ and 400 over the handler (phase 12 debt #1/#2)."
              (signals mtt:bad-tutor-request (%step s sid 9))))
       (mtt/server:stop-tutor-server s))))
 
-;;; --- Phase 14 Task 12: B1 audit fixture (out-of-order shapes already guarded) --
+;;; --- Phase 14 Task 12: B1 guard fixture (out-of-order shapes -> 400) -----------
+;;; [renamed (parked-minors cleanup P15): the plan's "zero-change" audit for
+;;; subtraction was RED-falsified — (parse-integer nil) is a TYPE-ERROR, not
+;;; parse-error — and the missing-value guard was ADDED; "already" was the
+;;; pre-falsification wording.]
 
-(test subtraction-adapter.out-of-order-already-400
-  "B1 audit fixture: subtraction's out-of-order shapes are already guarded —
-  a digit after DONE and a missing value both signal bad-tutor-request."
+(test subtraction-adapter.out-of-order-400
+  "B1 fixture: subtraction's out-of-order shapes signal bad-tutor-request —
+  a digit after DONE and a missing value (the nil guard added after the
+  zero-change audit was falsified by RED: (parse-integer nil) TYPE-ERRORs)."
   (let ((s (%server)))
     (unwind-protect
          (let ((sid (mtt/server:server-start-session s "oo" "52-18" "sub")))
