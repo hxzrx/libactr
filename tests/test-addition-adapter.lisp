@@ -1,21 +1,21 @@
 ;;;; tests/test-addition-adapter.lisp — addition adapter tests (Phase 5, Task 5).
-;;;; Suite :mtt/server (defined in tests/test-server.lisp). Drives the real
+;;;; Suite :libactr/server (defined in tests/test-server.lisp). Drives the real
 ;;;; addition domain adapter through the tutor-server's programmatic API:
 ;;;; register-model + start-session + step-session, asserting the on-path
 ;;;; sequence for 5+2 (start -> six -> seven -> submit) reproduces the dogfooded
 ;;;; examples/addition-tutor.lisp demonstrate output, and that submit can fire
 ;;;; terminate-addition.
-(defpackage :mtt/addition-adapter-test
+(defpackage :libactr/addition-adapter-test
   (:use :cl :5am))
-(in-package :mtt/addition-adapter-test)
-(in-suite :mtt/server)
+(in-package :libactr/addition-adapter-test)
+(in-suite :libactr/server)
 
 (defun %server ()
   "A tutor-server with the addition model + addition-adapter registered under
 \"add\". No acceptor (we drive the programmatic API directly)."
-  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
-    (mtt/server:register-model s "add" (mtt/addition-adapter:build-addition-model)
-                               (mtt/addition-adapter:make-addition-adapter))
+  (let ((s (libactr/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (libactr/server:register-model s "add" (libactr/addition-adapter:build-addition-model)
+                               (libactr/addition-adapter:make-addition-adapter))
     s))
 
 (test addition-adapter.on-path-and-done
@@ -26,59 +26,59 @@ terminate-addition. Asserts each step is :on-path, mastery is non-empty, and
 submit completes (terminate-addition observed via step-done?)."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "a" "5+2" "add")))
+         (let ((sid (libactr/server:server-start-session s "a" "5+2" "add")))
            ;; start — initialize-addition fires.
            (multiple-value-bind (r a sess)
-               (mtt/server:server-step-session s sid '(("type" . "start")))
+               (libactr/server:server-step-session s sid '(("type" . "start")))
              (declare (ignore a sess))
-             (is (eq :on-path (mtt:trace-result-status r)))
-             ;; production names live in :mtt/addition-tutor (model package);
+             (is (eq :on-path (libactr:trace-result-status r)))
+             ;; production names live in :libactr/addition-tutor (model package);
              ;; compare by name so the test is package-agnostic.
              (is (string= "INITIALIZE-ADDITION"
                           (symbol-name
-                           (mtt:production-name (mtt:trace-result-production r))))))
+                           (libactr:production-name (libactr:trace-result-production r))))))
            ;; next-total six — adapter does the hidden sum-step inside
            ;; adapt-action and returns the count-intent; the server's visible
            ;; step is increment-count (:on-path). The sum-step (increment-sum)
            ;; is also logged.
            (multiple-value-bind (r a sess)
-               (mtt/server:server-step-session s sid
+               (libactr/server:server-step-session s sid
                                                '(("type" . "next-total")
                                                  ("value" . "six")))
              (declare (ignore a sess))
-             (is (eq :on-path (mtt:trace-result-status r))))
+             (is (eq :on-path (libactr:trace-result-status r))))
            ;; mastery aggregates from the shared student log: initialize +
            ;; increment-sum + increment-count events => non-empty.
-           (let ((m (mtt/server:server-student-mastery s "a")))
+           (let ((m (libactr/server:server-student-mastery s "a")))
              (is (not (null m))))
            ;; step-done? is false after a next-total (only submit terminates).
-           (is (null (mtt:step-done?
-                      (mtt/addition-adapter:make-addition-adapter)
-                      (mtt:make-trace-result :status :on-path)
+           (is (null (libactr:step-done?
+                      (libactr/addition-adapter:make-addition-adapter)
+                      (libactr:make-trace-result :status :on-path)
                       nil)))
            ;; next-total seven — second increment pair; count reaches arg2=two.
            (multiple-value-bind (r a sess)
-               (mtt/server:server-step-session s sid
+               (libactr/server:server-step-session s sid
                                                '(("type" . "next-total")
                                                  ("value" . "seven")))
              (declare (ignore a sess))
-             (is (eq :on-path (mtt:trace-result-status r))))
+             (is (eq :on-path (libactr:trace-result-status r))))
            ;; submit seven — terminate-addition fires (count=two=arg2).
            (multiple-value-bind (r a sess)
-               (mtt/server:server-step-session s sid
+               (libactr/server:server-step-session s sid
                                                '(("type" . "submit")
                                                  ("value" . "seven")))
              (declare (ignore a sess))
-             (is (member (mtt:trace-result-status r)
+             (is (member (libactr:trace-result-status r)
                          '(:on-path :off-path :off-path-buggy)))
              ;; The reference adapter identifies termination by the
              ;; terminate-addition production name (compare by name: production
-             ;; names live in :mtt/addition-tutor).
+             ;; names live in :libactr/addition-tutor).
              (is (string= "TERMINATE-ADDITION"
                           (symbol-name
-                           (mtt:production-name (mtt:trace-result-production r)))))
-             (is (mtt:step-done? (mtt/addition-adapter:make-addition-adapter) r nil))))
-      (mtt/server:stop-tutor-server s))))
+                           (libactr:production-name (libactr:trace-result-production r)))))
+             (is (libactr:step-done? (libactr/addition-adapter:make-addition-adapter) r nil))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 12 Task 5: semantic problem validation + malformed-action 400 -----
 
@@ -90,16 +90,16 @@ debt #1/#2)."
     (unwind-protect
          (progn
            (multiple-value-bind (r status)
-               (mtt/server::handle-start s `(("student_id" . "ax")
+               (libactr/server::handle-start s `(("student_id" . "ax")
                                              ("problem_id" . "12+3")
                                              ("model_id" . "add")))
              (is (= 400 status))
              (is (search "single digits" (getf r :error))))
-           (let ((sid (mtt/server:server-start-session s "ay" "5+2" "add")))
-             (signals mtt:bad-tutor-request
-               (mtt/server:server-step-session
+           (let ((sid (libactr/server:server-start-session s "ay" "5+2" "add")))
+             (signals libactr:bad-tutor-request
+               (libactr/server:server-step-session
                 s sid '(("type" . "wat") ("value" . "5"))))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 14 Task 12: B1 out-of-order / missing-field actions are 400s -------
 
@@ -109,14 +109,14 @@ missing \"value\" entry signal bad-tutor-request — string-upcase of nil and
 dm-next of nil used to be 500-shaped."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "oo" "5+2" "add")))
-           (signals mtt:bad-tutor-request
-             (mtt/server:server-step-session
+         (let ((sid (libactr/server:server-start-session s "oo" "5+2" "add")))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
               s sid '(("type" . "next-total") ("value" . "6"))))
-           (signals mtt:bad-tutor-request
-             (mtt/server:server-step-session
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
               s sid '(("type" . "submit") ("value" . "7"))))
-           (signals mtt:bad-tutor-request
-             (mtt/server:server-step-session
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
               s sid '(("type" . "next-total")))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))

@@ -1,6 +1,6 @@
 ;;;; tests/test-authoring.lisp — apply-kc-map (Phase 8, pure core utility).
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (test apply-kc-map.empty-map-leaves-kc-untouched
   "An empty kc-map changes no production's kc; returns the model-definition."
@@ -14,8 +14,8 @@
 (test apply-kc-map.attributes-by-name-across-packages
   "kc-map keys (authored in this package) match production names interned in a
 different package, by symbol-name."
-  (let ((pkg (or (find-package :mtt/authoring-fixture)
-                 (make-package :mtt/authoring-fixture)))
+  (let ((pkg (or (find-package :libactr/authoring-fixture)
+                 (make-package :libactr/authoring-fixture)))
         (md (make-model-definition :productions nil)))
     (setf (model-definition-productions md)
           (list (make-production (intern "ADD-FRACTIONS" pkg) nil nil nil :correct nil)
@@ -77,7 +77,7 @@ arithmetic/relational builtins compose (the subtraction formulas' shapes)."
 (test eval-bug-form.name-matching-is-package-agnostic
   "Env lookup is by symbol-name (apply-kc-map precedent): a key interned in
 another package matches the form's name."
-  (let ((env (list (cons (intern "TOP-ONES" (find-package :mtt/authoring-fixture)) 3))))
+  (let ((env (list (cons (intern "TOP-ONES" (find-package :libactr/authoring-fixture)) 3))))
     (is (eql 3 (eval-bug-form 'top-ones env)))))
 
 (test eval-bug-form.bound-nil-is-legal-unbound-errors
@@ -109,8 +109,8 @@ operator errors."
 ;;; --- Phase 12 Task 2: bug-production generator + detect-bug driver ----------
 
 (defun %defbug-fixture-package ()
-  (or (find-package :mtt/defbug-fixture)
-      (make-package :mtt/defbug-fixture)))
+  (or (find-package :libactr/defbug-fixture)
+      (make-package :libactr/defbug-fixture)))
 
 (test bug-production.gold-shape-single-answer
   "The generator reproduces the hand-written subtraction buggy production
@@ -457,8 +457,8 @@ the collection now degrades to one collected error."
   "B2: a dotted answer entry ((5 . 5)) is a COLLECTED error, not a signal
 (getf used to TYPE-ERROR)."
   (multiple-value-bind (errors warnings)
-      (mtt:validate-bug-spec
-       (mtt:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
+      (libactr:validate-bug-spec
+       (libactr:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
                           :answers '((5 . 5)) :when t))
     (declare (ignore warnings))
     (is (find-if (lambda (e) (search "malformed answer entry" e)) errors))))
@@ -467,8 +467,8 @@ the collection now degrades to one collected error."
   "B2: a dotted fact-slot entry ((digit . 5)) is a collected error, not a
 signal."
   (multiple-value-bind (errors warnings)
-      (mtt:validate-bug-spec
-       (mtt:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
+      (libactr:validate-bug-spec
+       (libactr:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
                           :fact-slots '((digit . 5)) :when t))
     (declare (ignore warnings))
     (is (find-if (lambda (e) (search "malformed fact-slot entry" e)) errors))))
@@ -477,8 +477,8 @@ signal."
   "B2: a dotted goal-guard entry ((ones . 4)) is a collected error, not a
 signal (length used to TYPE-ERROR)."
   (multiple-value-bind (errors warnings)
-      (mtt:validate-bug-spec
-       (mtt:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
+      (libactr:validate-bug-spec
+       (libactr:make-bug-spec :name 'b :kind :k :kc :k :goal-type 'g
                           :goal-guard '((ones . 4)) :when t))
     (declare (ignore warnings))
     (is (find-if (lambda (e) (search "malformed goal-guard entry" e)) errors))))

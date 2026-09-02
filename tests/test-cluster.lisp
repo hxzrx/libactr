@@ -1,13 +1,13 @@
-;;;; tests/test-cluster.lisp — mtt/cluster in-process semantics (Phase 13).
-;;;; Suite :mtt/cluster (also joined by test-cluster-e2e.lisp). Self-starts a
+;;;; tests/test-cluster.lisp — libactr/cluster in-process semantics (Phase 13).
+;;;; Suite :libactr/cluster (also joined by test-cluster-e2e.lisp). Self-starts a
 ;;;; redis-server (SKIP if the binary is missing); ticks are driven DIRECTLY
 ;;;; for determinism — the timer threads are only smoke-tested once.
-(defpackage :mtt/cluster-test
-  (:use :cl :5am :mtt :mtt/cluster :mtt/server))
-(in-package :mtt/cluster-test)
+(defpackage :libactr/cluster-test
+  (:use :cl :5am :libactr :libactr/cluster :libactr/server))
+(in-package :libactr/cluster-test)
 
-(def-suite :mtt/cluster :description "multi-worker orchestration")
-(in-suite :mtt/cluster)
+(def-suite :libactr/cluster :description "multi-worker orchestration")
+(in-suite :libactr/cluster)
 
 (defparameter *redis-server-candidates*
   '("/usr/sbin/redis-server" "/usr/local/sbin/redis-server" "/usr/bin/redis-server"))
@@ -33,7 +33,7 @@
     `(if (null (%redis-server-binary))
          (5am:skip "no redis-server binary found")
          (let ((,port (%find-free-port))
-               (,dir (%unique-dir "mtt-cluster")))
+               (,dir (%unique-dir "libactr-cluster")))
            ;; ensure-directory-pathname: a slashless namestring's last component
            ;; parses as a NAME, and ensure-directories-exist would not create it.
            (ensure-directories-exist (uiop:ensure-directory-pathname ,dir))
@@ -65,7 +65,7 @@
                ;; ensure-directory-pathname (final review): delete-directory-tree
                ;; takes a physical non-wildcard directory PATHNAME — a namestring
                ;; (slash or not) fails its pathnamep gate and the ignore-errors
-               ;; silently skipped cleanup, leaking /tmp/mtt-cluster-* dirs.
+               ;; silently skipped cleanup, leaking /tmp/libactr-cluster-* dirs.
                (ignore-errors (uiop:delete-directory-tree
                                (uiop:ensure-directory-pathname ,dir) :validate t)))))))))
 
@@ -76,8 +76,8 @@ logs (the cluster deployment shape, spec §5.4)."
                                :redis-config (list :host "127.0.0.1"
                                                    :port redis-port))))
     (register-model s "sub"
-                    (mtt/subtraction-adapter:build-subtraction-model)
-                    (mtt/subtraction-adapter:make-subtraction-adapter))
+                    (libactr/subtraction-adapter:build-subtraction-model)
+                    (libactr/subtraction-adapter:make-subtraction-adapter))
     s))
 
 (test cluster.heartbeat-refreshes-lease
@@ -174,16 +174,16 @@ production names) — the Task-1 codec reused (spec §7)."
                                        :key (lambda (e) (symbol-name (car e)))
                                        :test #'string=)))
                  (is (and goal-entry t))
-                 (is (eq (find-symbol "GOAL" :mtt/subtraction-tutor) (car goal-entry)))
+                 (is (eq (find-symbol "GOAL" :libactr/subtraction-tutor) (car goal-entry)))
                  ;; chunk isa is the model-package SUB2 symbol
-                 (is (eq (find-symbol "SUB2" :mtt/subtraction-tutor)
+                 (is (eq (find-symbol "SUB2" :libactr/subtraction-tutor)
                          (car (cdr goal-entry)))))
                ;; path: production-name symbols in the model package
                ;; [brief defect, run-evidenced: the brief compared a keyword
-               ;; SYMBOL to the PACKAGE object ((eq :mtt/subtraction-tutor
+               ;; SYMBOL to the PACKAGE object ((eq :libactr/subtraction-tutor
                ;; (symbol-package p)) — never true); resolve the designator
                ;; with find-package, mirroring the find-symbol form above.]
-               (is (every (lambda (p) (eq (find-package :mtt/subtraction-tutor)
+               (is (every (lambda (p) (eq (find-package :libactr/subtraction-tutor)
                                           (symbol-package p)))
                           (getf back :path)))))
         (stop-tutor-server s)))))
@@ -306,15 +306,15 @@ log losslessly."
              ;; continue: tens digit -> done
              (let ((r (nth-value 0 (server-step-session
                                     s2 sid '(("type" . "digit") ("value" . "3"))))))
-               (is (eq :on-path (mtt:trace-result-status r)))
+               (is (eq :on-path (libactr:trace-result-status r)))
                (is (string= "SUBTRACT-TENS-DIRECT"
-                            (symbol-name (mtt:production-name
-                                          (mtt:trace-result-production r))))))
+                            (symbol-name (libactr:production-name
+                                          (libactr:trace-result-production r))))))
              ;; mastery replay: the redis log holds both workers' events
-             (let ((mastery (mtt:compute-mastery
-                             (mtt:log-all-events
-                              (mtt:make-redis-event-log
-                               :key "mtt:student:tk:events"
+             (let ((mastery (libactr:compute-mastery
+                             (libactr:log-all-events
+                              (libactr:make-redis-event-log
+                               :key "libactr:student:tk:events"
                                :host "127.0.0.1" :port port)))))
                (is (member :borrow (mapcar (lambda (x) (getf x :kc)) mastery)))))
         (stop-cluster-manager m1)
@@ -385,7 +385,7 @@ the claim survives) with a positive TTL bounded by claim-ttl. The RED probe
                (is (= 0 taken))
                (let ((ttl (redis:red-ttl (uiop:strcat "t-tl:claim:" sid))))
                  (is (plusp ttl))
-                 (is (<= ttl (mtt/cluster::cluster-claim-ttl m2))))))
+                 (is (<= ttl (libactr/cluster::cluster-claim-ttl m2))))))
         (stop-cluster-manager m1)
         (stop-cluster-manager m2)
         (stop-tutor-server s1)
@@ -466,16 +466,16 @@ idempotent flip instead of skipping as a foreign collision."
   (with-test-redis (conn port)
     (multiple-value-bind (s1 m1 s2 m2 sid) (%dead-worker-scenario port "t-rs:")
       (unwind-protect
-           (let* ((cp (load-checkpoint (mtt/cluster::cluster-store m2) sid))
+           (let* ((cp (load-checkpoint (libactr/cluster::cluster-store m2) sid))
                   (entry (gethash "sub" (server-models s2)))
-                  (log (mtt:make-redis-event-log
-                        :key (mtt/server:student-events-key "tk")
+                  (log (libactr:make-redis-event-log
+                        :key (libactr/server:student-events-key "tk")
                         :host "127.0.0.1" :port port)))
              ;; plant OUR half-adopt: handle built from the SAME checkpoint,
              ;; routes never flipped (still w1), claim expired away
              (setf (gethash sid (server-sessions s2))
                    (make-instance 'session-handle
-                                  :session (mtt:restore-from-checkpoint
+                                  :session (libactr:restore-from-checkpoint
                                             cp (car entry) log)
                                   :lock (bordeaux-threads:make-lock "half")
                                   :adapter (cdr entry)))
@@ -541,7 +541,7 @@ refreshed lease are untouched by the sweep itself."
              (is (string= "w2" (first (multiple-value-list
                                        (cluster-route-get (uiop:strcat "t-zb:sess:" sid))))))
              (is (redis:red-exists "t-zb:worker:w1"))                 ; lease refreshed
-             (is (= 2 (mtt/cluster::cluster-beats m1))))
+             (is (= 2 (libactr/cluster::cluster-beats m1))))
         (stop-cluster-manager m1)
         (stop-tutor-server s1)))))
 
@@ -784,14 +784,14 @@ student -> 404."
                    ;; (compute-mastery is kc-sorted, so equal is positional).
                    ;; RED shape: bypassing kc->json and letting %jsonable
                    ;; downcase the raw symbol case-mismatches here.
-                   (let* ((log (mtt:make-redis-event-log
-                                :key (mtt/server:student-events-key "mp")
+                   (let* ((log (libactr:make-redis-event-log
+                                :key (libactr/server:student-events-key "mp")
                                 :host "127.0.0.1" :port port))
-                          (events (mtt:log-all-events log))
+                          (events (libactr:log-all-events log))
                           (expected (mapcar (lambda (x)
-                                              (mtt/server:kc->json (getf x :kc)))
-                                            (mtt:compute-mastery events))))
-                     (mtt:disconnect-log log)
+                                              (libactr/server:kc->json (getf x :kc)))
+                                            (libactr:compute-mastery events))))
+                     (libactr:disconnect-log log)
                      (is (equal expected
                                 (mapcar (lambda (e)
                                           (cdr (assoc "kc" e :test #'string=)))
@@ -810,7 +810,7 @@ student -> 404."
 ;; CLUSTER-RUNNING) — the test package :use does not inherit internal
 ;; symbols): cluster-running is an INTERNAL accessor (unlike cluster-threads,
 ;; which is exported), so the brief's bare (setf (cluster-running m) …) reads
-;; as mtt/cluster-test::cluster-running. Qualified with the same double-colon
+;; as libactr/cluster-test::cluster-running. Qualified with the same double-colon
 ;; prefix the brief itself uses for %tick-loop; assertions unchanged.]
 (test cluster.tick-loop-survives-and-logs-errors
   "C1: a throwing tick is reported (tick name + condition, one line on
@@ -821,15 +821,15 @@ student -> 404."
          (m (make-cluster-manager :server s :worker-id "w-err")))
     (unwind-protect
          (progn
-           (setf (mtt/cluster::cluster-running m) t)
+           (setf (libactr/cluster::cluster-running m) t)
            (flet ((bad-tick (mm)
                     (declare (ignore mm))
                     (incf n)
                     (if (>= n 2)
-                        (setf (mtt/cluster::cluster-running m) nil)  ; clean exit on 2nd call
+                        (setf (libactr/cluster::cluster-running m) nil)  ; clean exit on 2nd call
                         (error "boom-~a" n))))
              (let ((out (with-output-to-string (*error-output*)
-                          (mtt/cluster::%tick-loop m "test" #'bad-tick 0))))
+                          (libactr/cluster::%tick-loop m "test" #'bad-tick 0))))
                (is (= 2 n))
                (is (and (search "test tick failed" out)
                         (search "boom-1" out)
@@ -857,14 +857,14 @@ hanging the leave below)."
              :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1)))
     (unwind-protect
          (progn
-           (setf (mtt/cluster::cluster-running m) t
+           (setf (libactr/cluster::cluster-running m) t
                  (cluster-threads m)
                  (loop :repeat 3 :collect
                        (bordeaux-threads:make-thread
-                        (lambda () (loop :while (mtt/cluster::cluster-running m)
+                        (lambda () (loop :while (libactr/cluster::cluster-running m)
                                          :do (sleep 0.05))))))
-           (setf (mtt/cluster::cluster-running m) nil)
-           (is (= 0 (mtt/cluster::%stop-tick-threads m)))
+           (setf (libactr/cluster::cluster-running m) nil)
+           (is (= 0 (libactr/cluster::%stop-tick-threads m)))
            (is (every (lambda (th) (not (bordeaux-threads:thread-alive-p th)))
                       (cluster-threads m))))
       ;; P21 (parked-minors cleanup): fixture hygiene (see the C1 test above).
@@ -881,10 +881,10 @@ hanging the leave below)."
          (th (bordeaux-threads:make-thread (lambda () (sleep 100)))))
     (unwind-protect
          (progn
-           (setf (mtt/cluster::cluster-running m) nil
+           (setf (libactr/cluster::cluster-running m) nil
                  (cluster-threads m) (list th))
            (let ((start (get-universal-time)))
-             (is (= 1 (mtt/cluster::%stop-tick-threads m)))
+             (is (= 1 (libactr/cluster::%stop-tick-threads m)))
              (is (>= (get-universal-time) (+ start 2)))     ; waited the deadline
              (is (< (get-universal-time) (+ start 10)))))   ; but bounded by it
       ;; P21 (parked-minors cleanup): fixture hygiene (see the C1 test above).
@@ -917,8 +917,8 @@ threads (they kept ticking on a manager the operator believed restarted)."
 ;;; --- Phase 14 A5: sticky proxy start --------------------------------------------
 
 ;; [brief defect, compile-evidenced (same class as C1/C2 above: the brief's
-;; bare (proxy-live-workers p) reads as mtt/cluster-test::proxy-live-workers —
-;; UNDEFINED-FUNCTION, the symbol is internal to :mtt/cluster and this
+;; bare (proxy-live-workers p) reads as libactr/cluster-test::proxy-live-workers —
+;; UNDEFINED-FUNCTION, the symbol is internal to :libactr/cluster and this
 ;; package's :use only sees exports): qualified with the same double-colon
 ;; prefix the brief itself uses for proxy-rr; assertions unchanged.]
 (test proxy.sticky-start-same-worker-and-sid
@@ -956,11 +956,11 @@ NON-sticky implementation would deterministically pick the OTHER worker
                  (is (and sid1 owner1 t))
                  ;; force the rr cursor: a non-sticky next pick would be the
                  ;; OTHER worker (deterministic RED)
-                 (let* ((live (mtt/cluster::proxy-live-workers p))
+                 (let* ((live (libactr/cluster::proxy-live-workers p))
                         (other-pos (position owner1 live :key #'first
                                              :test (complement #'string=))))
                    (is (and other-pos t))
-                   (setf (mtt/cluster::proxy-rr p) (1- other-pos)))
+                   (setf (libactr/cluster::proxy-rr p) (1- other-pos)))
                  (multiple-value-bind (b2 st2)
                      (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
                             "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")

@@ -2,7 +2,7 @@
 ;;;; Pure functions atop the matcher: apply a production's RHS to a buffer-state,
 ;;;; judge whether a student step-intent is covered (on-path), and emit KC events.
 ;;;; No global mutable state — trace-step threads state explicitly (Approach A).
-(in-package :mtt)
+(in-package :libactr)
 
 ;; ------------------------------------------------------------------ copy helpers
 

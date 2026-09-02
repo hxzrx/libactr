@@ -1,22 +1,22 @@
 ;;;; tests/test-fraction-adapter.lisp — fraction adapter tests (Phase 7).
-;;;; Suite :mtt/server (defined in tests/test-server.lisp). Unit tests here drive
+;;;; Suite :libactr/server (defined in tests/test-server.lisp). Unit tests here drive
 ;;;; the programmatic tutor-server API; the over-HTTP e2e is added in Task 4.
-(defpackage :mtt/fraction-adapter-test
+(defpackage :libactr/fraction-adapter-test
   (:use :cl :5am))
-(in-package :mtt/fraction-adapter-test)
-(in-suite :mtt/server)
+(in-package :libactr/fraction-adapter-test)
+(in-suite :libactr/server)
 
 (defun %server ()
   "tutor-server with fraction model+adapter registered under \"frac\". No acceptor."
-  (let ((s (mtt/server:start-tutor-server :port 0 :start-acceptor-p nil)))
-    (mtt/server:register-model s "frac"
-                               (mtt/fraction-adapter:build-fraction-model)
-                               (mtt/fraction-adapter:make-fraction-adapter))
+  (let ((s (libactr/server:start-tutor-server :port 0 :start-acceptor-p nil)))
+    (libactr/server:register-model s "frac"
+                               (libactr/fraction-adapter:build-fraction-model)
+                               (libactr/fraction-adapter:make-fraction-adapter))
     s))
 
 (defun %step (s sid action)
   "Step and return the trace-result (first value)."
-  (nth-value 0 (mtt/server:server-step-session s sid action)))
+  (nth-value 0 (libactr/server:server-step-session s sid action)))
 
 (test fraction-adapter.on-path-full-problem
   "1/2 + 1/3: common-denom 6 (on-path) -> sum 5/6 (on-path, done).
@@ -25,61 +25,61 @@ override reads the goal's snum/sdenom); 5/6 has gcd 1, so semantics are
 unchanged from the old default-termination behavior."
   (let ((s (%server)))
     (unwind-protect
-         (let* ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac"))
-                (adapter (mtt/fraction-adapter:make-fraction-adapter))
-                (session (mtt/server:handle-session
-                          (gethash sid (mtt/server:server-sessions s)))))
+         (let* ((sid (libactr/server:server-start-session s "f" "1/2+1/3" "frac"))
+                (adapter (libactr/fraction-adapter:make-fraction-adapter))
+                (session (libactr/server:handle-session
+                          (gethash sid (libactr/server:server-sessions s)))))
            ;; common-denom 6 -> find-common-denominator on-path
            (let ((r1 (%step s sid '(("type" . "common-denom") ("value" . "6")))))
-             (is (eq :on-path (mtt:trace-result-status r1)))
+             (is (eq :on-path (libactr:trace-result-status r1)))
              (is (string= "FIND-COMMON-DENOMINATOR"
-                          (symbol-name (mtt:production-name
-                                        (mtt:trace-result-production r1)))))
-             (is (null (mtt:step-done? adapter r1 session))))
+                          (symbol-name (libactr:production-name
+                                        (libactr:trace-result-production r1)))))
+             (is (null (libactr:step-done? adapter r1 session))))
            ;; sum 5/6 -> add-fractions on-path, done
            (let ((r2 (%step s sid '(("type" . "sum") ("num" . "5") ("denom" . "6")))))
-             (is (eq :on-path (mtt:trace-result-status r2)))
+             (is (eq :on-path (libactr:trace-result-status r2)))
              (is (string= "ADD-FRACTIONS"
-                          (symbol-name (mtt:production-name
-                                        (mtt:trace-result-production r2)))))
-             (is (mtt:step-done? adapter r2 session))))
-      (mtt/server:stop-tutor-server s))))
+                          (symbol-name (libactr:production-name
+                                        (libactr:trace-result-production r2)))))
+             (is (libactr:step-done? adapter r2 session))))
+      (libactr/server:stop-tutor-server s))))
 
 (test fraction-adapter.buggy-add-across
   "1/2 + 1/3: correct cdenom 6, then student sums 2/5 (add-across) -> off-path-buggy
 with buggy-add-across, feedback present."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/2+1/3" "frac")))
            (%step s sid '(("type" . "common-denom") ("value" . "6")))
            (let ((r (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "5")))))
-             (is (eq :off-path-buggy (mtt:trace-result-status r)))
+             (is (eq :off-path-buggy (libactr:trace-result-status r)))
              (is (string= "BUGGY-ADD-ACROSS"
-                          (symbol-name (mtt:production-name
-                                        (mtt:trace-result-production r)))))
-             (is (stringp (mtt:trace-result-feedback r)))))
-      (mtt/server:stop-tutor-server s))))
+                          (symbol-name (libactr:production-name
+                                        (libactr:trace-result-production r)))))
+             (is (stringp (libactr:trace-result-feedback r)))))
+      (libactr/server:stop-tutor-server s))))
 
 (test fraction-adapter.buggy-use-product
   "1/4 + 1/6: LCM=12, product=24. Student reports 24 -> off-path-buggy use-product."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/4+1/6" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/4+1/6" "frac")))
            (let ((r (%step s sid '(("type" . "common-denom") ("value" . "24")))))
-             (is (eq :off-path-buggy (mtt:trace-result-status r)))
+             (is (eq :off-path-buggy (libactr:trace-result-status r)))
              (is (string= "BUGGY-USE-PRODUCT"
-                          (symbol-name (mtt:production-name
-                                        (mtt:trace-result-production r)))))))
-      (mtt/server:stop-tutor-server s))))
+                          (symbol-name (libactr:production-name
+                                        (libactr:trace-result-production r)))))))
+      (libactr/server:stop-tutor-server s))))
 
 (test fraction-adapter.unclassified-off-path
   "1/2 + 1/3: student reports a wrong cdenom matching NO bug (e.g. 7) -> :off-path."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/2+1/3" "frac")))
            (let ((r (%step s sid '(("type" . "common-denom") ("value" . "7")))))
-             (is (eq :off-path (mtt:trace-result-status r)))))
-      (mtt/server:stop-tutor-server s))))
+             (is (eq :off-path (libactr:trace-result-status r)))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 7 Task 3 deferred minor: dedicated bug-branch coverage -------------------
 ;;; The Task 3 review noted that 2 of the 4 bug branches (keep-left-denom,
@@ -94,25 +94,25 @@ with buggy-add-across, feedback present."
   "1/2 + 1/3: cdenom 6, then sum 2/2 (keep-left-denom) -> off-path-buggy buggy-keep-left-denom."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/2+1/3" "frac")))
            (%step s sid '(("type" . "common-denom") ("value" . "6")))
            (let ((r (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "2")))))
-             (is (eq :off-path-buggy (mtt:trace-result-status r)))
+             (is (eq :off-path-buggy (libactr:trace-result-status r)))
              (is (string= "BUGGY-KEEP-LEFT-DENOM"
-                          (symbol-name (mtt:production-name (mtt:trace-result-production r)))))))
-      (mtt/server:stop-tutor-server s))))
+                          (symbol-name (libactr:production-name (libactr:trace-result-production r)))))))
+      (libactr/server:stop-tutor-server s))))
 
 (test fraction-adapter.buggy-no-convert
   "1/2 + 1/3: cdenom 6, then sum 2/6 (no-convert) -> off-path-buggy buggy-no-convert."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/2+1/3" "frac")))
            (%step s sid '(("type" . "common-denom") ("value" . "6")))
            (let ((r (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "6")))))
-             (is (eq :off-path-buggy (mtt:trace-result-status r)))
+             (is (eq :off-path-buggy (libactr:trace-result-status r)))
              (is (string= "BUGGY-NO-CONVERT"
-                          (symbol-name (mtt:production-name (mtt:trace-result-production r)))))))
-      (mtt/server:stop-tutor-server s))))
+                          (symbol-name (libactr:production-name (libactr:trace-result-production r)))))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 7 Task 4: full-problem e2e over real HTTP -------------------
 ;;;
@@ -138,12 +138,12 @@ with buggy-add-across, feedback present."
 GET /student/mastery -> end. Asserts 200s, on-path, the visible productions,
 and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
   (let* ((port (%find-free-port))
-         (s (mtt/server:start-tutor-server :port port :start-acceptor-p t)))
+         (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
     (unwind-protect
          (progn
-           (mtt/server:register-model s "frac"
-                                      (mtt/fraction-adapter:build-fraction-model)
-                                      (mtt/fraction-adapter:make-fraction-adapter))
+           (libactr/server:register-model s "frac"
+                                      (libactr/fraction-adapter:build-fraction-model)
+                                      (libactr/fraction-adapter:make-fraction-adapter))
            (sleep 0.3)
            (labels ((post (path json)
                       (multiple-value-bind (body status)
@@ -191,7 +191,7 @@ and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
                    (post "/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
                  (declare (ignore body))
                  (is (= 200 status))))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 12 Task 5: semantic problem validation + malformed-action 400 -----
 
@@ -202,20 +202,20 @@ bad-tutor-request / 400 (phase 12 debt #1/#2)."
   (let ((s (%server)))
     (unwind-protect
          (progn
-           (signals mtt:bad-tutor-request
-             (mtt/server:server-start-session s "fx" "1/0+2/3" "frac"))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-start-session s "fx" "1/0+2/3" "frac"))
            (multiple-value-bind (r status)
-               (mtt/server::handle-start s `(("student_id" . "fx")
+               (libactr/server::handle-start s `(("student_id" . "fx")
                                              ("problem_id" . "1/0+2/3")
                                              ("model_id" . "frac")))
              (is (= 400 status))
              (is (search "denominators must be positive" (getf r :error))))
-           (let ((sid (mtt/server:server-start-session s "fy" "1/2+1/3" "frac")))
+           (let ((sid (libactr/server:server-start-session s "fy" "1/2+1/3" "frac")))
              (%step s sid '(("type" . "common-denom") ("value" . "6")))
-             (signals mtt:bad-tutor-request
-               (mtt/server:server-step-session
+             (signals libactr:bad-tutor-request
+               (libactr/server:server-step-session
                 s sid '(("type" . "sum") ("num" . "x") ("denom" . "5"))))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 13 Task 5: simplify action branch + conditional step-done? ---------
 ;;;
@@ -231,48 +231,48 @@ bad-tutor-request / 400 (phase 12 debt #1/#2)."
 The sum step is NOT done (gcd 2 > 1) — the conditional step-done? override."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/6+1/6" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/6+1/6" "frac")))
            (%step s sid '(("type" . "common-denom") ("value" . "6")))
-           (let* ((adapter (mtt/fraction-adapter:make-fraction-adapter))
+           (let* ((adapter (libactr/fraction-adapter:make-fraction-adapter))
                   (r2 (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "6"))))
-                  (session (mtt/server:handle-session
-                            (gethash sid (mtt/server:server-sessions s)))))
-             (is (eq :on-path (mtt:trace-result-status r2)))
-             (is (null (mtt:step-done? adapter r2 session)))   ; gcd(2,6)=2 -> not done
+                  (session (libactr/server:handle-session
+                            (gethash sid (libactr/server:server-sessions s)))))
+             (is (eq :on-path (libactr:trace-result-status r2)))
+             (is (null (libactr:step-done? adapter r2 session)))   ; gcd(2,6)=2 -> not done
              (let ((r3 (%step s sid '(("type" . "simplify") ("num" . "1") ("denom" . "3")))))
-               (is (eq :on-path (mtt:trace-result-status r3)))
+               (is (eq :on-path (libactr:trace-result-status r3)))
                (is (string= "SIMPLIFY"
-                            (symbol-name (mtt:production-name
-                                          (mtt:trace-result-production r3)))))
-               (is (mtt:step-done? adapter r3 session)))))
-      (mtt/server:stop-tutor-server s))))
+                            (symbol-name (libactr:production-name
+                                          (libactr:trace-result-production r3)))))
+               (is (libactr:step-done? adapter r3 session)))))
+      (libactr/server:stop-tutor-server s))))
 
 (test fraction-adapter.unsimplifiable-sum-still-done
   "1/2 + 1/3 = 5/6 (gcd 1): the sum step terminates the problem exactly as
 before the simplify increment (ADD-FRACTIONS on-path -> done)."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/2+1/3" "frac")))
            (%step s sid '(("type" . "common-denom") ("value" . "6")))
-           (let* ((adapter (mtt/fraction-adapter:make-fraction-adapter))
+           (let* ((adapter (libactr/fraction-adapter:make-fraction-adapter))
                   (r2 (%step s sid '(("type" . "sum") ("num" . "5") ("denom" . "6"))))
-                  (session (mtt/server:handle-session
-                            (gethash sid (mtt/server:server-sessions s)))))
-             (is (eq :on-path (mtt:trace-result-status r2)))
-             (is (mtt:step-done? adapter r2 session))))          ; gcd(5,6)=1
-      (mtt/server:stop-tutor-server s))))
+                  (session (libactr/server:handle-session
+                            (gethash sid (libactr/server:server-sessions s)))))
+             (is (eq :on-path (libactr:trace-result-status r2)))
+             (is (libactr:step-done? adapter r2 session))))          ; gcd(5,6)=1
+      (libactr/server:stop-tutor-server s))))
 
 (test fraction-adapter.simplify-on-lowest-terms-rejected
   "A simplify attempt on an already-lowest-terms sum signals bad-tutor-request
 (the step does not exist for this problem)."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/2+1/3" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/2+1/3" "frac")))
            (%step s sid '(("type" . "common-denom") ("value" . "6")))
            (%step s sid '(("type" . "sum") ("num" . "5") ("denom" . "6")))
-           (signals mtt:bad-tutor-request
+           (signals libactr:bad-tutor-request
              (%step s sid '(("type" . "simplify") ("num" . "5") ("denom" . "6")))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))
 
 (test fraction-adapter.wrong-reduction-unclassified
   "Task-5 review pin: a WRONG reduction at a simplifiable sum (1/6+1/6 = 2/6,
@@ -280,13 +280,13 @@ student 'simplifies' to 2/3 — not the correct 1/3) gets a BARE intent (no
 reduce-fact prime), so SIMPLIFY cannot match -> :off-path unclassified."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "f" "1/6+1/6" "frac")))
+         (let ((sid (libactr/server:server-start-session s "f" "1/6+1/6" "frac")))
            (%step s sid '(("type" . "common-denom") ("value" . "6")))
            (%step s sid '(("type" . "sum") ("num" . "2") ("denom" . "6")))
            (let ((r (%step s sid '(("type" . "simplify") ("num" . "2") ("denom" . "3")))))
-             (is (eq :off-path (mtt:trace-result-status r)))
-             (is (null (mtt:trace-result-feedback r)))))
-      (mtt/server:stop-tutor-server s))))
+             (is (eq :off-path (libactr:trace-result-status r)))
+             (is (null (libactr:trace-result-feedback r)))))
+      (libactr/server:stop-tutor-server s))))
 
 ;;; --- Phase 14 Task 12: B1 out-of-order actions are bad requests (500 -> 400) --
 
@@ -296,18 +296,18 @@ reduce-fact prime), so SIMPLIFY cannot match -> :off-path unclassified."
 TYPE-ERROR 500s at (/ cdenom den1) / (%gcd nil nil)."
   (let ((s (%server)))
     (unwind-protect
-         (let ((sid (mtt/server:server-start-session s "oo" "1/2+1/3" "frac")))
-           (signals mtt:bad-tutor-request
-             (mtt/server:server-step-session
+         (let ((sid (libactr/server:server-start-session s "oo" "1/2+1/3" "frac")))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
               s sid '(("type" . "sum") ("num" . "5") ("denom" . "6"))))
-           (signals mtt:bad-tutor-request
-             (mtt/server:server-step-session
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
               s sid '(("type" . "simplify") ("num" . "1") ("denom" . "1"))))
            ;; http-level mapping for one leg
            (multiple-value-bind (plist status)
-               (mtt/server::handle-step
+               (libactr/server::handle-step
                 s `(("session_id" . ,sid)
                     ("action" . (("type" . "sum") ("num" . "5") ("denom" . "6")))))
              (declare (ignore plist))
              (is (= 400 status))))
-      (mtt/server:stop-tutor-server s))))
+      (libactr/server:stop-tutor-server s))))

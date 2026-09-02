@@ -4,10 +4,10 @@
 ;;;; on this CLOS object — there are NO global variables in this file. The
 ;;;; per-session bordeaux lock lives on the session-handle (NOT on the core
 ;;;; cognitive-session — locks stay in the service layer per the global
-;;;; constraint). The mtt core remains zero-global and lock-free.
-(defpackage :mtt/server
-  (:use :cl :mtt)
-  (:nicknames :mtt-server)
+;;;; constraint). The libactr core remains zero-global and lock-free.
+(defpackage :libactr/server
+  (:use :cl :libactr)
+  (:nicknames :libactr-server)
   (:export #:tutor-server #:tutor-server-p
            #:session-handle
            #:handle-session #:handle-lock #:handle-adapter
@@ -30,21 +30,21 @@
            #:server-kt-params
            ;; Task 4 — per-instance HTTP dispatch (subclass of easy-acceptor)
            #:tutor-acceptor #:tutor-acceptor-dispatch-table))
-(in-package :mtt/server)
+(in-package :libactr/server)
 
-;;; Forward declarations for the soft mtt/redis-store dependency. The
-;;; redis-event-log backend lives in mtt/redis-store, which mtt/server does NOT
+;;; Forward declarations for the soft libactr/redis-store dependency. The
+;;; redis-event-log backend lives in libactr/redis-store, which libactr/server does NOT
 ;;; depend on (so hunchentoot-only deployments are free of cl-redis/yason). The
 ;;; redis branch of event-log-for is taken only when the operator passes
 ;;; :redis-config, in which case the deployment is expected to have loaded
-;;; mtt/redis-store. The ftype declaim silences the undefined-function
+;;; libactr/redis-store. The ftype declaim silences the undefined-function
 ;;; style-warning at compile time; the function is resolved at load time.
 (declaim (ftype (function (&key (:key string) (:host string) (:port integer))
                           (values t &optional))
-                mtt:make-redis-event-log))
+                libactr:make-redis-event-log))
 
 ;;; Forward declaration for install-handlers! (defined in src/http-api.lisp,
-;;; loaded AFTER this file per mtt.asd :serial t). start-tutor-server calls it
+;;; loaded AFTER this file per libactr.asd :serial t). start-tutor-server calls it
 ;;; at runtime; the notinline declaim lets the call compile before http-api is
 ;;; loaded without a style-warning, and explicitly permits the late redefinition.
 (declaim (notinline install-handlers!))
@@ -85,7 +85,7 @@ empty by default in this deployment)."
    (adapter :reader handle-adapter :initarg :adapter))
   (:documentation "Service-layer wrapper around one cognitive-session: carries
 the per-session bordeaux lock and a back-reference to the model's domain-adapter.
-The cognitive-session itself (mtt core) holds no lock slot."))
+The cognitive-session itself (libactr core) holds no lock slot."))
 
 ;;; --- tutor-server: the infrastructure-state container -------------------------
 
@@ -100,10 +100,10 @@ The cognitive-session itself (mtt core) holds no lock slot."))
    ;; Phase 9 Task 2: per-server kt-params (one kt-params instance carrying per-KC
    ;; overrides; works across multiple models via compute-mastery's per-KC lookup).
    ;; Initform gives a fresh default when :kt-params is not supplied; start-tutor-
-   ;; server uses (or kt-params (mtt:make-kt-params)) so an explicitly-nil key still
+   ;; server uses (or kt-params (libactr:make-kt-params)) so an explicitly-nil key still
    ;; yields a real kt-params (avoids overriding the initform with nil).
    (kt-params      :reader   server-kt-params      :initarg :kt-params
-                   :initform (mtt:make-kt-params)))
+                   :initform (libactr:make-kt-params)))
   (:documentation "Infrastructure-state container. Each instance owns its own
 acceptor, registries, and per-student event logs. Multiple tutor-servers can
 coexist (no global mutable state) — the multi-user-safety invariant is
@@ -137,9 +137,9 @@ opaque string to consumers."
 
 (defun student-events-key (student-id)
   "Canonical redis key for STUDENT-ID's shared event log — the single source
-of the mtt:student:<id>:events layout (phase 14 C3; used by event-log-for
+of the libactr:student:<id>:events layout (phase 14 C3; used by event-log-for
 here, cluster adoption, and the proxy's location-free mastery)."
-  (format nil "mtt:student:~a:events" student-id))
+  (format nil "libactr:student:~a:events" student-id))
 
 (defun event-log-for (server student-id)
   "Return the event-log to attach to a new student-session. If SERVER has a
@@ -147,26 +147,26 @@ redis-config, build a redis-event-log keyed per-student (durable); otherwise a
 fresh in-memory event-log.
 
 SOFT DEPENDENCY: the redis-event-log class lives in the separate
-mtt/redis-store system (which mtt/server does NOT depend on, to keep
+libactr/redis-store system (which libactr/server does NOT depend on, to keep
 hunchentoot-only deployments free of cl-redis/yason). The redis branch is only
 taken when the operator passes :redis-config at start-tutor-server time, in
-which case the deployment is expected to have loaded mtt/redis-store."
+which case the deployment is expected to have loaded libactr/redis-store."
   (let ((rc (server-redis-config server)))
     (if rc
-        (mtt:make-redis-event-log :key (student-events-key student-id)
+        (libactr:make-redis-event-log :key (student-events-key student-id)
                                   :host (getf rc :host) :port (getf rc :port))
-        (mtt:make-event-log))))
+        (libactr:make-event-log))))
 
 (defun start-tutor-server (&key (port 0) (start-acceptor-p t) redis-config kt-params)
   "Create a tutor-server. When START-ACCEPTOR-P is true (the default), create
 and start a Hunchentoot easy-acceptor (one-thread-per-connection taskmaster).
 PORT 0 lets the OS assign a free port. REDIS-CONFIG, when supplied as a plist
 \(:host :port), makes per-student event logs durable via redis-event-log.
-KT-PARAMS (Phase 9 Task 2), when supplied as a mtt:kt-params instance, threads
+KT-PARAMS (Phase 9 Task 2), when supplied as a libactr:kt-params instance, threads
 through to both compute-mastery call sites (server-student-mastery and the
 inline :mastery in handle-step) so per-KC BKT overrides reach HTTP mastery.
 Omitting it yields a fresh (make-kt-params) — identical to 期8 behavior. The
-\(or kt-params (mtt:make-kt-params)) guard is essential: make-instance with
+\(or kt-params (libactr:make-kt-params)) guard is essential: make-instance with
 :kt-params nil would OVERRIDE the slot's initform with nil (yielding a nil
 kt-params -> wrong-type bug downstream in compute-mastery); the guard ensures
 an explicitly-nil key still gets a real default.
@@ -174,7 +174,7 @@ The HTTP dispatch table is wired in Task 4 (http-api); we still start the accept
 if requested so Task 4 can install handlers into a running server."
   (let ((server (make-instance 'tutor-server
                                 :port port :redis-config redis-config
-                                :kt-params (or kt-params (mtt:make-kt-params)))))
+                                :kt-params (or kt-params (libactr:make-kt-params)))))
     (when start-acceptor-p
       (setf (server-acceptor server)
             (make-instance 'tutor-acceptor :port port
@@ -198,7 +198,7 @@ Returns SERVER. Safe to call multiple times."
   (setf (server-acceptor server) nil)
   (maphash (lambda (id ss)
              (declare (ignore id))
-             (disconnect-log (mtt:student-session-log ss)))
+             (disconnect-log (libactr:student-session-log ss)))
            (server-students server))
   server)
 
@@ -221,7 +221,7 @@ the same NEW student-id cannot orphan one caller's student-session/event-log."
   (let ((table (server-students server)))
     (or (gethash student-id table)
         (setf (gethash student-id table)
-              (mtt:start-student-session student-id
+              (libactr:start-student-session student-id
                                          :event-log (event-log-for server student-id))))))
 
 (defun find-active-session-id (server student-session)
@@ -230,10 +230,10 @@ STUDENT-SESSION, or nil if the student has no active session. NOT thread-safe
 by itself — callers must hold the server's students-lock (so the sessions
 registry and the per-session cognitive-session status are observed
 consistently)."
-  (loop :for sid :in (mtt:student-session-sessions student-session)
+  (loop :for sid :in (libactr:student-session-sessions student-session)
         :for handle = (gethash sid (server-sessions server))
         :when (and handle
-                   (eq :active (mtt:session-status (handle-session handle))))
+                   (eq :active (libactr:session-status (handle-session handle))))
         :return sid))
 
 (defun server-start-session (server student-id problem-id model-id)
@@ -264,11 +264,11 @@ but share the lock — acceptable for Phase 5 scale; the per-session step lock
         (let ((ss (ensure-student server student-id)))
           (or (find-active-session-id server ss)
               (let* ((sid (make-session-id))
-                     (session (mtt:start-session model student-id problem-id
-                                                 :event-log (mtt:student-session-log ss)
+                     (session (libactr:start-session model student-id problem-id
+                                                 :event-log (libactr:student-session-log ss)
                                                  :model-id model-id :session-id sid)))
-                (mtt:prepare-session adapter session problem-id)
-                (mtt:register-cognitive-session ss session)
+                (libactr:prepare-session adapter session problem-id)
+                (libactr:register-cognitive-session ss session)
                 (setf (gethash sid (server-sessions server))
                       (make-instance 'session-handle
                                      :session session
@@ -297,27 +297,27 @@ server-end-session."
           (adapter (handle-adapter handle))
           (lock (handle-lock handle)))
       ;; Outside-lock fast path: cheap rejection of clearly-ended sessions.
-      (when (eq :ended (mtt:session-status session))
+      (when (eq :ended (libactr:session-status session))
         (return-from server-step-session (values nil :conflict)))
       (bt:with-lock-held (lock)
         ;; Authoritative re-check under the lock: a concurrent server-end-session
         ;; may have ended this session between the fast-path check and lock
         ;; acquisition.
-        (when (eq :ended (mtt:session-status session))
+        (when (eq :ended (libactr:session-status session))
           (return-from server-step-session (values nil :conflict)))
         ;; adapt-action is inside the lock because it may mutate the session's
         ;; retrieval buffer; priming + step must be serialized together. Phase 6
         ;; multi-step: adapt-action may return a single intent OR a list; each
         ;; intent's PRIME (buffer . chunk) pairs are installed before that step;
         ;; the FIRST step's trace-result is the student-facing result.
-        (let* ((raw (mtt:adapt-action adapter action session))
-               (intents (if (mtt:step-intent-p raw) (list raw) raw))
+        (let* ((raw (libactr:adapt-action adapter action session))
+               (intents (if (libactr:step-intent-p raw) (list raw) raw))
                (results nil))
           (dolist (intent intents)
             ;; Install this step's prime buffers (if any) before tracing.
-            (dolist (p (mtt:step-intent-prime intent))
-              (setf (mtt:buffer-chunk (mtt:session-state session) (car p)) (cdr p)))
-            (push (mtt:step-session session intent) results))
+            (dolist (p (libactr:step-intent-prime intent))
+              (setf (libactr:buffer-chunk (libactr:session-state session) (car p)) (cdr p)))
+            (push (libactr:step-session session intent) results))
           ;; FIRST step's result is the student-facing primary result.
           (values (first (nreverse results)) adapter session))))))
 
@@ -332,7 +332,7 @@ Serialized by the session-handle's lock."
       (return-from server-end-session (values nil :not-found)))
     (let ((lock (handle-lock handle)))
       (bt:with-lock-held (lock)
-        (prog1 (mtt:end-session (handle-session handle))
+        (prog1 (libactr:end-session (handle-session handle))
           (remhash session-id (server-sessions server)))))))
 
 (defun server-drop-session (server session-id)
@@ -358,7 +358,7 @@ the mastery computation."
   (let ((ss (gethash student-id (server-students server))))
     (unless ss
       (return-from server-student-mastery (values nil :not-found)))
-    (mtt:compute-mastery (mtt:log-all-events (mtt:student-session-log ss))
+    (libactr:compute-mastery (libactr:log-all-events (libactr:student-session-log ss))
                          :kt-params (server-kt-params server))))
 
 (defun server-health (server)

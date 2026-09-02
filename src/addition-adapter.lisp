@@ -1,7 +1,7 @@
 ;;;; src/addition-adapter.lisp — addition reference adapter (Phase 5, spec §6.2).
 ;;;; The engine/domain seam: maps student JSON actions -> step-intent and primes
-;;;; retrieval, reusing the dogfooded mtt/addition-tutor model-build + dm priming.
-;;;; Implements the 3-method mtt adapter protocol (prepare-session / adapt-action /
+;;;; retrieval, reusing the dogfooded libactr/addition-tutor model-build + dm priming.
+;;;; Implements the 3-method libactr adapter protocol (prepare-session / adapt-action /
 ;;;; step-done?). Stateless: no global variables. Subclasses standard-domain-adapter
 ;;;; (Phase 8) for reusable intern / goal-slot / fact / primed-intent plumbing.
 ;;;;
@@ -21,38 +21,38 @@
 ;;;; now unified server-side instead of split across adapt-action/server.
 ;;;;
 ;;;; PACKAGE NOTE: load-tutor-model reads the addition model with *PACKAGE* bound
-;;;; to :mtt/addition-tutor, so ALL model symbols (GOAL, ADD, SUM, COUNT, number
+;;;; to :libactr/addition-tutor, so ALL model symbols (GOAL, ADD, SUM, COUNT, number
 ;;;; values FIVE/TWO/...) live in that package. The base adapter-intern (parameter-
-;;;; ized on :model-package = :mtt/addition-tutor, set in the constructor) interns
+;;;; ized on :model-package = :libactr/addition-tutor, set in the constructor) interns
 ;;;; every model symbol there so eq-correct buffer/slot lookup works (buffer-state
 ;;;; is an eq hash; a same-named symbol in another package would silently miss).
 ;;;; See examples/addition-tutor.lisp lines 36-49 for the package-binding rationale.
-(defpackage :mtt/addition-adapter
+(defpackage :libactr/addition-adapter
   (:use :cl)
   (:nicknames :addition-adapter)
   (:export #:addition-adapter #:make-addition-adapter #:build-addition-model))
-(in-package :mtt/addition-adapter)
+(in-package :libactr/addition-adapter)
 
-(defclass addition-adapter (mtt:standard-domain-adapter) ()
+(defclass addition-adapter (libactr:standard-domain-adapter) ()
   (:documentation "Reference addition domain adapter (Phase 5). Subclasses
 standard-domain-adapter for reusable plumbing (Phase 8). Implements the adapter
 protocol (prepare-session / adapt-action; step-done? inherited from the base) for
-the tutorial addition model, reusing mtt/addition-tutor's model-load and dm
+the tutorial addition model, reusing libactr/addition-tutor's model-load and dm
 priming. Stateless (all state lives on the session passed into each method)."))
 
 (defun make-addition-adapter ()
   "Construct a stateless addition-adapter instance. Configures the base with the
-:mtt/addition-tutor model package and the TERMINATE-ADDITION terminal production."
+:libactr/addition-tutor model package and the TERMINATE-ADDITION terminal production."
   (make-instance 'addition-adapter
-                 :model-package (find-package :mtt/addition-tutor)
+                 :model-package (find-package :libactr/addition-tutor)
                  :terminal-production "TERMINATE-ADDITION"))
 
 (defun build-addition-model ()
   "Read+compile the tutorial addition model + the buggy library (reuses
-mtt/addition-tutor:load-tutor-model). Returns a compiled model-definition
-suitable for mtt/server:register-model. Model symbols land in
-:mtt/addition-tutor per load-tutor-model's *PACKAGE* binding."
-  (mtt/addition-tutor:load-tutor-model))
+libactr/addition-tutor:load-tutor-model). Returns a compiled model-definition
+suitable for libactr/server:register-model. Model symbols land in
+:libactr/addition-tutor per load-tutor-model's *PACKAGE* binding."
+  (libactr/addition-tutor:load-tutor-model))
 
 ;;; --- domain helpers (plumbing comes from standard-domain-adapter) ---
 
@@ -76,8 +76,8 @@ All failures signal bad-tutor-request (400 over HTTP)."
          (b (and plus (subseq s (1+ plus)))))
     (unless (and a b (= 1 (length a)) (= 1 (length b))
                  (digit-char-p (char a 0)) (digit-char-p (char b 0)))
-      (mtt:signal-bad-request
-       "mtt/addition-adapter: cannot parse problem-id ~a (addends must be single digits 0-9, \"N+M\")"
+      (libactr:signal-bad-request
+       "libactr/addition-adapter: cannot parse problem-id ~a (addends must be single digits 0-9, \"N+M\")"
        problem-id))
     (values (intern (%num-word a) pkg) (intern (%num-word b) pkg))))
 
@@ -88,22 +88,22 @@ adapter-intern. B1 (phase 14): a missing value entry signals bad-tutor-request
 (string-upcase of nil used to reach a TYPE-ERROR -> HTTP 500)."
   (let ((raw (cdr (assoc "value" action :test #'string=))))
     (unless raw
-      (mtt:signal-bad-request
-       "mtt/addition-adapter: action ~s is missing the \"value\" entry" action))
-    (mtt:adapter-intern a (string-upcase raw))))
+      (libactr:signal-bad-request
+       "libactr/addition-adapter: action ~s is missing the \"value\" entry" action))
+    (libactr:adapter-intern a (string-upcase raw))))
 
 ;;; --- adapter protocol ---
 
-(defmethod mtt:prepare-session ((a addition-adapter) session problem-id)
+(defmethod libactr:prepare-session ((a addition-adapter) session problem-id)
   "Initialize SESSION's goal buffer from PROBLEM-ID. Overrides the model's
 default initial-goal (which hardcodes arg1=five arg2=two) with the parsed
 problem-specific addends, so the same compiled model serves any small addition
 problem. Returns SESSION."
-  (multiple-value-bind (arg1 arg2) (%parse-problem problem-id (mtt:adapter-model-package a))
-    (mtt:adapter-set-goal a session "ADD" :arg1 arg1 :arg2 arg2 :sum nil))
+  (multiple-value-bind (arg1 arg2) (%parse-problem problem-id (libactr:adapter-model-package a))
+    (libactr:adapter-set-goal a session "ADD" :arg1 arg1 :arg2 arg2 :sum nil))
   session)
 
-(defmethod mtt:adapt-action ((a addition-adapter) action session)
+(defmethod libactr:adapt-action ((a addition-adapter) action session)
   "Translate a decoded student ACTION alist into a step-intent (or list of
 intents) the engine can trace, with retrieval priming bundled on each intent's
 PRIME slot (Phase 6 multi-step). Action types:
@@ -115,14 +115,14 @@ PRIME slot (Phase 6 multi-step). Action types:
                   FIRST = increment-sum, the visible student step).
   :submit      -> terminate-addition (retrieval primed with the current sum,
                   bundled on the intent's PRIME slot)."
-  (flet ((gi (name) (mtt:adapter-intern a name)))
+  (flet ((gi (name) (libactr:adapter-intern a name)))
     (let ((type (cdr (assoc "type" action :test #'string=))))
       (cond
         ((string= type "start")
          ;; initialize-addition's LHS has no =retrieval> test; no priming needed.
          ;; RHS sets sum=arg1, count=zero.
-         (mtt:make-step-intent
-          :assignments `((,(gi "GOAL") ,(gi "SUM")   ,(mtt:adapter-goal-slot a session "ARG1"))
+         (libactr:make-step-intent
+          :assignments `((,(gi "GOAL") ,(gi "SUM")   ,(libactr:adapter-goal-slot a session "ARG1"))
                          (,(gi "GOAL") ,(gi "COUNT") ,(gi "ZERO")))))
         ((string= type "next-total")
          ;; Student reports a new total -> TWO ordered steps, each with its own
@@ -131,43 +131,43 @@ PRIME slot (Phase 6 multi-step). Action types:
          ;; order, installing each prime before that step. The FIRST (sum) step is
          ;; the visible, student-facing step.
          (let* ((val           (%action-value action a))
-                (current-sum   (mtt:adapter-goal-slot a session "SUM"))
-                (current-count (mtt:adapter-goal-slot a session "COUNT")))
+                (current-sum   (libactr:adapter-goal-slot a session "SUM"))
+                (current-count (libactr:adapter-goal-slot a session "COUNT")))
            ;; B1 (phase 14): out-of-order guard — before "start" both slots
            ;; are nil and dm-next would prime number-facts with nil slots.
            (unless (and current-sum current-count)
-             (mtt:signal-bad-request
-              "mtt/addition-adapter: \"next-total\" submitted before the \"start\" action"))
-           (let ((newcount (mtt/addition-tutor:dm-next
-                            (mtt:session-model session) current-count)))
+             (libactr:signal-bad-request
+              "libactr/addition-adapter: \"next-total\" submitted before the \"start\" action"))
+           (let ((newcount (libactr/addition-tutor:dm-next
+                            (libactr:session-model session) current-count)))
              (list
               ;; step 1 (visible): increment-sum. retrieval prime = number(current-sum).
-              (mtt:adapter-primed-intent
+              (libactr:adapter-primed-intent
                a
                `((,(gi "GOAL") ,(gi "SUM") ,val))
-               (mtt:adapter-fact a "NUMBER" :number current-sum
-                                 :next (mtt/addition-tutor:dm-next (mtt:session-model session) current-sum)))
+               (libactr:adapter-fact a "NUMBER" :number current-sum
+                                 :next (libactr/addition-tutor:dm-next (libactr:session-model session) current-sum)))
               ;; step 2 (bookkeeping): increment-count. retrieval prime = number(current-count).
-              (mtt:adapter-primed-intent
+              (libactr:adapter-primed-intent
                a
                `((,(gi "GOAL") ,(gi "COUNT") ,newcount))
-               (mtt:adapter-fact a "NUMBER" :number current-count :next newcount))))))
+               (libactr:adapter-fact a "NUMBER" :number current-count :next newcount))))))
         ((string= type "submit")
          ;; terminate-addition: LHS needs count=arg2, sum=answer, retrieval
          ;; number=answer. Prime retrieval with the current sum (the answer),
          ;; bundled on the intent's PRIME slot (server installs it).
          (let* ((val (%action-value action a))
-                (current-sum (mtt:adapter-goal-slot a session "SUM")))
+                (current-sum (libactr:adapter-goal-slot a session "SUM")))
            ;; B1 (phase 14): out-of-order guard — before "start" SUM is nil and
            ;; the number-fact prime would carry a nil :number slot.
            (unless current-sum
-             (mtt:signal-bad-request
-              "mtt/addition-adapter: \"submit\" submitted before the \"start\" action"))
-           (mtt:adapter-primed-intent
+             (libactr:signal-bad-request
+              "libactr/addition-adapter: \"submit\" submitted before the \"start\" action"))
+           (libactr:adapter-primed-intent
             a
             `((,(gi "GOAL") ,(gi "COUNT") nil)
               (,(gi "GOAL") ,(gi "SUM")   ,val))
-            (mtt:adapter-fact a "NUMBER" :number current-sum
-                              :next (mtt/addition-tutor:dm-next (mtt:session-model session) current-sum)))))
+            (libactr:adapter-fact a "NUMBER" :number current-sum
+                              :next (libactr/addition-tutor:dm-next (libactr:session-model session) current-sum)))))
         (t
-         (mtt:signal-bad-request "mtt/addition-adapter: unknown action type ~a" type))))))
+         (libactr:signal-bad-request "libactr/addition-adapter: unknown action type ~a" type))))))

@@ -1,6 +1,6 @@
 ;;;; tests/test-student-session.lisp — student-session (Phase 5, pure)
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (test student-session-lifecycle
   (let ((ss (start-student-session "alice")))
@@ -27,9 +27,9 @@ both carry the same student-id, and seq is monotonic across problems."
     (is (= 2 (log-last-seq log)))
     (let ((events (log-all-events log)))
       (is (= 2 (length events)))
-      (is (every (lambda (e) (equal "alice" (mtt:log-event-student-id e))) events))
-      (is (not (equal (mtt:log-event-session-id (first events))
-                      (mtt:log-event-session-id (second events)))))))
+      (is (every (lambda (e) (equal "alice" (libactr:log-event-student-id e))) events))
+      (is (not (equal (libactr:log-event-session-id (first events))
+                      (libactr:log-event-session-id (second events)))))))
   ;; sessions registered for bookkeeping
   (let ((ss (start-student-session "bob")))
     (register-cognitive-session ss (start-session (addition-compiled-model) "bob" "p1"

@@ -16,7 +16,7 @@
 ;;; NO global mutable state in this file (no global variables). Each handler
 ;;; closes over the tutor-server instance passed to make-handlers /
 ;;; install-handlers!.
-(in-package :mtt/server)
+(in-package :libactr/server)
 
 ;;; --- JSON helpers ------------------------------------------------------------
 ;;;
@@ -85,18 +85,18 @@ context. Includes the KC of the first event (the step's KC), aggregate mastery
 from the student's full event log, and the domain-specific done flag.
 KT-PARAMS (Phase 9 Task 2) is the server's kt-params instance, threaded to
 compute-mastery so per-KC BKT overrides reach the inline :mastery."
-  (let* ((kc-event (first (mtt:trace-result-events result)))
-         (mastery (mtt:compute-mastery
-                   (mtt:log-all-events (mtt:session-log session))
+  (let* ((kc-event (first (libactr:trace-result-events result)))
+         (mastery (libactr:compute-mastery
+                   (libactr:log-all-events (libactr:session-log session))
                    :kt-params kt-params)))
-    (list :status (mtt:trace-result-status result)
-          :production (let ((p (mtt:trace-result-production result)))
-                        (and p (mtt:production-name p)))
-          :feedback (mtt:trace-result-feedback result)
+    (list :status (libactr:trace-result-status result)
+          :production (let ((p (libactr:trace-result-production result)))
+                        (and p (libactr:production-name p)))
+          :feedback (libactr:trace-result-feedback result)
           :kc (and kc-event
-                   (mtt:kc-event-kc kc-event)
-                   (kc->json (mtt:kc-event-kc kc-event)))
-          :correct (and kc-event (mtt:kc-event-correct-p kc-event))
+                   (libactr:kc-event-kc kc-event)
+                   (kc->json (libactr:kc-event-kc kc-event)))
+          :correct (and kc-event (libactr:kc-event-correct-p kc-event))
           :mastery (mapcar (lambda (m)
                              (list :kc (kc->json (getf m :kc))
                                    :correct (getf m :correct)
@@ -104,7 +104,7 @@ compute-mastery so per-KC BKT overrides reach the inline :mastery."
                                    :accuracy (getf m :accuracy)
                                    :p_l (getf m :p-l)))
                            mastery)
-          :done (mtt:step-done? adapter result session))))
+          :done (libactr:step-done? adapter result session))))
 
 ;;; --- handler logic -----------------------------------------------------------
 ;;;

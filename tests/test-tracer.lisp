@@ -1,6 +1,6 @@
 ;;;; tests/test-tracer.lisp — Phase 3 tracer unit tests (hand-derived).
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (defun addition-compiled-model ()
   "Read+compile addition.lisp once; cached structurally per call is fine for tests."

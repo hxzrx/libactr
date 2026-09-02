@@ -3,7 +3,7 @@
 ;;;; Recovery: solving state rebuilds from checkpoint (post-checkpoint window is
 ;;;; lost by design — student redoes); the retained event log has ALL events so
 ;;;; mastery recomputation (Phase 6) is lossless.
-(in-package :mtt)
+(in-package :libactr)
 
 ;; --- chunk / buffer-state pure-data serialization ----------------------------
 (defun serialize-chunk (chunk)

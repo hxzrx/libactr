@@ -6,13 +6,13 @@
 ;;;; one "answer" action per
 ;;;; problem; both correct productions are terminal (base list support, Task 2).
 ;;;; Stateless: all state lives on the session. NO global variables.
-(defpackage :mtt/past-tense-adapter
+(defpackage :libactr/past-tense-adapter
   (:use :cl)
   (:nicknames :past-tense-adapter)
   (:export #:past-tense-adapter #:make-past-tense-adapter #:build-past-tense-model))
-(in-package :mtt/past-tense-adapter)
+(in-package :libactr/past-tense-adapter)
 
-(defclass past-tense-adapter (mtt:standard-domain-adapter) ()
+(defclass past-tense-adapter (libactr:standard-domain-adapter) ()
   (:documentation "Reference past-tense domain adapter (English past-tense
 inflection). Stateless. Subclasses standard-domain-adapter; step-done? is
 INHERITED from the base (terminal list) — the third dogfood of the base."))
@@ -24,9 +24,9 @@ construction IS validation: every past-tense bug-spec must pass
 validate-bug-spec with the adapter's own predicates + env additions, else
 error before the adapter is handed out."
   (let ((a (make-instance 'past-tense-adapter
-                          :model-package (find-package :mtt/past-tense-tutor)
+                          :model-package (find-package :libactr/past-tense-tutor)
                           :terminal-production '("RETRIEVE-IRREGULAR" "APPLY-REGULAR"))))
-    (%validate-specs! (mtt/past-tense-tutor:bug-specs))
+    (%validate-specs! (libactr/past-tense-tutor:bug-specs))
     a))
 
 ;;; --- domain predicates (the named-predicate table for the bug-DSL) ---
@@ -42,7 +42,7 @@ symbols here; compare on symbol-name)."
 nil-guarded (phase-10 lesson #4): a verb with no table entry must NOT feed
 nil to string= as the \"NIL\" designator."
   (let ((a (cdr (assoc (symbol-name verb)
-                       (mtt/past-tense-tutor:analogy-bugs)
+                       (libactr/past-tense-tutor:analogy-bugs)
                        :test #'string=))))
     (and a (string= (symbol-name answer) a))))
 
@@ -63,28 +63,28 @@ adapter's env additions as :extra-env-names: VERB is the goal slot the specs'
 derived by adapt-action (adapter-added, underivable from the spec)."
   (dolist (spec specs)
     (multiple-value-bind (errors warnings)
-        (mtt:validate-bug-spec spec
+        (libactr:validate-bug-spec spec
                                :predicates (bug-predicates)
                                :extra-env-names '(verb regular-p known-p))
       (declare (ignore warnings))
       (when errors
-        (error "invalid bug-spec ~a: ~{~a~^; ~}" (mtt:bug-spec-name spec) errors))))
+        (error "invalid bug-spec ~a: ~{~a~^; ~}" (libactr:bug-spec-name spec) errors))))
   specs)
 
 (defun build-past-tense-model ()
-  "Read+compile the past-tense model + buggy library (reuses mtt/past-tense-tutor)."
-  (mtt/past-tense-tutor:load-past-tense-model))
+  "Read+compile the past-tense model + buggy library (reuses libactr/past-tense-tutor)."
+  (libactr/past-tense-tutor:load-past-tense-model))
 
-(defmethod mtt:prepare-session ((a past-tense-adapter) session problem-id)
+(defmethod libactr:prepare-session ((a past-tense-adapter) session problem-id)
   "PROBLEM-ID is the verb stem (e.g. \"go\"); intern it as a model-package symbol
 in the goal's VERB slot (overriding the model's default initial-goal so one
 compiled model serves any verb). Returns the session."
   (let ((verb (string-upcase (princ-to-string problem-id))))
-    (mtt:adapter-set-goal a session "PAST-TENSE-TASK"
-                          :verb (mtt:adapter-intern a verb)
+    (libactr:adapter-set-goal a session "PAST-TENSE-TASK"
+                          :verb (libactr:adapter-intern a verb)
                           :past nil)))
 
-(defmethod mtt:adapt-action ((a past-tense-adapter) action session)
+(defmethod libactr:adapt-action ((a past-tense-adapter) action session)
   "Translate a decoded student ACTION alist ((\"type\" . \"answer\")
   (\"value\" . \"went\")) into a primed step-intent. The adapter classifies the
   verb, compares the student's answer against the lexicon, and routes: correct
@@ -92,23 +92,23 @@ compiled model serves any verb). Returns the session."
   bug-specs with the domain predicate table; env carries the goal slots plus
   the derived regular-p / known-p); no match -> bare intent (off-path,
   incl. unknown verbs — design behavior)."
-  (flet ((gi (name) (mtt:adapter-intern a name)))
+  (flet ((gi (name) (libactr:adapter-intern a name)))
     (let* ((type (cdr (assoc "type" action :test #'string=)))
            (raw-answer (cdr (assoc "value" action :test #'string=))))
       ;; B1 (phase 14): missing value / unset verb were TYPE-ERROR 500s.
       (unless raw-answer
-        (mtt:signal-bad-request
-         "mtt/past-tense-adapter: answer action is missing \"value\""))
+        (libactr:signal-bad-request
+         "libactr/past-tense-adapter: answer action is missing \"value\""))
       (let* ((answer (string-upcase raw-answer))
-             (verb-sym (mtt:adapter-goal-slot a session "VERB")))
+             (verb-sym (libactr:adapter-goal-slot a session "VERB")))
         (unless verb-sym
-          (mtt:signal-bad-request
-           "mtt/past-tense-adapter: goal VERB is unset (session not prepared?)"))
+          (libactr:signal-bad-request
+           "libactr/past-tense-adapter: goal VERB is unset (session not prepared?)"))
         (let ((verb (symbol-name verb-sym)))
           (unless (string= type "answer")
-            (mtt:signal-bad-request "mtt/past-tense-adapter: unknown action type ~a" type))
-          (multiple-value-bind (regular-p correct) (mtt/past-tense-tutor:verb-info verb)
-            (let ((answer-sym (mtt:adapter-intern a answer)))
+            (libactr:signal-bad-request "libactr/past-tense-adapter: unknown action type ~a" type))
+          (multiple-value-bind (regular-p correct) (libactr/past-tense-tutor:verb-info verb)
+            (let ((answer-sym (libactr:adapter-intern a answer)))
               (labels ((intent () `((,(gi "GOAL") ,(gi "PAST") ,answer-sym))))
                 (cond
                   ;; 1-2 correct: verb-fact whose class slot literal routes the
@@ -116,9 +116,9 @@ compiled model serves any verb). Returns the session."
                   ;; retrieve-irregular); spec §3 amended (isa is not tested by
                   ;; act-r in buffer conditions, class IS in both engines).
                   ((and correct (string= answer correct))
-                   (mtt:adapter-primed-intent
+                   (libactr:adapter-primed-intent
                     a (intent)
-                    (mtt:adapter-fact a "VERB-FACT"
+                    (libactr:adapter-fact a "VERB-FACT"
                                       :verb verb-sym
                                       :class (gi (if regular-p "REGULAR" "IRREGULAR"))
                                       :past answer-sym)))
@@ -127,10 +127,10 @@ compiled model serves any verb). Returns the session."
                    (let* ((answers (list answer-sym))
                           (env (append (list (cons (gi "REGULAR-P") regular-p)
                                              (cons (gi "KNOWN-P") (and correct t)))
-                                       (mtt:bug-goal-env a session)))
-                          (spec (mtt:detect-bug (mtt/past-tense-tutor:bug-specs)
+                                       (libactr:bug-goal-env a session)))
+                          (spec (libactr:detect-bug (libactr/past-tense-tutor:bug-specs)
                                                 answers env
                                                 :predicates (bug-predicates))))
                      (if spec
-                         (mtt:bug-intent a session spec answers)
-                         (mtt:make-step-intent :assignments (intent))))))))))))))
+                         (libactr:bug-intent a session spec answers)
+                         (libactr:make-step-intent :assignments (intent))))))))))))))

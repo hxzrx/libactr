@@ -24,14 +24,14 @@
 ;;;; The tens column only does correct / unclassified (spec §2.1: detection is
 ;;;; defined at ones; degenerate b-t=5 problems stay out of the bug corpus).
 ;;;; Stateless: all state lives on the session. NO global variables.
-(defpackage :mtt/subtraction-adapter
+(defpackage :libactr/subtraction-adapter
   (:use :cl)
   (:nicknames :subtraction-adapter)
   (:export #:subtraction-adapter #:make-subtraction-adapter
            #:build-subtraction-model))
-(in-package :mtt/subtraction-adapter)
+(in-package :libactr/subtraction-adapter)
 
-(defclass subtraction-adapter (mtt:standard-domain-adapter) ()
+(defclass subtraction-adapter (libactr:standard-domain-adapter) ()
   (:documentation "Reference subtraction domain adapter (2-digit column
 subtraction with borrowing). Stateless. Subclasses standard-domain-adapter;
 the single terminal production SUBTRACT-TENS-DIRECT and the default step-done?
@@ -39,13 +39,13 @@ are inherited — the fourth dogfood of the base."))
 
 (defun make-subtraction-adapter ()
   (make-instance 'subtraction-adapter
-                 :model-package (find-package :mtt/subtraction-tutor)
+                 :model-package (find-package :libactr/subtraction-tutor)
                  :terminal-production "SUBTRACT-TENS-DIRECT"))
 
 (defun build-subtraction-model ()
   "Read+compile the subtraction model + buggy library (reuses
-mtt/subtraction-tutor)."
-  (mtt/subtraction-tutor:load-subtraction-model))
+libactr/subtraction-tutor)."
+  (libactr/subtraction-tutor:load-subtraction-model))
 
 ;;; --- domain helpers (plumbing comes from standard-domain-adapter) ---
 
@@ -55,8 +55,8 @@ debt #1): top > bot (positive result) — a structure-only parse used to accept
 \"5-18\" and produce negative intermediates. All failures signal
 bad-tutor-request (400 over HTTP)."
   (flet ((bad ()
-           (mtt:signal-bad-request
-            "mtt/subtraction-adapter: cannot parse problem-id ~a (expected \"NN-MM\")"
+           (libactr:signal-bad-request
+            "libactr/subtraction-adapter: cannot parse problem-id ~a (expected \"NN-MM\")"
             problem-id))
          (int (part)
            (handler-case (parse-integer part)
@@ -67,8 +67,8 @@ bad-tutor-request (400 over HTTP)."
       (let ((top (int (subseq s 0 dash)))
             (bot (int (subseq s (1+ dash)))))
         (unless (> top bot)
-          (mtt:signal-bad-request
-           "mtt/subtraction-adapter: problem must have a positive answer (top > bot): ~a"
+          (libactr:signal-bad-request
+           "libactr/subtraction-adapter: problem must have a positive answer (top > bot): ~a"
            problem-id))
         (values top bot)))))
 
@@ -85,43 +85,43 @@ parse-error, so the handler-case alone let it escape as a 500 (the phase-14
 audit's parse-error assumption was falsified by the RED run)."
   (let ((raw (cdr (assoc "value" action :test #'string=))))
     (unless raw
-      (mtt:signal-bad-request
-       "mtt/subtraction-adapter: action ~s is missing the \"value\" entry" action))
+      (libactr:signal-bad-request
+       "libactr/subtraction-adapter: action ~s is missing the \"value\" entry" action))
     (handler-case (parse-integer raw)
       (parse-error ()
-        (mtt:signal-bad-request
-         "mtt/subtraction-adapter: action value must be an integer, got ~s" raw)))))
+        (libactr:signal-bad-request
+         "libactr/subtraction-adapter: action value must be an integer, got ~s" raw)))))
 
 ;;; --- adapter protocol ---
 
-(defmethod mtt:prepare-session ((a subtraction-adapter) session problem-id)
+(defmethod libactr:prepare-session ((a subtraction-adapter) session problem-id)
   "Parse PROBLEM-ID into the goal's digit slots (integers) + stage=ones,
 overriding the model's default initial-goal so one compiled model serves any
 2-digit problem. Returns the session."
   (multiple-value-bind (top bot) (%parse-problem problem-id)
-    (mtt:adapter-set-goal a session "SUB2"
+    (libactr:adapter-set-goal a session "SUB2"
                           :top-ones (%digit top 0) :top-tens (%digit top 1)
                           :bot-ones (%digit bot 0) :bot-tens (%digit bot 1)
                           :res-ones nil :res-tens nil
-                          :stage (mtt:adapter-intern a "ONES")))
+                          :stage (libactr:adapter-intern a "ONES")))
   session)
 
-(defmethod mtt:adapt-action ((a subtraction-adapter) action session)
+(defmethod libactr:adapt-action ((a subtraction-adapter) action session)
   "Translate a decoded student ACTION alist ((\"type\" . \"digit\")
   (\"value\" . \"4\")) into a primed step-intent — or, at a borrow column, a
 2-element intent list (visible subtract-ones-borrow, then hidden
 propagate-borrow). See the file header for the detection order and the
 stage-driven column routing. Returns the intent(s) for server-step-session."
-  (flet ((gi (name) (mtt:adapter-intern a name)))
+  (flet ((gi (name) (libactr:adapter-intern a name)))
     (let* ((type (cdr (assoc "type" action :test #'string=)))
            (d (%action-int action))
-           (stage (mtt:adapter-goal-slot a session "STAGE"))
-           (top-ones (mtt:adapter-goal-slot a session "TOP-ONES"))
-           (bot-ones (mtt:adapter-goal-slot a session "BOT-ONES"))
-           (top-tens (mtt:adapter-goal-slot a session "TOP-TENS"))
-           (bot-tens (mtt:adapter-goal-slot a session "BOT-TENS")))
+           (stage (libactr:adapter-goal-slot a session "STAGE"))
+           (top-ones (libactr:adapter-goal-slot a session "TOP-ONES"))
+           (bot-ones (libactr:adapter-goal-slot a session "BOT-ONES"))
+           (top-tens (libactr:adapter-goal-slot a session "TOP-TENS"))
+           (bot-tens (libactr:adapter-goal-slot a session "BOT-TENS")))
       (unless (string= type "digit")
-        (mtt:signal-bad-request "mtt/subtraction-adapter: unknown action type ~a" type))
+        (libactr:signal-bad-request "libactr/subtraction-adapter: unknown action type ~a" type))
       (cond
         ((string= "ONES" (and stage (symbol-name stage)))
          (let ((correct (if (< top-ones bot-ones)
@@ -130,54 +130,54 @@ stage-driven column routing. Returns the intent(s) for server-step-session."
            (cond
              ;; correct, no borrow needed: single intent
              ((and (>= top-ones bot-ones) (= d (- top-ones bot-ones)))
-              (mtt:adapter-primed-intent
+              (libactr:adapter-primed-intent
                a
                `((,(gi "GOAL") ,(gi "RES-ONES") ,d)
                  (,(gi "GOAL") ,(gi "STAGE") ,(gi "TENS")))
-               (mtt:adapter-fact a "COL-FACT" :kind (gi "DIRECT")
+               (libactr:adapter-fact a "COL-FACT" :kind (gi "DIRECT")
                                  :top top-ones :bot bot-ones :diff d)))
              ;; correct, borrow needed: 2-intent list (visible + hidden
              ;; propagate whose fact supplies the decremented tens)
              ((and (< top-ones bot-ones) (= d correct))
               (list
-               (mtt:adapter-primed-intent
+               (libactr:adapter-primed-intent
                 a
                 `((,(gi "GOAL") ,(gi "RES-ONES") ,d)
                   (,(gi "GOAL") ,(gi "STAGE") ,(gi "PROPAGATE")))
-                (mtt:adapter-fact a "COL-FACT" :kind (gi "BORROW")
+                (libactr:adapter-fact a "COL-FACT" :kind (gi "BORROW")
                                   :top top-ones :bot bot-ones :diff d))
-               (mtt:adapter-primed-intent
+               (libactr:adapter-primed-intent
                 a
                 `((,(gi "GOAL") ,(gi "TOP-TENS") ,(- top-tens 1))
                   (,(gi "GOAL") ,(gi "STAGE") ,(gi "TENS")))
-                (mtt:adapter-fact a "COL-FACT" :kind (gi "PROPAGATE")
+                (libactr:adapter-fact a "COL-FACT" :kind (gi "PROPAGATE")
                                   :old-top top-tens :new-top (- top-tens 1)))))
              ;; bug branch: one DSL declaration drives detection (list
              ;; order), prime, and the buggy production (tutor side)
              (t
               (let* ((answers (list d))
-                     (spec (mtt:detect-bug
-                            (mtt/subtraction-tutor:bug-specs) answers
-                            (mtt:bug-goal-env a session))))
+                     (spec (libactr:detect-bug
+                            (libactr/subtraction-tutor:bug-specs) answers
+                            (libactr:bug-goal-env a session))))
                 (if spec
-                    (mtt:bug-intent a session spec answers)
+                    (libactr:bug-intent a session spec answers)
                     ;; unclassified: bare intent, no prime
-                    (mtt:make-step-intent
+                    (libactr:make-step-intent
                      :assignments `((,(gi "GOAL") ,(gi "RES-ONES") ,d)))))))))
         ((string= "TENS" (and stage (symbol-name stage)))
          (let ((correct (- top-tens bot-tens)))
            (cond
              ((= d correct)
-              (mtt:adapter-primed-intent
+              (libactr:adapter-primed-intent
                a
                `((,(gi "GOAL") ,(gi "RES-TENS") ,d)
                  (,(gi "GOAL") ,(gi "STAGE") ,(gi "DONE")))
-               (mtt:adapter-fact a "COL-FACT" :kind (gi "DIRECT")
+               (libactr:adapter-fact a "COL-FACT" :kind (gi "DIRECT")
                                  :top top-tens :bot bot-tens :diff d)))
              ;; tens has NO bug detection (spec §2.1): unclassified
-             (t (mtt:make-step-intent
+             (t (libactr:make-step-intent
                  :assignments `((,(gi "GOAL") ,(gi "RES-TENS") ,d)))))))
         (t
-         (mtt:signal-bad-request
-          "mtt/subtraction-adapter: no column active (stage ~a) — the problem may already be done"
+         (libactr:signal-bad-request
+          "libactr/subtraction-adapter: no column active (stage ~a) — the problem may already be done"
           stage))))))

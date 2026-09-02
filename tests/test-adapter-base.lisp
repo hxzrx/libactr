@@ -1,14 +1,14 @@
 ;;;; tests/test-adapter-base.lisp — standard-domain-adapter plumbing helpers (Phase 8).
-;;;; Suite :mtt/server (defined in tests/test-server.lisp). Pure helper tests: a
+;;;; Suite :libactr/server (defined in tests/test-server.lisp). Pure helper tests: a
 ;;;; minimal test-only subclass + synthetic sessions; no real model/HTTP.
-(in-package :mtt/server-test)
-(in-suite :mtt/server)
+(in-package :libactr/server-test)
+(in-suite :libactr/server)
 
 (defclass test-adapter (standard-domain-adapter) ())
 
 (defun make-test-adapter (&optional (terminal "DONE"))
   (make-instance 'test-adapter
-                 :model-package (find-package :mtt/server-test)
+                 :model-package (find-package :libactr/server-test)
                  :terminal-production terminal))
 
 (defun %fake-session (state)
@@ -21,14 +21,14 @@
 
 (test adapter-intern.interns-in-model-package
   (let ((a (make-test-adapter)))
-    (is (eq (adapter-intern a "FOO") (intern "FOO" :mtt/server-test)))))
+    (is (eq (adapter-intern a "FOO") (intern "FOO" :libactr/server-test)))))
 
 (test adapter-fact.builds-interned-chunk-values-pass-through
   (let* ((a (make-test-adapter))
          (c (adapter-fact a "T1" :n1 1 :n2 2)))
-    (is (eq (chunk-isa c) (intern "T1" :mtt/server-test)))
-    (is (eql 1 (cdr (assoc (intern "N1" :mtt/server-test) (chunk-slots c)))))
-    (is (eql 2 (cdr (assoc (intern "N2" :mtt/server-test) (chunk-slots c)))))))
+    (is (eq (chunk-isa c) (intern "T1" :libactr/server-test)))
+    (is (eql 1 (cdr (assoc (intern "N1" :libactr/server-test) (chunk-slots c)))))
+    (is (eql 2 (cdr (assoc (intern "N2" :libactr/server-test) (chunk-slots c)))))))
 
 (test adapter-set-goal-and-goal-slot.roundtrip
   (let* ((a (make-test-adapter))
@@ -49,7 +49,7 @@
     (is (equal '((goal foo 1)) (step-intent-assignments intent)))
     (let ((prime (step-intent-prime intent)))
       (is (consp prime))
-      (is (eq (car (first prime)) (intern "RETRIEVAL" :mtt/server-test)))
+      (is (eq (car (first prime)) (intern "RETRIEVAL" :libactr/server-test)))
       (is (eq (cdr (first prime)) fact)))))
 
 (test step-done.default-on-path-matching-terminal
@@ -102,8 +102,8 @@ on-path production matching ANY listed name, and still rejects others."
          (s (%fake-session (make-buffer-state))))
     (is (null (bug-goal-env a s)))            ; empty goal -> nil
     (adapter-set-goal a s "G" :x 1 :y 2)
-    (is (equal (list (cons (intern "X" :mtt/server-test) 1)
-                     (cons (intern "Y" :mtt/server-test) 2))
+    (is (equal (list (cons (intern "X" :libactr/server-test) 1)
+                     (cons (intern "Y" :libactr/server-test) 2))
                (bug-goal-env a s)))))
 
 (test bug-intent.shape
@@ -111,31 +111,31 @@ on-path production matching ANY listed name, and still rejects others."
 the kind keyword + fact slots filled from answers, goal slots, and literals."
   (let* ((a (make-test-adapter))
          (s (%fake-session (make-buffer-state))))
-    (adapter-set-goal a s "TASK" :verb (intern "GO" :mtt/server-test))
+    (adapter-set-goal a s "TASK" :verb (intern "GO" :libactr/server-test))
     (let* ((spec (make-bug-spec
-                  :name (intern "BUGGY-X" :mtt/server-test)
+                  :name (intern "BUGGY-X" :libactr/server-test)
                   :kind :over :kc :irr :feedback "f"
-                  :goal-type (intern "TASK" :mtt/server-test)
+                  :goal-type (intern "TASK" :libactr/server-test)
                   :answers (list (list :action "value"
-                                   :slot (intern "PAST" :mtt/server-test)))
-                  :fact-slots (list (list (intern "VERB" :mtt/server-test)
+                                   :slot (intern "PAST" :libactr/server-test)))
+                  :fact-slots (list (list (intern "VERB" :libactr/server-test)
                                           :from (list :goal
-                                                      (intern "VERB" :mtt/server-test)))
-                                    (list (intern "PAST" :mtt/server-test)
+                                                      (intern "VERB" :libactr/server-test)))
+                                    (list (intern "PAST" :libactr/server-test)
                                           :from (list :answer 0))
-                                    (list (intern "JUNK" :mtt/server-test) :literal 0))
+                                    (list (intern "JUNK" :libactr/server-test) :literal 0))
                   :when '(t)))
-           (intent (bug-intent a s spec (list (intern "WENT" :mtt/server-test)))))
-      (is (equal (list (list (intern "GOAL" :mtt/server-test)
-                             (intern "PAST" :mtt/server-test)
-                             (intern "WENT" :mtt/server-test)))
+           (intent (bug-intent a s spec (list (intern "WENT" :libactr/server-test)))))
+      (is (equal (list (list (intern "GOAL" :libactr/server-test)
+                             (intern "PAST" :libactr/server-test)
+                             (intern "WENT" :libactr/server-test)))
                  (step-intent-assignments intent)))
       (let* ((prime (cdr (first (step-intent-prime intent))))
              (slots (chunk-slots prime)))
-        (is (eq (intern "BUG-FACT" :mtt/server-test) (chunk-isa prime)))
-        (is (eql :over (cdr (assoc (intern "KIND" :mtt/server-test) slots))))
-        (is (eq (intern "GO" :mtt/server-test)
-                (cdr (assoc (intern "VERB" :mtt/server-test) slots))))
-        (is (eq (intern "WENT" :mtt/server-test)
-                (cdr (assoc (intern "PAST" :mtt/server-test) slots))))
-        (is (eql 0 (cdr (assoc (intern "JUNK" :mtt/server-test) slots))))))))
+        (is (eq (intern "BUG-FACT" :libactr/server-test) (chunk-isa prime)))
+        (is (eql :over (cdr (assoc (intern "KIND" :libactr/server-test) slots))))
+        (is (eq (intern "GO" :libactr/server-test)
+                (cdr (assoc (intern "VERB" :libactr/server-test) slots))))
+        (is (eq (intern "WENT" :libactr/server-test)
+                (cdr (assoc (intern "PAST" :libactr/server-test) slots))))
+        (is (eql 0 (cdr (assoc (intern "JUNK" :libactr/server-test) slots))))))))

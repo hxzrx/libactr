@@ -1,7 +1,7 @@
 ;;;; tests/test-kt.lisp — knowledge tracing (Phase 6, pure)
 ;;;; Reference values hand-computed in spec §3.4 (L0=1/10, T=1/10, G=1/5, S=1/10).
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (defmacro approx (x y &optional (tol 1e-6))
   `(< (abs (- ,x ,y)) ,tol))

@@ -1,6 +1,6 @@
 ;;;; tests/test-event-log.lisp — Phase 4 event-log unit tests.
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (test log-append-stores-events-and-last-seq
   "log-append stores events in order; log-last-seq / log-all-events reflect them.

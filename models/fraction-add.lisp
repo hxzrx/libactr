@@ -1,7 +1,7 @@
 ;;; fraction-add.lisp — fraction addition (unlike denominators), Phase 7 model.
-;;; act-r/mtt common subset. Slot values are small integers. Adapter primes
+;;; act-r/libactr common subset. Slot values are small integers. Adapter primes
 ;;; retrieval with lcm-fact / sum-fact / bug-fact; add-dm intentionally absent
-;;; (mtt traces against adapter-primed retrieval; dual-track sets retrieval
+;;; (libactr traces against adapter-primed retrieval; dual-track sets retrieval
 ;;; directly). KC attribution is applied post-load by load-fraction-model
 ;;; (reader does not parse kc), NOT in this file.
 ;;; Phase 13: SIMPLIFY (3rd correct production, kc :simplify) reduces the summed

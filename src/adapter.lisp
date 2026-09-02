@@ -2,10 +2,10 @@
 ;;;; The engine/domain seam (spec §6.2): only these three generics are
 ;;;; domain-specific. Translating a trace-result to JSON, registering models,
 ;;;; running sessions, etc. are all domain-agnostic (server.lisp, http-api).
-;;;; Lives in the :mtt package because adapters reference these symbols and the
-;;;; mtt core owns the cognitive-session / step-intent / trace-result types they
+;;;; Lives in the :libactr package because adapters reference these symbols and the
+;;;; libactr core owns the cognitive-session / step-intent / trace-result types they
 ;;;; operate on. NO global mutable state in this file.
-(in-package :mtt)
+(in-package :libactr)
 
 (defgeneric prepare-session (adapter session problem-id)
   (:documentation "Initialize SESSION's cognitive state from PROBLEM-ID (called at
@@ -40,7 +40,7 @@ the three protocol generics (prepare-session, adapt-action, step-done?)."))
 (defclass standard-domain-adapter (domain-adapter)
   ((model-package       :initarg :model-package       :reader adapter-model-package
                         :documentation "PACKAGE object where this domain's model
-symbols live, e.g. (find-package :mtt/fraction-tutor). adapter-intern interns here.")
+symbols live, e.g. (find-package :libactr/fraction-tutor). adapter-intern interns here.")
    (terminal-production :initarg :terminal-production :reader adapter-terminal-production
                         :documentation "Name(s) of the production(s) whose on-path
 fire marks the problem done — a string or a list of strings, e.g. \"ADD-FRACTIONS\"

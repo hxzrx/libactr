@@ -1,10 +1,10 @@
 ;;;; tests/test-concurrent.lisp — Phase 4 concurrent-isolation proof (bordeaux APIv2).
 ;;;; Proves the multi-user-safety invariant under real concurrency: N threads, each
 ;;;; with its OWN cognitive-session, sharing ONE read-only model-definition, with
-;;;; zero cross-talk and the model left unchanged. The mtt CORE has no thread code
+;;;; zero cross-talk and the model left unchanged. The libactr CORE has no thread code
 ;;;; — this test validates that the structural invariant holds under concurrency.
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (test concurrent-sessions-share-readonly-model-with-no-crosstalk
   "N threads each run an independent cognitive-session against the SAME compiled

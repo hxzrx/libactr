@@ -1,6 +1,6 @@
 ;;;; tests/test-session.lisp — Phase 4 cognitive-session unit tests.
-(in-package :mtt/test)
-(in-suite :mtt)
+(in-package :libactr/test)
+(in-suite :libactr)
 
 (defun fresh-addition-session ()
   "A cognitive-session over the addition model: student alice, problem p1."

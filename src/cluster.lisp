@@ -4,11 +4,11 @@
 ;;;; scan. All mutable state lives on the instance (zero global mutable state);
 ;;;; the three loops are thin timer threads over SINGLE-STEPPABLE tick fns
 ;;;; (tests drive the ticks directly for determinism). The proxy (proxy.lisp)
-;;;; shares this package. Composition only: no mtt/server or core file is
+;;;; shares this package. Composition only: no libactr/server or core file is
 ;;;; modified — takeover rebuilds sessions through exported APIs.
-(defpackage :mtt/cluster
+(defpackage :libactr/cluster
   (:use :cl)
-  (:nicknames :mtt-cluster)
+  (:nicknames :libactr-cluster)
   (:export
    ;; ===== 服务层接口:manager(worker 编排本体) =====
    ;; 库消费者经 make/start/stop-cluster-manager 进入;slot readers
@@ -30,14 +30,14 @@
    ;; package sees them via :use — unexported = invisible.
    #:tutor-proxy #:tutor-proxy-p #:make-tutor-proxy
    #:stop-tutor-proxy #:proxy-port #:with-proxy-redis))
-(in-package :mtt/cluster)
+(in-package :libactr/cluster)
 
 (defclass cluster-manager ()
   ((server             :reader cluster-server   :initarg :server)
    (worker-id          :reader cluster-worker-id :initarg :worker-id)
    (redis-host         :reader cluster-redis-host :initarg :redis-host :initform "127.0.0.1")
    (redis-port         :reader cluster-redis-port :initarg :redis-port :initform 6379)
-   (prefix             :reader cluster-prefix   :initarg :prefix :initform "mtt:cluster:")
+   (prefix             :reader cluster-prefix   :initarg :prefix :initform "libactr:cluster:")
    (ttl                :reader cluster-ttl      :initarg :heartbeat-ttl :initform 15)
    (heartbeat-interval :reader cluster-heartbeat-interval :initarg :heartbeat-interval :initform 5)
    (scan-interval      :reader cluster-scan-interval :initarg :scan-interval :initform 2)
@@ -93,7 +93,7 @@ every command (controller-mandated, Task 7 review ruling)."
   (let ((h (make-hash-table :test 'equal)))
     (setf (gethash "host" h) (cluster-advertise-host m)
           (gethash "port" h) (hunchentoot:acceptor-port
-                              (mtt/server:server-acceptor (cluster-server m))))
+                              (libactr/server:server-acceptor (cluster-server m))))
     (with-output-to-string (s) (yason:encode h s))))
 
 (defun cluster-heartbeat-tick (m)
@@ -127,15 +127,15 @@ issues zero redis commands while holding students-lock)."
                (let ((owner (redis:red-hget (cluster-sess-key m sid) "worker")))
                  (when (and owner (not (string= owner (cluster-worker-id m))))
                    (push (cons sid owner) stale))))
-             (mtt/server:server-sessions (cluster-server m)))
+             (libactr/server:server-sessions (cluster-server m)))
     (dolist (entry stale)
-      (mtt/server:server-drop-session (cluster-server m) (car entry))
+      (libactr/server:server-drop-session (cluster-server m) (car entry))
       ;; P01 (parked-minors cleanup): log the owner OBSERVED at scan time —
       ;; the drop's decision basis — instead of a second HGET (the route
       ;; could move again between scan and drop; the logged owner is the one
       ;; that decided, and the round-trip is gone).
       (format *error-output*
-              "mtt/cluster: zombie self-check dropped local session ~a (route now owned by ~a)~%"
+              "libactr/cluster: zombie self-check dropped local session ~a (route now owned by ~a)~%"
               (car entry) (cdr entry)))))
 
 (defun cluster-join (m)
@@ -167,7 +167,7 @@ expires naturally — the takeover scan treats both identically, spec §5.2.)"
 ;; --- checkpoint-store protocol (spec §5.1 ckpt:<sid>) ------------------------
 
 (defgeneric save-checkpoint (store sid checkpoint)
-  (:documentation "Persist CHECKPOINT (pure data from mtt:checkpoint-session)
+  (:documentation "Persist CHECKPOINT (pure data from libactr:checkpoint-session)
 under session-id SID, overwriting any previous one."))
 (defgeneric load-checkpoint (store sid)
   (:documentation "Newest checkpoint for SID, or nil when none was saved."))
@@ -185,7 +185,7 @@ under session-id SID, overwriting any previous one."))
 
 (defclass redis-checkpoint-store ()
   ((prefix :reader redis-checkpoint-store-prefix :initarg :prefix
-           :initform "mtt:cluster:ckpt:")
+           :initform "libactr:cluster:ckpt:")
    (host :reader redis-checkpoint-store-host :initarg :host :initform "127.0.0.1")
    (port :reader redis-checkpoint-store-port :initarg :port :initform 6379)
    (conn :accessor redis-checkpoint-store-conn :initform nil)
@@ -198,7 +198,7 @@ under session-id SID, overwriting any previous one."))
 codec: explicit schema (spec §8 Interfaces) — top-level scalars, tagged status,
 state as an ARRAY of {buffer isa slots[]} entries (buffer/slot names must keep
 their packages, so they are VALUES not object keys), path as tagged array."))
-(defun make-redis-checkpoint-store (&key (prefix "mtt:cluster:ckpt:")
+(defun make-redis-checkpoint-store (&key (prefix "libactr:cluster:ckpt:")
                                     (host "127.0.0.1") (port 6379))
   "Create a Redis-backed checkpoint-store under PREFIX (one lazy cl-redis
 connection; every use serialized under the store's per-instance lock —
@@ -224,7 +224,7 @@ cl-redis connections are single-socket, not thread-safe, and the scan thread
 
 (defun %cp-hash (cp)
   "checkpoint plist -> yason-encodable hash-table (explicit schema walk;
-symbols tagged via mtt:tag-symbols — numbers/strings pass through)."
+symbols tagged via libactr:tag-symbols — numbers/strings pass through)."
   (let ((h (make-hash-table :test 'equal)))
     ;; [brief defect, run-evidenced: the brief encoded these keys via
     ;; (string-downcase (symbol-name k)) — hyphens ("session-id") — while the
@@ -233,13 +233,13 @@ symbols tagged via mtt:tag-symbols — numbers/strings pass through)."
     ;; round-trip. Encode the schema keys directly.]
     (dolist (k '(("session_id" . :session-id) ("student_id" . :student-id)
                  ("problem_id" . :problem-id) ("model_id" . :model-id)))
-      (setf (gethash (car k) h) (mtt:tag-symbols (getf cp (cdr k)))))
+      (setf (gethash (car k) h) (libactr:tag-symbols (getf cp (cdr k)))))
     ;; cosmetic#4 (phase 14): fidelity, not normalization — nil encodes as
     ;; JSON null and reads back nil (same semantics as the memory backend);
     ;; the integer default lives in restore-from-checkpoint.
     (setf (gethash "step_count" h) (getf cp :step-count)
           (gethash "last_seq" h) (getf cp :last-seq)
-          (gethash "status" h) (mtt:tag-symbols (getf cp :status)))
+          (gethash "status" h) (libactr:tag-symbols (getf cp :status)))
     ;; :state entries are (buffer isa . slots-alist) — SBCL-probe verified:
     ;; serialize-buffer-state conses the buffer name onto serialize-chunk's
     ;; (isa . slots-alist) pair, so (car entry) = buffer, (cadr entry) = isa,
@@ -247,26 +247,26 @@ symbols tagged via mtt:tag-symbols — numbers/strings pass through)."
     (setf (gethash "state" h)
           (mapcar (lambda (entry)
                     (let ((ch (make-hash-table :test 'equal)))
-                      (setf (gethash "buffer" ch) (mtt:tag-symbols (car entry)))
+                      (setf (gethash "buffer" ch) (libactr:tag-symbols (car entry)))
                       (when (cdr entry)
-                        (setf (gethash "isa" ch) (mtt:tag-symbols (cadr entry))
+                        (setf (gethash "isa" ch) (libactr:tag-symbols (cadr entry))
                               (gethash "slots" ch)
                               (mapcar (lambda (cell)
                                         (let ((sh (make-hash-table :test 'equal)))
                                           (setf (gethash "slot" sh)
-                                                (mtt:tag-symbols (car cell))
+                                                (libactr:tag-symbols (car cell))
                                                 (gethash "value" sh)
-                                                (mtt:tag-symbols (cdr cell)))
+                                                (libactr:tag-symbols (cdr cell)))
                                           sh))
                                       (cddr entry))))
                       ch))
                   (getf cp :state)))
-    (setf (gethash "path" h) (mapcar #'mtt:tag-symbols (getf cp :path)))
+    (setf (gethash "path" h) (mapcar #'libactr:tag-symbols (getf cp :path)))
     h))
 
 (defun %json-checkpoint (json)
   "yason-parsed (alist) tree -> checkpoint plist (inverse schema walk).
-[deviation from brief, probe-verified: the brief applied mtt:untag-symbols to
+[deviation from brief, probe-verified: the brief applied libactr:untag-symbols to
 the WHOLE parsed tree, but yason's :object-as :alist entries are dotted
 (key . scalar) pairs — improper lists — and untag-symbols' cons branch mapcars
 proper lists only, so the whole-tree walk signals TYPE-ERROR on the first
@@ -274,7 +274,7 @@ scalar field (\"session_id\" . \"s1\"). untag is applied at the LEAF value
 subtrees instead — the same discipline as redis-store's decode-row: tag alists
 intern, arrays of tags map to lists, scalars pass through.]"
   (flet ((ag (key alist) (cdr (assoc key alist :test #'string=)))
-         (un (x) (mtt:untag-symbols x)))
+         (un (x) (libactr:untag-symbols x)))
     (list :session-id (un (ag "session_id" json))
           :student-id (un (ag "student_id" json))
           :problem-id (un (ag "problem_id" json))
@@ -326,11 +326,11 @@ dropped)."
                ;; double parens: with-lock-held's lock clause takes ONE form
                ;; (bordeaux apiv2 (place &key timeout)); a reader call is that
                ;; one form [brief defect — brief used single parens].
-               (bordeaux-threads:with-lock-held ((mtt/server:handle-lock handle))
+               (bordeaux-threads:with-lock-held ((libactr/server:handle-lock handle))
                  (save-checkpoint (cluster-store m) sid
-                                  (mtt:checkpoint-session
-                                   (mtt/server:handle-session handle)))))
-             (mtt/server:server-sessions (cluster-server m)))
+                                  (libactr:checkpoint-session
+                                   (libactr/server:handle-session handle)))))
+             (libactr/server:server-sessions (cluster-server m)))
     (with-cluster-redis (m)
       (let ((key (cluster-worker-sess-key m (cluster-worker-id m))))
         (dolist (sid (redis:red-smembers key))
@@ -339,7 +339,7 @@ dropped)."
           ;; sess entry + route here would 404 a live session forever. Only
           ;; delete when the sid is absent from the local hash NOW as well.
           (unless (or (member sid seen :test #'string=)
-                      (gethash sid (mtt/server:server-sessions (cluster-server m))))
+                      (gethash sid (libactr/server:server-sessions (cluster-server m))))
             (incf dropped)
             (redis:red-srem key sid)
             (redis:red-del (cluster-sess-key m sid))))))
@@ -399,19 +399,19 @@ untouched, claim held until TTL) — the retry is closed by the five-field
 marker in cluster-takeover-tick."
   (let* ((server (cluster-server m))
          (model-id (getf checkpoint :model-id))
-         (entry (gethash model-id (mtt/server:server-models server))))
+         (entry (gethash model-id (libactr/server:server-models server))))
     (unless entry
-      (error "mtt/cluster: takeover of ~a needs model ~a registered locally"
+      (error "libactr/cluster: takeover of ~a needs model ~a registered locally"
              sid model-id))
     (let* ((model (car entry))
            (adapter (cdr entry))
            (student-id (getf checkpoint :student-id))
-           (log (mtt:make-redis-event-log
-                 :key (mtt/server:student-events-key student-id)
+           (log (libactr:make-redis-event-log
+                 :key (libactr/server:student-events-key student-id)
                  :host (cluster-redis-host m) :port (cluster-redis-port m)))
-           (session (mtt:restore-from-checkpoint checkpoint model log)))
-      (setf (gethash sid (mtt/server:server-sessions server))
-            (make-instance 'mtt/server:session-handle
+           (session (libactr:restore-from-checkpoint checkpoint model log)))
+      (setf (gethash sid (libactr/server:server-sessions server))
+            (make-instance 'libactr/server:session-handle
                            :session session
                            :lock (bordeaux-threads:make-lock
                                   (format nil "session-~a" sid))
@@ -508,7 +508,7 @@ return 0"
                 ;; window if the table changed between the two reads.
                 (let* ((cp (load-checkpoint (cluster-store m) sid))
                        (h (and cp (gethash sid
-                                          (mtt/server:server-sessions
+                                          (libactr/server:server-sessions
                                            (cluster-server m))))))
                   (cond
                     ((null cp)
@@ -517,7 +517,7 @@ return 0"
                      ;; branches have (why a takeover didn't happen must be
                      ;; greppable when an operator debugs a 503ing route).
                      (format *error-output*
-                             "mtt/cluster: takeover of ~a skipped — no checkpoint (claim dropped; route stays: the proxy 503s and the client restarts)~%"
+                             "libactr/cluster: takeover of ~a skipped — no checkpoint (claim dropped; route stays: the proxy 503s and the client restarts)~%"
                              sid)
                      (drop-claim sid))
                     (h (if (%checkpoint-matches-session-p
@@ -532,13 +532,13 @@ return 0"
                             ;; point and the handle lock is a leaf (the step
                             ;; path holds nothing beneath it) — no cycle.
                             (bordeaux-threads:with-lock-held
-                                ((mtt/server:handle-lock h))
-                              (mtt:checkpoint-session
-                               (mtt/server:handle-session h))))
+                                ((libactr/server:handle-lock h))
+                              (libactr:checkpoint-session
+                               (libactr/server:handle-session h))))
                            (progn (cluster-adopt-session m sid cp w) (incf taken))
                            (progn
                              (format *error-output*
-                                     "mtt/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%"
+                                     "libactr/cluster: takeover of ~a skipped — sid already live locally (cross-process gensym collision? spec §13.1)~%"
                                      sid)
                              (drop-claim sid))))
                     (t (cluster-adopt-session m sid cp w) (incf taken)))))
@@ -547,7 +547,7 @@ return 0"
             ;; whole takeover pass for the remaining sids — report, continue.
             (error (c)
               (format *error-output*
-                      "mtt/cluster: takeover of sid ~a failed: ~a; continuing pass~%"
+                      "libactr/cluster: takeover of sid ~a failed: ~a; continuing pass~%"
                       sid c)))))
       (values taken dead))))
 
@@ -559,7 +559,7 @@ return 0"
               (error (c)
                 ;; C1 (phase 14): per-tick visibility — the name + condition on
                 ;; one line; the loop itself must keep running forever.
-                (format *error-output* "mtt/cluster: ~a tick failed: ~a~%" name c)))
+                (format *error-output* "libactr/cluster: ~a tick failed: ~a~%" name c)))
             (sleep interval)))
 
 (defun %stop-tick-threads (m)
@@ -591,13 +591,13 @@ before the asserted lower bound. Deadline computed in INTEGER seconds
       (when (bordeaux-threads:thread-alive-p th)
         (incf destroyed)
         (format *error-output*
-                "mtt/cluster: stop deadline reached — destroying tick thread ~a (it may hold the redis lock mid-command)~%"
+                "libactr/cluster: stop deadline reached — destroying tick thread ~a (it may hold the redis lock mid-command)~%"
                 (bordeaux-threads:thread-name th))
         (ignore-errors (bordeaux-threads:destroy-thread th))))
     destroyed))
 
 (defun make-cluster-manager (&key server worker-id redis-host redis-port
-                             (prefix "mtt:cluster:") (heartbeat-ttl 15)
+                             (prefix "libactr:cluster:") (heartbeat-ttl 15)
                              (heartbeat-interval 5) (scan-interval 2)
                              (takeover-interval 5) (claim-ttl 30)
                              (advertise-host "127.0.0.1") store)

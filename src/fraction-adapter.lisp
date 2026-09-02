@@ -6,25 +6,25 @@
 ;;;; branches at both action types are now driven by the phase-12 bug-DSL
 ;;;; (per-action-type spec lists; list order IS the detection order). Stateless;
 ;;;; all state lives on the session passed into each method. NO global variables.
-(defpackage :mtt/fraction-adapter
+(defpackage :libactr/fraction-adapter
   (:use :cl)
   (:nicknames :fraction-adapter)
   (:export #:fraction-adapter #:make-fraction-adapter #:build-fraction-model))
-(in-package :mtt/fraction-adapter)
+(in-package :libactr/fraction-adapter)
 
-(defclass fraction-adapter (mtt:standard-domain-adapter) ()
+(defclass fraction-adapter (libactr:standard-domain-adapter) ()
   (:documentation "Reference fraction domain adapter (unlike-denominator addition).
 Stateless: all state lives on the session passed into each method. Subclasses
 standard-domain-adapter for reusable plumbing (spec §3)."))
 
 (defun make-fraction-adapter ()
   (make-instance 'fraction-adapter
-                 :model-package (find-package :mtt/fraction-tutor)
+                 :model-package (find-package :libactr/fraction-tutor)
                  :terminal-production '("ADD-FRACTIONS" "SIMPLIFY")))
 
 (defun build-fraction-model ()
-  "Read+compile the fraction model + buggy library (reuses mtt/fraction-tutor)."
-  (mtt/fraction-tutor:load-fraction-model))
+  "Read+compile the fraction model + buggy library (reuses libactr/fraction-tutor)."
+  (libactr/fraction-tutor:load-fraction-model))
 
 ;;; --- domain helpers (plumbing comes from standard-domain-adapter) ---
 
@@ -37,8 +37,8 @@ constraint (phase 12 debt #1): positive denominators — \"1/0+…\" used to
 reach %lcm and crash with a division by zero. All failures signal
 bad-tutor-request (400 over HTTP)."
   (flet ((bad ()
-           (mtt:signal-bad-request
-            "mtt/fraction-adapter: cannot parse problem-id ~a (expected \"a/b+c/d\")"
+           (libactr:signal-bad-request
+            "libactr/fraction-adapter: cannot parse problem-id ~a (expected \"a/b+c/d\")"
             problem-id))
          (int (part)
            (handler-case (parse-integer part)
@@ -54,8 +54,8 @@ bad-tutor-request (400 over HTTP)."
               (num2 (int (subseq s (1+ plus) slash2)))
               (den2 (int (subseq s (1+ slash2)))))
           (unless (and (> den1 0) (> den2 0))
-            (mtt:signal-bad-request
-             "mtt/fraction-adapter: denominators must be positive in problem-id ~a"
+            (libactr:signal-bad-request
+             "libactr/fraction-adapter: denominators must be positive in problem-id ~a"
              problem-id))
           (values num1 den1 num2 den2))))))
 
@@ -65,58 +65,58 @@ bad-tutor-request."
   (let ((raw (cdr (assoc key action :test #'string=))))
     (handler-case (parse-integer raw)
       (parse-error ()
-        (mtt:signal-bad-request
-         "mtt/fraction-adapter: action ~a must be an integer, got ~s" key raw)))))
+        (libactr:signal-bad-request
+         "libactr/fraction-adapter: action ~a must be an integer, got ~s" key raw)))))
 
 ;;; --- adapter protocol ---
 
-(defmethod mtt:prepare-session ((a fraction-adapter) session problem-id)
+(defmethod libactr:prepare-session ((a fraction-adapter) session problem-id)
   "Parse PROBLEM-ID into the goal's num1/den1/num2/den2 (integers), overriding the
 model's default initial-goal so one compiled model serves any problem."
   (multiple-value-bind (num1 den1 num2 den2) (%parse-problem problem-id)
-    (mtt:adapter-set-goal a session "FRAC-ADD"
+    (libactr:adapter-set-goal a session "FRAC-ADD"
                           :num1 num1 :den1 den1 :num2 num2 :den2 den2
                           :cdenom nil :snum nil :sdenom nil
                           :rnum nil :rdenom nil))
   session)
 
-(defmethod mtt:adapt-action ((a fraction-adapter) action session)
+(defmethod libactr:adapt-action ((a fraction-adapter) action session)
   "Translate a decoded student ACTION alist into a primed step-intent. The adapter
 computes the correct value, detects the bug (if any), and primes retrieval with
 the matching fact (lcm-fact / sum-fact / reduce-fact / bug-fact). See spec §6."
-  (flet ((gi (name) (mtt:adapter-intern a name)))
+  (flet ((gi (name) (libactr:adapter-intern a name)))
     (let* ((type (cdr (assoc "type" action :test #'string=)))
-           (num1 (mtt:adapter-goal-slot a session "NUM1"))
-           (den1 (mtt:adapter-goal-slot a session "DEN1"))
-           (num2 (mtt:adapter-goal-slot a session "NUM2"))
-           (den2 (mtt:adapter-goal-slot a session "DEN2"))
-           (cdenom (mtt:adapter-goal-slot a session "CDENOM")))
+           (num1 (libactr:adapter-goal-slot a session "NUM1"))
+           (den1 (libactr:adapter-goal-slot a session "DEN1"))
+           (num2 (libactr:adapter-goal-slot a session "NUM2"))
+           (den2 (libactr:adapter-goal-slot a session "DEN2"))
+           (cdenom (libactr:adapter-goal-slot a session "CDENOM")))
       (cond
         ((string= type "common-denom")
          (let* ((student (%action-int action "value"))
                 (correct (%lcm den1 den2)))
            (cond
              ((= student correct)
-              (mtt:adapter-primed-intent
+              (libactr:adapter-primed-intent
                a
                `((,(gi "GOAL") ,(gi "CDENOM") ,correct))
-               (mtt:adapter-fact a "LCM-FACT" :d1 den1 :d2 den2 :lcm correct)))
+               (libactr:adapter-fact a "LCM-FACT" :d1 den1 :d2 den2 :lcm correct)))
              (t
               (let* ((answers (list student))
-                     (spec (mtt:detect-bug
-                            (mtt/fraction-tutor:cdenom-bug-specs) answers
-                            (mtt:bug-goal-env a session))))
+                     (spec (libactr:detect-bug
+                            (libactr/fraction-tutor:cdenom-bug-specs) answers
+                            (libactr:bug-goal-env a session))))
                 (if spec
-                    (mtt:bug-intent a session spec answers)
-                    (mtt:make-step-intent
+                    (libactr:bug-intent a session spec answers)
+                    (libactr:make-step-intent
                      :assignments `((,(gi "GOAL") ,(gi "CDENOM") ,student)))))))))
         ((string= type "sum")
          ;; B1 (phase 14): out-of-order guard — cdenom unset means the
          ;; common-denominator step has not run; (/ cdenom den1) on nil was
          ;; a TYPE-ERROR 500.
          (unless cdenom
-           (mtt:signal-bad-request
-            "mtt/fraction-adapter: \"sum\" submitted before the common-denominator step"))
+           (libactr:signal-bad-request
+            "libactr/fraction-adapter: \"sum\" submitted before the common-denominator step"))
          (let* ((ssnum (%action-int action "num"))
                 (ssdenom (%action-int action "denom"))
                 (cnum1 (* num1 (/ cdenom den1)))
@@ -125,49 +125,49 @@ the matching fact (lcm-fact / sum-fact / reduce-fact / bug-fact). See spec §6."
                 (correct-sdenom cdenom))
            (cond
              ((and (= ssnum correct-snum) (= ssdenom correct-sdenom))
-              (mtt:adapter-primed-intent
+              (libactr:adapter-primed-intent
                a
                `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
                  (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom))
-               (mtt:adapter-fact a "SUM-FACT" :cdenom cdenom :snum ssnum :sdenom ssdenom)))
+               (libactr:adapter-fact a "SUM-FACT" :cdenom cdenom :snum ssnum :sdenom ssdenom)))
              (t
               (let* ((answers (list ssnum ssdenom))
-                     (spec (mtt:detect-bug
-                            (mtt/fraction-tutor:sum-bug-specs) answers
-                            (mtt:bug-goal-env a session))))
+                     (spec (libactr:detect-bug
+                            (libactr/fraction-tutor:sum-bug-specs) answers
+                            (libactr:bug-goal-env a session))))
                 (if spec
-                    (mtt:bug-intent a session spec answers)
-                    (mtt:make-step-intent
+                    (libactr:bug-intent a session spec answers)
+                    (libactr:make-step-intent
                      :assignments `((,(gi "GOAL") ,(gi "SNUM") ,ssnum)
                                     (,(gi "GOAL") ,(gi "SDENOM") ,ssdenom)))))))))
         ((string= type "simplify")
          (let* ((rnum (%action-int action "num"))
                 (rdenom (%action-int action "denom"))
-                (snum (mtt:adapter-goal-slot a session "SNUM"))
-                (sdenom (mtt:adapter-goal-slot a session "SDENOM")))
+                (snum (libactr:adapter-goal-slot a session "SNUM"))
+                (sdenom (libactr:adapter-goal-slot a session "SDENOM")))
            ;; B1 (phase 14): out-of-order guard — %gcd nil nil was a
            ;; TYPE-ERROR 500.
            (unless (and snum sdenom)
-             (mtt:signal-bad-request
-              "mtt/fraction-adapter: \"simplify\" submitted before the sum step"))
+             (libactr:signal-bad-request
+              "libactr/fraction-adapter: \"simplify\" submitted before the sum step"))
            (let ((g (%gcd snum sdenom)))
              (cond
                ((and (> g 1) (= rnum (/ snum g)) (= rdenom (/ sdenom g)))
-                (mtt:adapter-primed-intent
+                (libactr:adapter-primed-intent
                  a
                  `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
                    (,(gi "GOAL") ,(gi "RDENOM") ,rdenom))
-                 (mtt:adapter-fact a "REDUCE-FACT"
+                 (libactr:adapter-fact a "REDUCE-FACT"
                                    :num snum :den sdenom :rnum rnum :rdenom rdenom)))
                ((= g 1)
-                (mtt:signal-bad-request
-                 "mtt/fraction-adapter: the sum is already in lowest terms — no simplify step for this problem"))
+                (libactr:signal-bad-request
+                 "libactr/fraction-adapter: the sum is already in lowest terms — no simplify step for this problem"))
                (t                            ; wrong reduction: unclassified off-path
-                (mtt:make-step-intent
+                (libactr:make-step-intent
                  :assignments `((,(gi "GOAL") ,(gi "RNUM") ,rnum)
                                 (,(gi "GOAL") ,(gi "RDENOM") ,rdenom))))))))
         (t
-         (mtt:signal-bad-request "mtt/fraction-adapter: unknown action type ~a" type))))))
+         (libactr:signal-bad-request "libactr/fraction-adapter: unknown action type ~a" type))))))
 
 ;;; --- Phase 13: conditional termination --------------------------------------
 ;;; The terminal-name list cannot express "ADD-FRACTIONS is terminal ONLY when
@@ -177,19 +177,19 @@ the matching fact (lcm-fact / sum-fact / reduce-fact / bug-fact). See spec §6."
 ;;; 13 spec §8 amendment). The override governs; the terminal list above is
 ;;; documentation config.
 
-(defmethod mtt:step-done? ((a fraction-adapter) trace-result session)
+(defmethod libactr:step-done? ((a fraction-adapter) trace-result session)
   "Conditional termination (phase 13 spec §8 amendment): SIMPLIFY on-path is
 always done; ADD-FRACTIONS on-path is done ONLY when the summed fraction is
 already in lowest terms (gcd(snum,sdenom)=1, read from the session goal) —
 the terminal-name list cannot express this (ANY-match would end simplifiable
 problems one step early). Other productions are never done."
-  (and (eq :on-path (mtt:trace-result-status trace-result))
-       (let ((p (mtt:trace-result-production trace-result)))
+  (and (eq :on-path (libactr:trace-result-status trace-result))
+       (let ((p (libactr:trace-result-production trace-result)))
          (and p
-              (let ((n (symbol-name (mtt:production-name p))))
+              (let ((n (symbol-name (libactr:production-name p))))
                 (cond
                   ((string= "SIMPLIFY" n) t)
                   ((string= "ADD-FRACTIONS" n)
-                   (= 1 (%gcd (mtt:adapter-goal-slot a session "SNUM")
-                              (mtt:adapter-goal-slot a session "SDENOM"))))
+                   (= 1 (%gcd (libactr:adapter-goal-slot a session "SNUM")
+                              (libactr:adapter-goal-slot a session "SDENOM"))))
                   (t nil)))))))

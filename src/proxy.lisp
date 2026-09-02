@@ -1,13 +1,13 @@
 ;;;; src/proxy.lisp — the thin front proxy (Phase 13, spec §5.2 protocol 5).
-;;;; Same package as cluster.lisp (:mtt/cluster). 5 endpoints; routes by
+;;;; Same package as cluster.lisp (:libactr/cluster). 5 endpoints; routes by
 ;;;; student_id/session_id from the redis routing table; forwards the RAW
 ;;;; request body via dexador and passes worker statuses through verbatim
 ;;;; (dexador signals on 4xx/5xx — unwrapped via its condition readers); one
 ;;;; re-resolve+retry on transport failure (takeover-transparent continuation).
 ;;;; /student/mastery is computed HERE from redis (location-free — no worker
 ;;;; involved). NO global mutable state: everything on the tutor-proxy
-;;;; instance; dispatch via mtt/server's tutor-acceptor (per-instance table).
-(in-package :mtt/cluster)
+;;;; instance; dispatch via libactr/server's tutor-acceptor (per-instance table).
+(in-package :libactr/cluster)
 
 (defclass tutor-proxy ()
   ((acceptor :accessor proxy-acceptor :initform nil)
@@ -19,12 +19,12 @@
    (redis-host :reader proxy-redis-host :initarg :redis-host :initform "127.0.0.1")
    (redis-port :reader proxy-redis-port :initarg :redis-port :initform 6379)
    ;; [controller-mandated (Task 10 review ruling, applied Task 11): the default
-   ;; prefix must be the managers' "mtt:cluster:" (colon) — a proxy created
+   ;; prefix must be the managers' "libactr:cluster:" (colon) — a proxy created
    ;; WITHOUT :prefix must still see the routing table the managers write. This
-   ;; initform was "mtt/cluster:" (slash) at review time (the ruling's premise
+   ;; initform was "libactr/cluster:" (slash) at review time (the ruling's premise
    ;; had it as colon already); normalized with the constructor default below.]
-   (prefix :reader proxy-prefix :initarg :prefix :initform "mtt:cluster:")
-   (kt-params :reader proxy-kt-params :initarg :kt-params :initform (mtt:make-kt-params))
+   (prefix :reader proxy-prefix :initarg :prefix :initform "libactr:cluster:")
+   (kt-params :reader proxy-kt-params :initarg :kt-params :initform (libactr:make-kt-params))
    (forward-timeout :reader proxy-forward-timeout :initarg :forward-timeout :initform 5)
    (conn :accessor proxy-conn :initform nil)
    ;; Controller-mandated (Task 8 ruling, same as the manager/store): this ONE
@@ -58,10 +58,10 @@ lock serializes the lazy connect and every command."
                                                  :port (proxy-redis-port ,pp)))))))
            (let ((redis:*connection* conn)) ,@body))))))
 
-;; --- json helpers (local: mtt/server's json-encode is not exported) --------
+;; --- json helpers (local: libactr/server's json-encode is not exported) --------
 
 (defun %jsonable (x)
-  "plist tree -> yason-encodable (mirror of mtt/server's recursive jsonify)."
+  "plist tree -> yason-encodable (mirror of libactr/server's recursive jsonify)."
   (cond
     ((null x) nil)
     ((eq x t) t)
@@ -251,28 +251,28 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
   ;; log — no worker involvement, works across failovers. The redis-event-log
   ;; opens its OWN connection (not the proxy's shared one).
   (let ((student-id (or (hunchentoot:get-parameter "student_id") "")))
-    (let ((ss (mtt:start-student-session
+    (let ((ss (libactr:start-student-session
                student-id
-               :event-log (mtt:make-redis-event-log
-                           :key (mtt/server:student-events-key student-id)
+               :event-log (libactr:make-redis-event-log
+                           :key (libactr/server:student-events-key student-id)
                            :host (proxy-redis-host p) :port (proxy-redis-port p)))))
       (unwind-protect
-           (let* ((events (mtt:log-all-events (mtt:student-session-log ss)))
-                  (mastery (and events (mtt:compute-mastery
+           (let* ((events (libactr:log-all-events (libactr:student-session-log ss)))
+                  (mastery (and events (libactr:compute-mastery
                                         events :kt-params (proxy-kt-params p)))))
              (if (null events)
                  (%respond "{\"error\":\"unknown student_id\"}" 404)
                  (%respond
                   (%json (list :student_id student-id
                                :kc (mapcar (lambda (x)
-                                             (list :kc (mtt/server:kc->json (getf x :kc))
+                                             (list :kc (libactr/server:kc->json (getf x :kc))
                                                    :correct (getf x :correct)
                                                    :total (getf x :total)
                                                    :accuracy (getf x :accuracy)
                                                    :p_l (getf x :p-l)))
                                            mastery)))
                   200)))
-        (mtt:disconnect-log (mtt:student-session-log ss))))))
+        (libactr:disconnect-log (libactr:student-session-log ss))))))
 
 (defun %proxy-health (p)
   (%respond (%json (list :status "ok" :workers (length (proxy-live-workers p)))) 200))
@@ -287,21 +287,21 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
         (cons "/health" (lambda () (%proxy-health p)))))
 
 (defun make-tutor-proxy (&key (port 0) (redis-host "127.0.0.1") (redis-port 6379)
-                           (prefix "mtt:cluster:") (kt-params (mtt:make-kt-params))
+                           (prefix "libactr:cluster:") (kt-params (libactr:make-kt-params))
                            (forward-timeout 5))
   "Create + start the front proxy on PORT (0 = OS-assigned; read it back via
-proxy-port). Reuses mtt/server's tutor-acceptor subclass for per-instance
+proxy-port). Reuses libactr/server's tutor-acceptor subclass for per-instance
 dispatch (no global hunchentoot:*dispatch-table*). FORWARD-TIMEOUT bounds each
 outbound forward's connect+read."
   (let ((p (make-instance 'tutor-proxy :port port :redis-host redis-host
                           :redis-port redis-port :prefix prefix
-                          :kt-params (or kt-params (mtt:make-kt-params))
+                          :kt-params (or kt-params (libactr:make-kt-params))
                           :forward-timeout forward-timeout)))
     (setf (proxy-acceptor p)
-          (make-instance 'mtt/server:tutor-acceptor :port port
+          (make-instance 'libactr/server:tutor-acceptor :port port
                          :taskmaster (make-instance
                                       'hunchentoot:one-thread-per-connection-taskmaster)))
-    (setf (mtt/server:tutor-acceptor-dispatch-table (proxy-acceptor p))
+    (setf (libactr/server:tutor-acceptor-dispatch-table (proxy-acceptor p))
           (mapcar (lambda (spec)
                     (hunchentoot:create-prefix-dispatcher (car spec) (cdr spec)))
                   (proxy-handlers p)))

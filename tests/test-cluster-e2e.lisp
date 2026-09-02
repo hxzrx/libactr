@@ -1,19 +1,19 @@
 ;;;; tests/test-cluster-e2e.lisp — kill-a-real-worker end-to-end (Phase 13).
-;;;; Joins :mtt/cluster. Self-starts redis + TWO SBCL worker subprocesses
+;;;; Joins :libactr/cluster. Self-starts redis + TWO SBCL worker subprocesses
 ;;;; (examples/cluster-worker.lisp); the proxy runs IN this test process.
 ;;;; SKIP when redis-server is missing (sbcl is the running image's own —
 ;;;; required).
-(in-package :mtt/cluster-test)
+(in-package :libactr/cluster-test)
 
 ;; [brief defect, run-evidenced: the brief's skeleton never joins the suite.
 ;; fiveam's def-test registers under the LOAD-TIME value of the special
 ;; *suite* (probe: (macroexpand-1 '(5am:def-test foo nil ...)) registers with
 ;; it.bese.fiveam::*suite* evaluated at load); without this in-suite — and
-;; with mtt/cluster-test's two file components lacking :serial t, so sibling
+;; with libactr/cluster-test's two file components lacking :serial t, so sibling
 ;; load order is not guaranteed — the test registers in the anonymous NIL
-;; suite and (5am:run! :mtt/cluster) reports the old 67 checks without it.
+;; suite and (5am:run! :libactr/cluster) reports the old 67 checks without it.
 ;; Same in-suite every other suite file carries.]
-(in-suite :mtt/cluster)
+(in-suite :libactr/cluster)
 
 ;; [brief defect, signature-vs-call-evidenced: %worker-command's lambda list
 ;; took a 5th parameter (LOG) that the body never used, while BOTH call sites
@@ -22,10 +22,10 @@
 ;; :output/:error-output kwarg; the dead parameter is dropped, calls verbatim.]
 (defun %worker-command (worker-file port redis-port worker-id)
   (list "sbcl" "--non-interactive"
-        "--eval" "(ql:quickload :mtt/cluster)"
-        "--eval" "(ql:quickload :mtt/subtraction-adapter)"
+        "--eval" "(ql:quickload :libactr/cluster)"
+        "--eval" "(ql:quickload :libactr/subtraction-adapter)"
         "--load" worker-file
-        "--eval" (format nil "(mtt/cluster-worker:main :port ~a :redis-port ~a :worker-id ~s)"
+        "--eval" (format nil "(libactr/cluster-worker:main :port ~a :redis-port ~a :worker-id ~s)"
                          port redis-port worker-id)))
 
 (defun %poll-until (thunk timeout &key (sleep 0.5))
@@ -44,21 +44,21 @@ session from the checkpoint, finish the problem, end it, and read mastery —
 all with the SAME session_id (transparent continuation)."
   :skipped-if (lambda () (null (%redis-server-binary)))
   (with-test-redis (conn port)
-    (let* ((dir (%unique-dir "mtt-cluster-e2e"))
+    (let* ((dir (%unique-dir "libactr-cluster-e2e"))
            ;; [brief defect, run-evidenced: the worker logs are redirected into
            ;; DIR (launch-program :output log1) but the brief never created it —
            ;; every spawn would fail opening /tmp/.../w1.log in a nonexistent
            ;; directory and the readiness poll would burn its full 90s.]
            (worker-file (namestring
-                         (asdf:system-relative-pathname "mtt"
+                         (asdf:system-relative-pathname "libactr"
                                                         "examples/cluster-worker.lisp")))
            ;; [brief defect, namespace-evidenced: the brief gave the proxy
            ;; :prefix "e2e:" while the workers (whose normative main signature
-           ;; takes NO prefix) default to "mtt:cluster:" — the proxy would read
+           ;; takes NO prefix) default to "libactr:cluster:" — the proxy would read
            ;; e2e:workers (empty) and 503 every /session/start, and the direct
            ;; e2e:sess:/e2e:ckpt: reads would look in a namespace nobody writes
            ;; (checkpoint keys come from the MANAGER's default store at
-           ;; mtt:cluster:ckpt:). The proxy uses the DEFAULT prefix (the
+           ;; libactr:cluster:ckpt:). The proxy uses the DEFAULT prefix (the
            ;; controller-mandated Task-10-review normalization) and the direct
            ;; reads use its literals.]
            (p1 (%find-free-port)) (p2 (%find-free-port))
@@ -112,7 +112,7 @@ all with the SAME session_id (transparent continuation)."
                    ;; test-cluster.lisp's route assertions carry.]
                    (let ((owner (first (multiple-value-list
                                         (with-proxy-redis (proxy)
-                                          (cluster-route-get (uiop:strcat "mtt:cluster:sess:" sid)))))))
+                                          (cluster-route-get (uiop:strcat "libactr:cluster:sess:" sid)))))))
                      (is (and owner t))
                      ;; step the borrow ones column (4 = 12-8)
                      (multiple-value-bind (b2 s2)
@@ -128,7 +128,7 @@ all with the SAME session_id (transparent continuation)."
                      ;; let the dead-to-be worker checkpoint the state
                      (is (%poll-until (lambda ()
                                         (with-proxy-redis (proxy)
-                                          (redis:red-exists (uiop:strcat "mtt:cluster:ckpt:" sid))))
+                                          (redis:red-exists (uiop:strcat "libactr:cluster:ckpt:" sid))))
                                       10))
                      ;; KILL the owner
                      (let ((victim (if (string= owner "w1") w1 w2)))
@@ -176,17 +176,17 @@ all with the SAME session_id (transparent continuation)."
                            (is (member "borrow" kcs :test #'string-equal))
                            (is (member "column-subtract" kcs :test #'string-equal))))
                        ;; the event log is one contiguous sequence
-                       (let ((log (mtt:make-redis-event-log
-                                   :key "mtt:student:e2e:events"
+                       (let ((log (libactr:make-redis-event-log
+                                   :key "libactr:student:e2e:events"
                                    :host "127.0.0.1" :port port)))
                          (unwind-protect
-                              (let ((events (mtt:log-all-events log)))
+                              (let ((events (libactr:log-all-events log)))
                                 (is (>= (length events) 3))
                                 (is (equal (loop :for i :from 1 :to (length events) :collect i)
-                                           (mapcar #'mtt:log-event-seq events))))
+                                           (mapcar #'libactr:log-event-seq events))))
                            ;; B3 seam (final review): the direct event-log conn
                            ;; opened for this assertion was dangling — close it.
-                           (mtt:disconnect-log log))))))))
+                           (libactr:disconnect-log log))))))))
           ;; teardown
           (ignore-errors (uiop:terminate-process w1))
           (ignore-errors (uiop:terminate-process w2))

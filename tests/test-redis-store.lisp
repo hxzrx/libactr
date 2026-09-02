@@ -1,12 +1,12 @@
 ;;;; tests/test-redis-store.lisp — redis-event-log integration (Phase 5)
-;;;; Own FiveAM suite :mtt/redis-store (does NOT join :mtt). Spins a per-run
+;;;; Own FiveAM suite :libactr/redis-store (does NOT join :libactr). Spins a per-run
 ;;;; redis-server on a free high port; SKIPS if redis-server is unavailable.
-(defpackage :mtt/redis-store-test
-  (:use :cl :5am :mtt))
-(in-package :mtt/redis-store-test)
+(defpackage :libactr/redis-store-test
+  (:use :cl :5am :libactr))
+(in-package :libactr/redis-store-test)
 
-(def-suite :mtt/redis-store :description "redis-event-log integration")
-(in-suite :mtt/redis-store)
+(def-suite :libactr/redis-store :description "redis-event-log integration")
+(in-suite :libactr/redis-store)
 
 ;;; --- with-test-redis fixture ------------------------------------------------
 (defparameter *redis-server-candidates*
@@ -37,7 +37,7 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
     `(if (null (%redis-server-binary))
          (5am:skip "no redis-server binary found")
          (let ((,port (%find-free-port))
-               (,dir (%unique-dir "mtt-redis")))
+               (,dir (%unique-dir "libactr-redis")))
            ;; ensure-directory-pathname: a slashless namestring's last component
            ;; parses as a NAME, and ensure-directories-exist would not create it.
            (ensure-directories-exist (uiop:ensure-directory-pathname ,dir))
@@ -63,13 +63,13 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
                ;; ensure-directory-pathname (final review): delete-directory-tree
                ;; takes a physical non-wildcard directory PATHNAME — a namestring
                ;; (slash or not) fails its pathnamep gate and the ignore-errors
-               ;; silently skipped cleanup, leaking /tmp/mtt-redis-* dirs.
+               ;; silently skipped cleanup, leaking /tmp/libactr-redis-* dirs.
                (ignore-errors (uiop:delete-directory-tree
                                (uiop:ensure-directory-pathname ,dir) :validate t))))))))
 
 (test redis-event-log.round-trip-equivalence
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "mtt:test:ev" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:ev" :host "127.0.0.1" :port port))
            (mem (make-event-log)))
       ;; same events appended to both
       (dolist (kc '(t nil t))
@@ -91,9 +91,9 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
 (test redis-event-log.aof-persistence-across-restart
   "Append events, kill redis, relaunch on the same dir (AOF replays), assert all events survive."
   :skipped-if (lambda () (null (%redis-server-binary)))
-  (let* ((dir (%unique-dir "mtt-redis-aof"))
+  (let* ((dir (%unique-dir "libactr-redis-aof"))
          (port (%find-free-port))
-         (key "mtt:test:aof"))
+         (key "libactr:test:aof"))
     (ensure-directories-exist (uiop:ensure-directory-pathname dir))
     (unwind-protect
          (progn
@@ -139,7 +139,7 @@ converter (mirrors src/http-api.lisp's json-encode). The existing 9 tests
 passed only because their fixtures used make-log-event with default nil
 summaries — this test closes that gap."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "mtt:test:ni" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:ni" :host "127.0.0.1" :port port))
            ;; the exact non-nil summary shapes produced by step-session
            (ev (make-log-event
                 :student-id "s1" :session-id "sess-x" :problem-id "5+2"
@@ -161,10 +161,10 @@ summaries — this test closes that gap."
 
 (test redis-event-log.kc-package-identity-preserved
   "B4: a kc symbol round-trips with its package. kc 'add in THIS test package
-re-emerges as the SAME symbol (eq), not MTT:ADD."
+re-emerges as the SAME symbol (eq), not LIBACTR:ADD."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "mtt:test:kcid" :host "127.0.0.1" :port port))
-           (original-kc 'add))                       ; interned in :mtt/redis-store-test
+    (let* ((rlog (make-redis-event-log :key "libactr:test:kcid" :host "127.0.0.1" :port port))
+           (original-kc 'add))                       ; interned in :libactr/redis-store-test
       (log-append rlog (make-log-event :student-id "s1"
                                        :kc-event (make-kc-event :kc original-kc :correct-p t)))
       (let* ((all (log-all-events rlog))
@@ -176,7 +176,7 @@ re-emerges as the SAME symbol (eq), not MTT:ADD."
 (test redis-event-log.summaries-decoded
   "B2: intent/result summaries are populated on decode (not dropped to nil)."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "mtt:test:summ" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:summ" :host "127.0.0.1" :port port))
            (ev (make-log-event :student-id "s1"
                                :kc-event (make-kc-event :kc 'add :correct-p t)
                                :intent-summary '((goal sum five))
@@ -190,7 +190,7 @@ re-emerges as the SAME symbol (eq), not MTT:ADD."
   "B1: the raw stored JSON does NOT carry a (stale, always-0) seq field; seq is
 derived from list position on read."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "mtt:test:noseq" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:noseq" :host "127.0.0.1" :port port))
            (key (redis-event-log-key rlog)))
       (log-append rlog (make-log-event :student-id "s1"
                                        :kc-event (make-kc-event :kc 'add :correct-p t)))
@@ -205,7 +205,7 @@ derived from list position on read."
   "B3: disconnect-log closes the cl-redis connection and clears the conn slot;
 idempotent."
   (with-test-redis (conn port)
-    (let ((rlog (make-redis-event-log :key "mtt:test:disc" :host "127.0.0.1" :port port)))
+    (let ((rlog (make-redis-event-log :key "libactr:test:disc" :host "127.0.0.1" :port port)))
       (log-append rlog (make-log-event :student-id "s1"
                                        :kc-event (make-kc-event :kc 'add :correct-p t)))
       (is (not (null (redis-event-log-connection rlog))))
@@ -218,7 +218,7 @@ idempotent."
 in-memory log with identical events (the spec §5.4 'log present → lossless
 recompute' guarantee). Also validates B4 (kc identity must match for bucketing)."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "mtt:test:replay" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:replay" :host "127.0.0.1" :port port))
            (mem (make-event-log)))
       (dolist (correct '(t t nil t))
         (let ((ev (make-log-event :student-id "s1" :problem-id "p1"
@@ -237,7 +237,7 @@ recompute' guarantee). Also validates B4 (kc identity must match for bucketing).
 (test redis-event-log.past-tense-symbol-summaries-round-trip
   "Phase 10 symbol specialization: log-events whose intent-summary carries
 MODEL-PACKAGE symbol slot values from student answers — e.g. ((goal past
-GOED) (goal verb GO)) with GOED interned in :mtt/past-tense-tutor, arbitrary
+GOED) (goal verb GO)) with GOED interned in :libactr/past-tense-tutor, arbitrary
 student strings rather than a fixed number-word vocabulary — round-trip
 through the redis JSON backend, and mastery recomputed from the redis log
 equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
@@ -248,19 +248,19 @@ equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
                  (make-log-event
                   :seq seq :student-id "pts" :problem-id "go"
                   :kc-event (make-kc-event :kc kc :correct-p correct)
-                  :intent-summary `((goal past ,(intern "GOED" :mtt/past-tense-tutor))
-                                    (goal verb ,(intern "GO" :mtt/past-tense-tutor)))
+                  :intent-summary `((goal past ,(intern "GOED" :libactr/past-tense-tutor))
+                                    (goal verb ,(intern "GO" :libactr/past-tense-tutor)))
                   :result-summary (list (if correct :on-path :off-path-buggy)
                                         (intern (if correct "RETRIEVE-IRREGULAR"
                                                     "BUGGY-OVER-REGULARIZE")
-                                                :mtt/past-tense-tutor)
+                                                :libactr/past-tense-tutor)
                                         "feedback" 0))))
            (events (list (funcall mk 1 t) (funcall mk 2 nil) (funcall mk 3 t))))
       ;; memory fold
       (let* ((mem (make-event-log))
              (_ (dolist (e events) (log-append mem e)))
-             (mem-mastery (mtt:compute-mastery (log-all-events mem))))
-        (let ((rlog (make-redis-event-log :key "mtt:test:pt-symbols"
+             (mem-mastery (libactr:compute-mastery (log-all-events mem))))
+        (let ((rlog (make-redis-event-log :key "libactr:test:pt-symbols"
                                           :host "127.0.0.1" :port port)))
           (unwind-protect
                (progn
@@ -273,14 +273,14 @@ equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
                         (raw2 (second raw)))
                    (is (= 3 (length raw)))
                    (is (and (search "\"GOED\"" raw2) t))
-                   (is (and (search "\"MTT/PAST-TENSE-TUTOR\"" raw2) t)))
+                   (is (and (search "\"LIBACTR/PAST-TENSE-TUTOR\"" raw2) t)))
                  ;; kc round-trips with package identity (B4). Summaries come
                  ;; back as THE SAME symbols (eq, name+package) — the phase-13
                  ;; tagged codec closed the deferred symbol-fidelity gap.
                  (let ((e2 (second (log-all-events rlog))))
                    (is (eq :irregular-retrieval
                            (kc-event-kc (log-event-kc-event e2))))
-                   (is (eq (intern "GOED" :mtt/past-tense-tutor)
+                   (is (eq (intern "GOED" :libactr/past-tense-tutor)
                            (third (first (log-event-intent-summary e2)))))
                    (is (eq :off-path-buggy
                            (first (log-event-result-summary e2)))))
@@ -288,7 +288,7 @@ equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
                  ;; mastery losslessly) — bit-identical because kc carries its
                  ;; package through kc_package and P(L) folds the same doubles.
                  (is (equal mem-mastery
-                            (mtt:compute-mastery (log-all-events rlog)))))
+                            (libactr:compute-mastery (log-all-events rlog)))))
             (disconnect-log rlog)))))))
 
 (test redis-event-log.symbol-summaries-round-trip-eq
@@ -296,10 +296,10 @@ equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
 symbols round-trip as THE SAME symbols (name+package, eq) — not strings, not
 char lists. Status keyword :on-path comes back as the keyword itself."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "mtt:test:symrt" :host "127.0.0.1" :port port))
-           (sym-goed (intern "GOED" :mtt/past-tense-tutor))
-           (sym-verb (intern "GO" :mtt/past-tense-tutor))
-           (sym-prod (intern "RETRIEVE-IRREGULAR" :mtt/past-tense-tutor))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:symrt" :host "127.0.0.1" :port port))
+           (sym-goed (intern "GOED" :libactr/past-tense-tutor))
+           (sym-verb (intern "GO" :libactr/past-tense-tutor))
+           (sym-prod (intern "RETRIEVE-IRREGULAR" :libactr/past-tense-tutor))
            (ev (make-log-event :student-id "s1" :session-id "sess-1" :problem-id "go"
                                :kc-event (make-kc-event :kc :irregular-retrieval :correct-p t)
                                :intent-summary `((goal past ,sym-goed) (goal verb ,sym-verb))
@@ -322,11 +322,11 @@ plain downcase strings) — e.g. by an older deployment sharing this redis —
 decodes without error; summaries come back as plain strings, mastery replay
 still works."
   (with-test-redis (conn port)
-    (let ((key "mtt:test:legacy")
+    (let ((key "libactr:test:legacy")
           (legacy-json (concatenate 'string
                         "{\"student_id\":\"s1\",\"session_id\":\"sess-1\","
                         "\"problem_id\":\"5+2\",\"kc\":\"ADD\","
-                        "\"kc_package\":\"MTT/REDIS-STORE-TEST\",\"correct\":true,"
+                        "\"kc_package\":\"LIBACTR/REDIS-STORE-TEST\",\"correct\":true,"
                         "\"intent\":[[\"goal\",\"sum\",\"five\"]],"
                         "\"result\":[\"on-path\",\"initialize-addition\",null,0]}")))
       (let ((redis:*connection* conn))
@@ -346,8 +346,8 @@ still works."
   "A log holding BOTH an old-format row (RPUSHed raw) and a new-format row
 (log-append) reads back as one sequence; each row decodes in its own format."
   (with-test-redis (conn port)
-    (let ((key "mtt:test:mixed")
-          (legacy "{\"student_id\":\"s1\",\"kc\":\"ADD\",\"kc_package\":\"MTT/REDIS-STORE-TEST\",\"correct\":false,\"intent\":[[\"goal\",\"sum\",\"five\"]],\"result\":[\"on-path\",\"initialize-addition\",null,0]}"))
+    (let ((key "libactr:test:mixed")
+          (legacy "{\"student_id\":\"s1\",\"kc\":\"ADD\",\"kc_package\":\"LIBACTR/REDIS-STORE-TEST\",\"correct\":false,\"intent\":[[\"goal\",\"sum\",\"five\"]],\"result\":[\"on-path\",\"initialize-addition\",null,0]}"))
       (let ((redis:*connection* conn)) (redis:red-rpush key legacy))
       (let ((rlog (make-redis-event-log :key key :host "127.0.0.1" :port port)))
         (log-append rlog (make-log-event
@@ -366,9 +366,9 @@ still works."
 (test redis-event-log.tagged-symbol-missing-package-degrades
   "A tagged symbol whose package is NOT loaded degrades to its name STRING."
   (with-test-redis (conn port)
-    (let* ((pkg (make-package (gensym "MTT/MISSING-")))
+    (let* ((pkg (make-package (gensym "LIBACTR/MISSING-")))
            (sym (intern "WIDGET" pkg))
-           (rlog (make-redis-event-log :key "mtt:test:misspkg" :host "127.0.0.1" :port port))
+           (rlog (make-redis-event-log :key "libactr:test:misspkg" :host "127.0.0.1" :port port))
            (ev (make-log-event :student-id "s1"
                                :kc-event (make-kc-event :kc 'add :correct-p t)
                                :intent-summary `((goal widget ,sym))

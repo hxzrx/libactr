@@ -5,8 +5,8 @@
 ;;;; mutable state: the four parameter defaults are defstruct slot initforms
 ;;;; (lambda-literal values), not defvar. Formulas verified against Wikipedia BKT
 ;;;; (equations a–d) / IEDMS Standard-BKT / Corbett & Anderson (1995). See
-;;;; docs/2026-08-11-mtt-phase6-knowledge-tracing-design.md §3.
-(in-package :mtt)
+;;;; docs/2026-08-11-libactr-phase6-knowledge-tracing-design.md §3.
+(in-package :libactr)
 
 (defstruct kt-params
   "Four BKT parameters. Defaults L0=0.1, transit=0.1, guess=0.2, slip=0.1

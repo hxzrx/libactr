@@ -1,8 +1,8 @@
 ;;; past-tense.lisp — English past-tense inflection, Phase 10 third domain.
-;;; act-r/mtt common subset. Slot values are SYMBOLS in the model package
+;;; act-r/libactr common subset. Slot values are SYMBOLS in the model package
 ;;; (GO, WENT, WALKED — unlike fraction's integers; act-r accepts symbol
 ;;; chunks natively). Adapter primes retrieval with verb-fact / bug-fact;
-;;; add-dm intentionally absent (mtt traces against adapter-primed
+;;; add-dm intentionally absent (libactr traces against adapter-primed
 ;;; retrieval; dual-track sets retrieval directly). KC attribution is applied
 ;;; post-load by load-past-tense-model (reader does not parse kc).
 ;;;
@@ -11,7 +11,7 @@
 ;;; NOT on chunk-type isa. ACT-R 7's runtime does not test isa in buffer
 ;;; conditions (chunks carry no type at run time; procedural.lisp warns
 ;;; "isa that provides no tests"), so an isa-only discriminator would
-;;; diverge between the mtt matcher and the act-r oracle. A plain slot
+;;; diverge between the libactr matcher and the act-r oracle. A plain slot
 ;;; literal is a real test in BOTH engines — same idiom as bug-fact's kind.
 (clear-all)
 
