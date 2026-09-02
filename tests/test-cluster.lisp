@@ -400,9 +400,14 @@ client restarts — spec §5.2 protocol 4)."
       (unwind-protect
            (progn
              (redis:red-del (uiop:strcat "t-nc:ckpt:" sid))   ; no checkpoint
-             (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
-               (is (= 0 taken))
-               (is (equal '("w1") dead)))
+             (let ((out (with-output-to-string (*error-output*)
+                          (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
+                            (is (= 0 taken))
+                            (is (equal '("w1") dead))))))
+               ;; P09 (parked-minors cleanup): the no-checkpoint claim drop is
+               ;; no longer silent — one log line, the same observability the
+               ;; foreign-skip and error-isolation branches already have.
+               (is (and (search "no checkpoint" out) t)))
              (is (null (gethash sid (server-sessions s2))))
              (is (string= "w1" (first (multiple-value-list
                                       (cluster-route-get
@@ -770,9 +775,27 @@ student -> 404."
                    (%get (format nil "http://127.0.0.1:~a/student/mastery?student_id=mp"
                                  (proxy-port p)))
                  (is (= 200 status))
-                 (let ((kc (cdr (assoc "kc" (yason:parse body :object-as :alist)
-                                       :test #'string=))))
-                   (is (and kc (> (length kc) 0) t))))
+                 (let* ((alist (yason:parse body :object-as :alist))
+                        (kc (cdr (assoc "kc" alist :test #'string=))))
+                   (is (and kc (> (length kc) 0) t))
+                   ;; P02 (parked-minors cleanup): pin the kc->json WIRING —
+                   ;; each entry's "kc" string is exactly kc->json applied to
+                   ;; the in-process mastery KCs off the same redis log
+                   ;; (compute-mastery is kc-sorted, so equal is positional).
+                   ;; RED shape: bypassing kc->json and letting %jsonable
+                   ;; downcase the raw symbol case-mismatches here.
+                   (let* ((log (mtt:make-redis-event-log
+                                :key (mtt/server:student-events-key "mp")
+                                :host "127.0.0.1" :port port))
+                          (events (mtt:log-all-events log))
+                          (expected (mapcar (lambda (x)
+                                              (mtt/server:kc->json (getf x :kc)))
+                                            (mtt:compute-mastery events))))
+                     (mtt:disconnect-log log)
+                     (is (equal expected
+                                (mapcar (lambda (e)
+                                          (cdr (assoc "kc" e :test #'string=)))
+                                        kc))))))
                (multiple-value-bind (body status)
                    (%get (format nil "http://127.0.0.1:~a/student/mastery?student_id=ghost"
                                  (proxy-port p)))
@@ -794,22 +817,27 @@ student -> 404."
 *error-output*) and the loop keeps running until the running flag clears
 (the old ignore-errors swallowed everything silently)."
   (let* ((n 0)
-         (m (make-cluster-manager
-             :server (start-tutor-server :port 0 :start-acceptor-p nil)
-             :worker-id "w-err")))
-    (setf (mtt/cluster::cluster-running m) t)
-    (flet ((bad-tick (mm)
-             (declare (ignore mm))
-             (incf n)
-             (if (>= n 2)
-                 (setf (mtt/cluster::cluster-running m) nil)  ; clean exit on 2nd call
-                 (error "boom-~a" n))))
-      (let ((out (with-output-to-string (*error-output*)
-                   (mtt/cluster::%tick-loop m "test" #'bad-tick 0))))
-        (is (= 2 n))
-        (is (and (search "test tick failed" out)
-                 (search "boom-1" out)
-                 t))))))
+         (s (start-tutor-server :port 0 :start-acceptor-p nil))
+         (m (make-cluster-manager :server s :worker-id "w-err")))
+    (unwind-protect
+         (progn
+           (setf (mtt/cluster::cluster-running m) t)
+           (flet ((bad-tick (mm)
+                    (declare (ignore mm))
+                    (incf n)
+                    (if (>= n 2)
+                        (setf (mtt/cluster::cluster-running m) nil)  ; clean exit on 2nd call
+                        (error "boom-~a" n))))
+             (let ((out (with-output-to-string (*error-output*)
+                          (mtt/cluster::%tick-loop m "test" #'bad-tick 0))))
+               (is (= 2 n))
+               (is (and (search "test tick failed" out)
+                        (search "boom-1" out)
+                        t)))))
+      ;; P21 (parked-minors cleanup): fixture hygiene — stop the server like
+      ;; every other test here (it holds no acceptor/students, but the
+      ;; discipline prevents a real leak if this test ever grows sessions).
+      (stop-tutor-server s))))
 
 ;;; --- Phase 14 C2: stop-cluster-manager poll-join --------------------------------
 
@@ -822,35 +850,45 @@ student -> 404."
 and exit on their own — the destroy count is 0 (the old always-destroy
 shape returns 3 and could kill a thread holding the redis lock mid-command,
 hanging the leave below)."
-  (let ((m (make-cluster-manager
-            :server (start-tutor-server :port 0 :start-acceptor-p nil)
-            :worker-id "w-pj"
-            :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1)))
-    (setf (mtt/cluster::cluster-running m) t
-          (cluster-threads m)
-          (loop :repeat 3 :collect
-                (bordeaux-threads:make-thread
-                 (lambda () (loop :while (mtt/cluster::cluster-running m)
-                                  :do (sleep 0.05))))))
-    (setf (mtt/cluster::cluster-running m) nil)
-    (is (= 0 (mtt/cluster::%stop-tick-threads m)))
-    (is (every (lambda (th) (not (bordeaux-threads:thread-alive-p th)))
-               (cluster-threads m)))))
+  (let* ((s (start-tutor-server :port 0 :start-acceptor-p nil))
+         (m (make-cluster-manager
+             :server s
+             :worker-id "w-pj"
+             :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1)))
+    (unwind-protect
+         (progn
+           (setf (mtt/cluster::cluster-running m) t
+                 (cluster-threads m)
+                 (loop :repeat 3 :collect
+                       (bordeaux-threads:make-thread
+                        (lambda () (loop :while (mtt/cluster::cluster-running m)
+                                         :do (sleep 0.05))))))
+           (setf (mtt/cluster::cluster-running m) nil)
+           (is (= 0 (mtt/cluster::%stop-tick-threads m)))
+           (is (every (lambda (th) (not (bordeaux-threads:thread-alive-p th)))
+                      (cluster-threads m))))
+      ;; P21 (parked-minors cleanup): fixture hygiene (see the C1 test above).
+      (stop-tutor-server s))))
 
 (test cluster.stop-deadline-fallback-destroys
   "C2: a thread that never observes the flag is destroyed at the deadline
 (fallback = the old behavior, bounded by it). Intervals 0.1 -> deadline ~2.1s."
-  (let* ((m (make-cluster-manager
-             :server (start-tutor-server :port 0 :start-acceptor-p nil)
+  (let* ((s (start-tutor-server :port 0 :start-acceptor-p nil))
+         (m (make-cluster-manager
+             :server s
              :worker-id "w-df"
              :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1))
          (th (bordeaux-threads:make-thread (lambda () (sleep 100)))))
-    (setf (mtt/cluster::cluster-running m) nil
-          (cluster-threads m) (list th))
-    (let ((start (get-universal-time)))
-      (is (= 1 (mtt/cluster::%stop-tick-threads m)))
-      (is (>= (get-universal-time) (+ start 2)))     ; waited the deadline
-      (is (< (get-universal-time) (+ start 10))))))  ; but bounded by it
+    (unwind-protect
+         (progn
+           (setf (mtt/cluster::cluster-running m) nil
+                 (cluster-threads m) (list th))
+           (let ((start (get-universal-time)))
+             (is (= 1 (mtt/cluster::%stop-tick-threads m)))
+             (is (>= (get-universal-time) (+ start 2)))     ; waited the deadline
+             (is (< (get-universal-time) (+ start 10)))))   ; but bounded by it
+      ;; P21 (parked-minors cleanup): fixture hygiene (see the C1 test above).
+      (stop-tutor-server s))))
 
 ;;; --- Phase 14 C8: start-cluster-manager idempotent -------------------------------
 
@@ -995,6 +1033,15 @@ retry-to-same-worker-fails-again)."
                                 sid))
                (declare (ignore body))
                (is (= 503 status))
+               ;; P20 (parked-minors cleanup): this read MUST precede the
+               ;; flush cleanup below — each dummy flush connection consumes
+               ;; one of the sentinel's remaining accepts, so count grows
+               ;; after it. Ordering: the sentinel's incf precedes its
+               ;; socket-close (program order) and the proxy observed the
+               ;; reset before %post returned; the formal happens-before edge
+               ;; (join-thread in the cleanup) exists only for post-join
+               ;; readers, which is why the assertion sits here and not
+               ;; after the join.
                (is (= 1 count))))                    ; exactly one attempt
         ;; [deviation from brief, repro-evidenced (SBCL 2.6.8/Linux, isolated
         ;; repro: join-thread on a thread blocked in accept(2) does not return

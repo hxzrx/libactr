@@ -307,7 +307,7 @@ programmatic data. Pure: never mutates the spec."
       ;;    getf cannot distinguish absent from nil-valued)
       (dolist (fs fact-slots)
         (if (not (and (proper-list-p fs) (symbolp (first fs))))
-            (err "malformed fact-slot entry ~s (need (name ...))" fs)
+            (err "malformed fact-slot entry ~s (need a proper list (name ...))" fs)
             (let ((from (getf (rest fs) :from))
                   (literal-present-p (member :literal (rest fs))))
               (cond
@@ -330,7 +330,7 @@ programmatic data. Pure: never mutates the spec."
       ;; 4. goal-guard shape
       (dolist (pair goal-guard)
         (unless (and (proper-list-p pair) (= 2 (length pair)) (symbolp (first pair)))
-          (err "malformed goal-guard entry ~s (need (slot literal))" pair)))
+          (err "malformed goal-guard entry ~s (need a proper list (slot literal))" pair)))
       ;; 5. answer <-> fact-slot cross reference (the headline check)
       (loop :for i :from 0 :below (length answers)
             :unless (some (lambda (fs)

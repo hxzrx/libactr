@@ -1,7 +1,7 @@
 ;;;; mtt.asd — Model-Tracing Tutor engine
 
 (asdf:defsystem "mtt"
-  :version "0.3.0"
+  :version "0.3.1"
   :description "Independent, multi-user-safe model-tracing production engine"
   :long-description "mtt is the Path-B deliverable of the ACT-R project: an independent, multi-user-safe model-tracing tutor engine for cognitive-tutor deployments, following the Carnegie Learning / MATHia lineage of authoring models in ACT-R and shipping a dedicated runtime. The core holds zero global mutable state — every piece of per-session and per-student state lives on CLOS instances and locks stay in the service layer — so one Lisp image can trace many students concurrently; the core system itself has no dependencies. act-r/ is used strictly as a development-time dual-track oracle (mtt/oracle, mtt/dual); runtime deployments never load it."
   :license "MIT"

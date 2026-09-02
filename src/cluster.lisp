@@ -126,13 +126,17 @@ issues zero redis commands while holding students-lock)."
                (declare (ignore handle))
                (let ((owner (redis:red-hget (cluster-sess-key m sid) "worker")))
                  (when (and owner (not (string= owner (cluster-worker-id m))))
-                   (push sid stale))))
+                   (push (cons sid owner) stale))))
              (mtt/server:server-sessions (cluster-server m)))
-    (dolist (sid stale)
-      (mtt/server:server-drop-session (cluster-server m) sid)
+    (dolist (entry stale)
+      (mtt/server:server-drop-session (cluster-server m) (car entry))
+      ;; P01 (parked-minors cleanup): log the owner OBSERVED at scan time —
+      ;; the drop's decision basis — instead of a second HGET (the route
+      ;; could move again between scan and drop; the logged owner is the one
+      ;; that decided, and the round-trip is gone).
       (format *error-output*
               "mtt/cluster: zombie self-check dropped local session ~a (route now owned by ~a)~%"
-              sid (redis:red-hget (cluster-sess-key m sid) "worker")))))
+              (car entry) (cdr entry)))))
 
 (defun cluster-join (m)
   "Register in the workers set + first heartbeat."
@@ -507,9 +511,30 @@ return 0"
                                           (mtt/server:server-sessions
                                            (cluster-server m))))))
                   (cond
-                    ((null cp) (drop-claim sid))
+                    ((null cp)
+                     ;; P09 (parked-minors cleanup): not silent — the same
+                     ;; observability the foreign-skip and error-isolation
+                     ;; branches have (why a takeover didn't happen must be
+                     ;; greppable when an operator debugs a 503ing route).
+                     (format *error-output*
+                             "mtt/cluster: takeover of ~a skipped — no checkpoint (claim dropped; route stays: the proxy 503s and the client restarts)~%"
+                             sid)
+                     (drop-claim sid))
                     (h (if (%checkpoint-matches-session-p
-                            cp (mtt:checkpoint-session (mtt/server:handle-session h)))
+                            cp
+                            ;; P11 (parked-minors cleanup): snapshot the live
+                            ;; handle under its session lock — the scan tick's
+                            ;; discipline. An unlocked read racing an in-flight
+                            ;; step could tear the five-field marker into a
+                            ;; foreign mismatch (benign — skip + next-tick
+                            ;; retry — but the lock makes it exact). Lock
+                            ;; order: manager/store locks are RELEASED at this
+                            ;; point and the handle lock is a leaf (the step
+                            ;; path holds nothing beneath it) — no cycle.
+                            (bordeaux-threads:with-lock-held
+                                ((mtt/server:handle-lock h))
+                              (mtt:checkpoint-session
+                               (mtt/server:handle-session h))))
                            (progn (cluster-adopt-session m sid cp w) (incf taken))
                            (progn
                              (format *error-output*

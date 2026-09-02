@@ -3,6 +3,26 @@
 All notable changes to mtt are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
+## 0.3.1 (2026-09-02) — parked-minors cleanup
+
+Maintenance-mode quality closeout: every minor the phase-14 final review
+parked (21 ledger rows) is dispositioned — FIXED 8 / CLOSED 13 /
+ALREADY-FIXED 0 (permanent ledger: docs/2026-09-02-mtt-parked-minors-cleanup.md
+in the project-level docs repository).
+
+- takeover: the no-checkpoint claim drop logs one line (was silent — the
+  sibling branches already did); the five-field marker snapshot takes the
+  session handle lock (the scan tick's discipline); the zombie sweep logs
+  the owner observed at scan time instead of a second HGET.
+- `validate-bug-spec`: the fact-slot / goal-guard malformed-entry messages
+  name the proper-list requirement (message-only; tests pin prefixes).
+- tests: proxy mastery pins the `kc->json` wiring (RED-probed); the
+  subtraction out-of-order test drops the pre-falsification "already"
+  wording; the sentinel count read ordering is documented; the C1/C2
+  fixtures stop their acceptor-less servers.
+- Public surface frozen (no new exports, no signature changes;
+  `server.lisp` untouched); cluster suite 126 -> 128 (two new assertions).
+
 ## 0.3.0 (2026-08-31) — engine residual hardening
 
 All phase-13 final-review residuals closed at library-consumer standard.
