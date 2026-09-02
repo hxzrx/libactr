@@ -54,9 +54,9 @@ tutor + adapter pair with a declarative bug library.
        (r2 (funcall step '((goal snum 5) (goal sdenom 6))  ; "1/2 + 1/3 = 5/6"
                     (libactr:make-chunk :isa 'sum-fact
                                         :slots '((cdenom . 6) (snum . 5) (sdenom . 6))))))
-  (list (libactr:trace-result-status r1)                                ; :ON-PATH
+  (list (libactr:trace-result-status r1)                              ; :ON-PATH
         (libactr:production-name (libactr:trace-result-production r1)) ; FIND-COMMON-DENOMINATOR
-        (libactr:trace-result-status r2)                                ; :ON-PATH
+        (libactr:trace-result-status r2)                              ; :ON-PATH
         ;; Bayesian per-KC mastery, replayed from the session's event log
         (libactr:compute-mastery (libactr:log-all-events (libactr:session-log session)))))
 ```
@@ -91,8 +91,8 @@ Notes:
 
 (let ((server (libactr/server:start-tutor-server :port 5000)))
   (libactr/server:register-model server "add"
-                                  (libactr/addition-adapter:build-addition-model)
-                                  (libactr/addition-adapter:make-addition-adapter))
+                                 (libactr/addition-adapter:build-addition-model)
+                                 (libactr/addition-adapter:make-addition-adapter))
   ;; background acceptor is up; run some requests, then:
   ;; (libactr/server:stop-tutor-server server)
   server)
