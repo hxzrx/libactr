@@ -5,7 +5,8 @@ Formerly known as **mtt** — renamed to libactr in 0.4.0 (see
 
 An independent, multi-user-safe model-tracing production engine in Common
 Lisp. Cognitive models are authored in the ACT-R syntax and validated against
-the `act-r/` library at development time (dual-track oracle); at runtime libactr is
+a vendored frozen ACT-R snapshot (`vendor/act-r/`, system name `act-r`) at
+development time (dual-track oracle); at runtime libactr is
 dependency-free and holds zero global mutable state. This is the
 "model in ACT-R, ship a dedicated runtime" path proven by Carnegie
 Learning / MATHia and CTAT: ACT-R's global singleton meta-process does not
@@ -28,8 +29,9 @@ tutor + adapter pair with a declarative bug library.
   dexador (cluster); fiveam (tests).
 - `redis-server` — only for `libactr/redis-store`, `libactr/cluster`, and their tests
   (suites self-start one and skip when absent).
-- `act-r/` — only for the dev-time dual-track oracle (`libactr/oracle`,
-  `libactr/dual`). Runtime never loads it.
+- No external `act-r/` checkout needed: the dev-time dual-track oracle
+  (`libactr/oracle`, `libactr/dual`) runs against the vendored frozen ACT-R
+  snapshot under `vendor/act-r/` (LGPL-2.1). Runtime never loads it.
 
 ## Quickstart (core)
 
@@ -234,7 +236,7 @@ dependency in production shape.
 | `libactr/server` | HTTP service layer: `tutor-server`, model registry, per-session locks, adapter protocol + reusable base, JSON wire format | `libactr`, hunchentoot, bordeaux-threads, yason |
 | `libactr/redis-store` | Durable Redis (AOF) event-log backend, specializes the event-log protocol seam | `libactr`, cl-redis, yason |
 | `libactr/cluster` | Multi-worker orchestration: manager (lease/checkpoint/takeover), checkpoint stores, front proxy | `libactr/server`, `libactr/redis-store`, dexador, yason |
-| `libactr/oracle` | Dev-time dual-track oracle (runs models under act-r and compares) | `libactr`, `act-r` |
+| `libactr/oracle` | Dev-time dual-track oracle (runs models under the vendored ACT-R snapshot and compares) | `libactr`, `act-r` |
 | `libactr/addition-tutor` | Reference example tutor (act-r tutorial addition model + buggy library + KC map) | `libactr` |
 | `libactr/fraction-tutor`, `libactr/past-tense-tutor`, `libactr/subtraction-tutor` | Domain tutors: model load + buggy library + declarative KC attribution | `libactr` |
 | `libactr/addition-adapter`, `libactr/fraction-adapter`, `libactr/past-tense-adapter`, `libactr/subtraction-adapter` | Domain adapters — the domain brain on the `standard-domain-adapter` base | `libactr/server` + the matching tutor |
@@ -363,6 +365,10 @@ tiers state audience and stability) plus the `:libactr/cluster` package.
 
 ## Tests
 
+A fresh clone of this repository alone runs all ten suites — the dual-track
+oracle ships inside as `vendor/act-r/` (no sibling `act-r/` checkout, no
+source-registry entry beyond this repo).
+
 ```bash
 # core (also the entry point for the concurrent and dual legs, which load
 # extra systems and add checks to the same :libactr suite):
@@ -395,12 +401,15 @@ mid-problem.
 
 ## Dual-track validation
 
-`act-r/` is a development-time oracle only. `libactr/oracle` runs the same models
-under the act-r interpreter and `libactr/dual` cross-checks matcher agreement on
-the tutorial corpus and all four domain models; runtime deployments never
-load act-r. The shared model files (`models/*.lisp`) are written in the
-common subset both engines accept.
+The vendored ACT-R snapshot (`vendor/act-r/`, frozen at act-r@`da413e6`,
+upstream SVN r3493) is a development-time oracle only. `libactr/oracle` runs
+the same models under that ACT-R interpreter and `libactr/dual` cross-checks
+matcher agreement on the tutorial corpus and all four domain models; runtime
+deployments never load act-r. The shared model files (`models/*.lisp`) are
+written in the common subset both engines accept.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Exception: the vendored snapshot under
+`vendor/act-r/` is LGPL-2.1 (see [vendor/act-r/COPYING.LESSER](vendor/act-r/COPYING.LESSER));
+everything else in this repository is MIT.

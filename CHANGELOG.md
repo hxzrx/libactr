@@ -3,6 +3,17 @@
 All notable changes to libactr are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
+## Unreleased — dev infrastructure
+
+Vendored a frozen ACT-R snapshot under `vendor/act-r/` (act-r@`da413e6`,
+upstream SVN r3493 / ACT-R 7.31.5, snapshot 2026-09-02, LGPL-2.1 with
+`COPYING.LESSER` included). The dev-time dual-track oracle (`libactr/oracle`,
+`libactr/dual`) and every `asdf:system-relative-pathname "act-r" ...` test
+reference now resolve to this in-repo snapshot, so a fresh clone of libactr
+alone runs all ten suites with no sibling `act-r/` checkout. Development
+infrastructure only: no code, public-surface, or ASDF system-name changes,
+and all suite baselines are identical (381/316/51/407/414/22/24/21/35/128).
+
 ## 0.4.0 (2026-09-02) — renamed mtt → libactr
 
 End-to-end rename of the library; behavior is unchanged (all ten suite

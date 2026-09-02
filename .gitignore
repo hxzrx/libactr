@@ -6,5 +6,10 @@
 *.wx32fsl
 *.wx64fsl
 
+# Vendored act-r runtime-generated files (src/support/preamble.lisp writes
+# these next to its sources at load time)
+vendor/act-r/src/support/require-mode.lisp
+vendor/act-r/src/support/extra-mode.lisp
+
 # Superpowers SDD scratch (per-plan workspace)
 .superpowers/
