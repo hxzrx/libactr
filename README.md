@@ -1,5 +1,8 @@
 # libactr — Model-Tracing Tutor Engine
 
+Formerly known as **mtt** — renamed to libactr in 0.4.0 (see
+[CHANGELOG](CHANGELOG.md) for the full old→new mapping).
+
 An independent, multi-user-safe model-tracing production engine in Common
 Lisp. Cognitive models are authored in the ACT-R syntax and validated against
 the `act-r/` library at development time (dual-track oracle); at runtime libactr is
@@ -47,13 +50,13 @@ tutor + adapter pair with a declarative bug library.
                 session (libactr:make-step-intent :assignments assignments))))
        (r1 (funcall step '((goal cdenom 6))                ; "the common denominator is 6"
                     (libactr:make-chunk :isa 'lcm-fact
-                                    :slots '((d1 . 2) (d2 . 3) (lcm . 6)))))
+                                        :slots '((d1 . 2) (d2 . 3) (lcm . 6)))))
        (r2 (funcall step '((goal snum 5) (goal sdenom 6))  ; "1/2 + 1/3 = 5/6"
                     (libactr:make-chunk :isa 'sum-fact
-                                    :slots '((cdenom . 6) (snum . 5) (sdenom . 6))))))
-  (list (libactr:trace-result-status r1)                          ; :ON-PATH
+                                        :slots '((cdenom . 6) (snum . 5) (sdenom . 6))))))
+  (list (libactr:trace-result-status r1)                                ; :ON-PATH
         (libactr:production-name (libactr:trace-result-production r1)) ; FIND-COMMON-DENOMINATOR
-        (libactr:trace-result-status r2)                          ; :ON-PATH
+        (libactr:trace-result-status r2)                                ; :ON-PATH
         ;; Bayesian per-KC mastery, replayed from the session's event log
         (libactr:compute-mastery (libactr:log-all-events (libactr:session-log session)))))
 ```
@@ -88,8 +91,8 @@ Notes:
 
 (let ((server (libactr/server:start-tutor-server :port 5000)))
   (libactr/server:register-model server "add"
-                             (libactr/addition-adapter:build-addition-model)
-                             (libactr/addition-adapter:make-addition-adapter))
+                                  (libactr/addition-adapter:build-addition-model)
+                                  (libactr/addition-adapter:make-addition-adapter))
   ;; background acceptor is up; run some requests, then:
   ;; (libactr/server:stop-tutor-server server)
   server)

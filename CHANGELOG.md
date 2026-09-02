@@ -3,6 +3,37 @@
 All notable changes to libactr are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
+## 0.4.0 (2026-09-02) — renamed mtt → libactr
+
+End-to-end rename of the library; behavior is unchanged (all ten suite
+baselines identical to 0.3.1). A user-directed exception to the 0.3.0
+maintenance-mode public-surface freeze.
+
+- ASDF systems: `mtt` → `libactr` and every `mtt/*` subsystem →
+  `libactr/*` (28 systems; e.g. `mtt/server` → `libactr/server`). The
+  system definition file is now `libactr.asd`.
+- Packages: `:mtt` → `:libactr`, `:mtt/server` → `:libactr/server`, …
+  (26 packages). Nicknames `:mtt-server` / `:mtt-cluster` →
+  `:libactr-server` / `:libactr-cluster`; descriptive nicknames such as
+  `:model-tracing` are unchanged.
+- FiveAM suites: `:mtt`, `:mtt/server`, `:mtt/redis-store`,
+  `:mtt/fraction-tutor`, `:mtt/past-tense-tutor`, `:mtt/subtraction-tutor`,
+  `:mtt/empirical`, `:mtt/cluster` → `:libactr…` prefixes (the concurrent
+  and dual baselines run the core suite with their test files joined via
+  `in-suite`).
+- Renamed symbols: `mtt-chunk` → `libactr-chunk`, `mtt-goal-chunk` →
+  `libactr-goal-chunk`, `mtt-retrieval-chunk` → `libactr-retrieval-chunk`,
+  `:mtt-match-fail` → `:libactr-match-fail`.
+- Redis key prefixes: `mtt:cluster:` / `mtt:cluster:ckpt:` →
+  `libactr:cluster:` / `libactr:cluster:ckpt:`.
+- Error-message prefixes: `mtt/<domain>-adapter: …` →
+  `libactr/<domain>-adapter: …`.
+- **Data compatibility (breaking, intentional):** redis data written by
+  mtt 0.x is not readable by libactr — key prefixes and `kc_package`
+  package names changed. No production data existed; no migration.
+- Docs: all historical specs/plans renamed and rewritten in place in the
+  project docs repository (git rename tracking kept).
+
 ## 0.3.1 (2026-09-02) — parked-minors cleanup
 
 Maintenance-mode quality closeout: every minor the phase-14 final review
