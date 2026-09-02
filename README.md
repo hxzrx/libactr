@@ -408,6 +408,33 @@ matcher agreement on the tutorial corpus and all four domain models; runtime
 deployments never load act-r. The shared model files (`models/*.lisp`) are
 written in the common subset both engines accept.
 
+### Upgrading the vendored oracle
+
+Current sync point: upstream ACT-R SVN **r3493** (ACT-R 7.31.5,
+`svn://act-r.psy.cmu.edu/actr7.x`), vendored from act-r@`da413e6`
+(2026-09-02). When `actr7.x/` is updated upstream, the snapshot follows in
+two hops:
+
+1. **actr7.x → act-r port** — `svn update actr7.x`, note the new revision,
+   then follow `docs/upstream-sync.md` in the [act-r source
+   repo](https://gitee.com/hxz/act-r): `svn diff -r 3493:HEAD` against the
+   recorded revision, copy changed files, update the asd, update its sync
+   table, commit and push.
+2. **act-r → this vendor tree** — re-vendor and re-verify:
+
+   ```bash
+   rm -rf vendor/act-r/src vendor/act-r/tutorial vendor/act-r/act-r.asd
+   git -C <act-r-checkout> archive <new-sha> -- src tutorial act-r.asd \
+     | tar -x -C vendor/act-r
+   ```
+
+   Update the provenance block in `vendor/act-r/README.md` and the CHANGELOG,
+   then re-run the full ten-suite baseline before committing. The oracle is
+   the reference the dual suite certifies against, so an upstream engine
+   change can legitimately shift dual-track expectations — the baseline gate
+   is where that surfaces, and any count change must be explained, not just
+   accepted.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Exception: the vendored snapshot under
