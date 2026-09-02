@@ -382,8 +382,8 @@ sbcl --non-interactive --eval '(ql:quickload :mtt/cluster-test)' --eval '(5am:ru
 # :mtt/past-tense-tutor, :mtt/subtraction-tutor, :mtt/empirical
 ```
 
-Green baseline at v0.3.0 (SBCL 2.6.8, assertion-level FiveAM counts, 0
-failures / 0 skips): `:mtt` 381, `:mtt/server` 316, `:mtt/cluster` 126,
+Green baseline at v0.3.1 (SBCL 2.6.8, assertion-level FiveAM counts, 0
+failures / 0 skips): `:mtt` 381, `:mtt/server` 316, `:mtt/cluster` 128,
 `:mtt/redis-store` 51, `:mtt/empirical` 35, `:mtt/fraction-tutor` 22,
 `:mtt/past-tense-tutor` 24, `:mtt/subtraction-tutor` 21; the concurrent and
 dual legs rerun the `:mtt` suite with bordeaux/act-r loaded (407 / 414 as
