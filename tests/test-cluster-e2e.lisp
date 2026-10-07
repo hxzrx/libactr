@@ -25,8 +25,27 @@
         "--eval" "(ql:quickload :libactr/cluster)"
         "--eval" "(ql:quickload :libactr/subtraction-adapter)"
         "--load" worker-file
-        "--eval" (format nil "(libactr/cluster-worker:main :port ~a :redis-port ~a :worker-id ~s)"
-                         port redis-port worker-id)))
+        "--eval" (format nil "(libactr/cluster-worker:main :port ~a :redis-host ~s :redis-port ~a :worker-id ~s)"
+                         port (or (nth-value 0 (%external-redis)) "127.0.0.1")
+                         redis-port worker-id)))
+
+(defun %terminate-worker (proc)
+  "Force-kill a worker subprocess, portably. On Windows uiop:terminate-process
+degrades to `taskkill /pid <n>' WITHOUT /F — run-evidenced hang: the e2e
+teardown wedged the whole image in SB-WIN32::WIN32-PROCESS-WAIT on that
+taskkill (its process never exited for a console sbcl spawned with output
+redirection). The explicit /F force-kill is atomic; other platforms keep
+terminate-process."
+  (when (and proc (uiop:process-alive-p proc))
+    #+win32
+    (ignore-errors
+     (uiop:run-program (list "taskkill" "/F" "/PID"
+                             (princ-to-string (uiop:process-info-pid proc)))
+                       :output :string :error-output :string
+                       :ignore-error-status t))
+    #-win32
+    (ignore-errors (uiop:terminate-process proc))
+    (ignore-errors (uiop:wait-process proc))))
 
 (defun %poll-until (thunk timeout &key (sleep 0.5))
   "Repeat THUNK until it returns non-nil or TIMEOUT (seconds) elapses; last value."
@@ -42,7 +61,7 @@ worker A, step into the borrow column, let the scanner checkpoint, KILL A's
 process, keep stepping through the proxy until B's takeover tick rebuilds the
 session from the checkpoint, finish the problem, end it, and read mastery —
 all with the SAME session_id (transparent continuation)."
-  :skipped-if (lambda () (null (%redis-server-binary)))
+  :skipped-if (lambda () (null (%redis-available-p)))
   (with-test-redis (conn port)
     (let* ((dir (%unique-dir "libactr-cluster-e2e"))
            ;; [brief defect, run-evidenced: the worker logs are redirected into
@@ -76,7 +95,7 @@ all with the SAME session_id (transparent continuation)."
            (w1 nil)
            (w2 nil)
            (proxy (make-tutor-proxy :port (%find-free-port)
-                                    :redis-host "127.0.0.1" :redis-port port)))
+                                    :redis-host (%test-redis-host) :redis-port port)))
       (flet ((worker-up-p (p)
                (multiple-value-bind (b s) (ignore-errors
                                             (dex:get (format nil "http://127.0.0.1:~a/health" p)))
@@ -132,8 +151,7 @@ all with the SAME session_id (transparent continuation)."
                                       10))
                      ;; KILL the owner
                      (let ((victim (if (string= owner "w1") w1 w2)))
-                       (uiop:terminate-process victim)
-                       (uiop:wait-process victim))
+                       (%terminate-worker victim))
                      ;; keep stepping the tens column until takeover completes
                      ;; (black-box: only the proxy's behavior is observed)
                      (let ((done-p nil))
@@ -178,7 +196,7 @@ all with the SAME session_id (transparent continuation)."
                        ;; the event log is one contiguous sequence
                        (let ((log (libactr:make-redis-event-log
                                    :key "libactr:student:e2e:events"
-                                   :host "127.0.0.1" :port port)))
+                                   :host (%test-redis-host) :port port)))
                          (unwind-protect
                               (let ((events (libactr:log-all-events log)))
                                 (is (>= (length events) 3))
@@ -188,10 +206,8 @@ all with the SAME session_id (transparent continuation)."
                            ;; opened for this assertion was dangling — close it.
                            (libactr:disconnect-log log))))))))
           ;; teardown
-          (ignore-errors (uiop:terminate-process w1))
-          (ignore-errors (uiop:terminate-process w2))
-          (ignore-errors (uiop:wait-process w1))
-          (ignore-errors (uiop:wait-process w2))
+          (%terminate-worker w1)
+          (%terminate-worker w2)
           (ignore-errors (stop-tutor-proxy proxy))
           (ignore-errors (uiop:delete-directory-tree
                           (uiop:ensure-directory-pathname dir) :validate t)))))))

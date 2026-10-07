@@ -414,9 +414,11 @@ assertion-level FiveAM counts, 0 failures): `:libactr` 409, `:libactr/server`
 366, `:libactr/empirical` 35, `:libactr/fraction-tutor` 22,
 `:libactr/past-tense-tutor` 24, `:libactr/subtraction-tutor` 21; the concurrent
 and dual legs rerun the `:libactr` suite with bordeaux/act-r loaded (435 /
-468 as run). The redis-dependent suites need a redis-server binary on unix-style
-paths (they skip without one); the cluster e2e spawns real SBCL worker
-subprocesses and kills one mid-problem.
+468 as run). The redis-dependent suites (`:libactr/redis-store` 51 + 1
+designed skip, `:libactr/cluster` 128 incl. the kill-worker e2e) either
+self-start a local redis-server or — when `LIBACTR_TEST_REDIS_HOST` /
+`LIBACTR_TEST_REDIS_PORT` point at an external DISPOSABLE instance — connect
+there directly (FLUSHDB on entry; never point this at real data).
 
 ## Dual-track validation
 

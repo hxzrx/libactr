@@ -25,15 +25,50 @@
   ;; slashless STRING alone still fails UIOP's pathnamep gate — see fixture).
   (format nil "/tmp/~a-~a-~a" prefix (get-universal-time) (gensym)))
 
+(defun %external-redis ()
+  "External-redis mode (mirror of tests/test-redis-store.lisp — test packages
+stay decoupled): LIBACTR_TEST_REDIS_HOST/PORT as two values, or nil. When set,
+the suite treats that redis as a DISPOSABLE test instance (FLUSHDB on fixture
+entry; no spawn, no shutdown). NEVER point this at a redis holding real data."
+  (let ((host (uiop:getenv "LIBACTR_TEST_REDIS_HOST"))
+        (port (uiop:getenv "LIBACTR_TEST_REDIS_PORT")))
+    (when (and host (plusp (length host))
+               port (plusp (length port)))
+      (values host (parse-integer port)))))
+
+(defun %redis-available-p ()
+  "Redis is available when either the external env pair is set or a local
+redis-server binary exists (the self-start path)."
+  (or (nth-value 0 (%external-redis))
+      (%redis-server-binary)))
+
+(defun %test-redis-host ()
+  "The redis host the suite connects to: the external instance when
+LIBACTR_TEST_REDIS_HOST/PORT is set, else loopback (the self-started
+disposable redis)."
+  (multiple-value-bind (h p) (%external-redis)
+    (declare (ignore p))
+    (or h "127.0.0.1")))
+
 (defmacro with-test-redis ((conn-var port-var) &body body)
   "Disposable redis-server on a free port + fresh connection; FLUSHDB; cleanup
   after (mirror of tests/test-redis-store.lisp's fixture — test packages stay
-  decoupled, no cross-package import)."
-  (let ((dir (gensym)) (port (gensym)))
-    `(if (null (%redis-server-binary))
-         (5am:skip "no redis-server binary found")
-         (let ((,port (%find-free-port))
-               (,dir (%unique-dir "libactr-cluster")))
+  decoupled, no cross-package import). Under external-redis mode
+  (LIBACTR_TEST_REDIS_HOST/PORT) connects there instead of spawning — the
+  instance is treated as disposable test infrastructure (FLUSHDB on entry)."
+  (let ((dir (gensym)) (port (gensym)) (ext-host (gensym)) (ext-port (gensym)))
+    `(multiple-value-bind (,ext-host ,ext-port) (%external-redis)
+       (if ,ext-host
+           (let ((,conn-var (redis:connect :host ,ext-host :port ,ext-port))
+                 (,port-var ,ext-port))
+             (let ((redis:*connection* ,conn-var))
+               (redis:red-flushdb))
+             (unwind-protect (progn ,@body)
+               (ignore-errors (redis:disconnect))))
+           (if (null (%redis-server-binary))
+               (5am:skip "no redis-server binary found (set LIBACTR_TEST_REDIS_HOST/PORT to use an external disposable instance)")
+               (let ((,port (%find-free-port))
+                     (,dir (%unique-dir "libactr-cluster")))
            ;; ensure-directory-pathname: a slashless namestring's last component
            ;; parses as a NAME, and ensure-directories-exist would not create it.
            (ensure-directories-exist (uiop:ensure-directory-pathname ,dir))
@@ -44,7 +79,7 @@
                                    "--logfile" (format nil "~a/redis.log" ,dir))
                              :output :string :error-output :string)
            (sleep 1)
-           (let ((,conn-var (redis:connect :host "127.0.0.1" :port ,port))
+           (let ((,conn-var (redis:connect :host (%test-redis-host) :port ,port))
                  (,port-var ,port))
              ;; NOTE: unlike test-redis-store.lisp's fixture (which binds
              ;; *connection* only for the FLUSHDB), we bind it for the WHOLE
@@ -67,13 +102,13 @@
                ;; (slash or not) fails its pathnamep gate and the ignore-errors
                ;; silently skipped cleanup, leaking /tmp/libactr-cluster-* dirs.
                (ignore-errors (uiop:delete-directory-tree
-                               (uiop:ensure-directory-pathname ,dir) :validate t)))))))))
+                               (uiop:ensure-directory-pathname ,dir) :validate t)))))))))))
 
 (defun %worker-server (redis-port)
   "A subtraction-registered tutor-server with a live acceptor + redis event
 logs (the cluster deployment shape, spec §5.4)."
   (let ((s (start-tutor-server :port (%find-free-port) :start-acceptor-p t
-                               :redis-config (list :host "127.0.0.1"
+                               :redis-config (list :host (%test-redis-host)
                                                    :port redis-port))))
     (register-model s "sub"
                     (libactr/subtraction-adapter:build-subtraction-model)
@@ -84,7 +119,7 @@ logs (the cluster deployment shape, spec §5.4)."
   (with-test-redis (conn port)
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w1"
-                                    :redis-host "127.0.0.1" :redis-port port
+                                    :redis-host (%test-redis-host) :redis-port port
                                     :prefix "t-hb:" :heartbeat-ttl 15)))
       (unwind-protect
            (progn
@@ -118,7 +153,7 @@ drops the worker even though it is still in the registry set."
   (with-test-redis (conn port)
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w1"
-                                    :redis-host "127.0.0.1" :redis-port port
+                                    :redis-host (%test-redis-host) :redis-port port
                                     :prefix "t-exp:")))
       (unwind-protect
            (progn
@@ -133,11 +168,11 @@ drops the worker even though it is still in the registry set."
 (test cluster.thread-smoke-and-stop
   "start-cluster-manager spawns the three tick threads and joins; after ~2
 heartbeats the lease exists; stop-cluster-manager leaves (registry empty)."
-  :skipped-if (lambda () (null (%redis-server-binary)))
+  :skipped-if (lambda () (null (%redis-available-p)))
   (with-test-redis (conn port)
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w9"
-                                    :redis-host "127.0.0.1" :redis-port port
+                                    :redis-host (%test-redis-host) :redis-port port
                                     :prefix "t-thr:" :heartbeat-interval 0.2)))
       (unwind-protect
            (progn
@@ -155,7 +190,7 @@ SYMBOL fidelity (buffer names, chunk isa/slot names in the model package, path
 production names) — the Task-1 codec reused (spec §7)."
   (with-test-redis (conn port)
     (let* ((s (%worker-server port))
-           (store (make-redis-checkpoint-store :prefix "t-ck:" :host "127.0.0.1" :port port)))
+           (store (make-redis-checkpoint-store :prefix "t-ck:" :host (%test-redis-host) :port port)))
       (unwind-protect
            (let* ((sid (server-start-session s "cs" "52-18" "sub"))
                   (session (handle-session (gethash sid (server-sessions s))))
@@ -194,7 +229,7 @@ production names) — the Task-1 codec reused (spec §7)."
 integer normalization moved to the consumer (restore-from-checkpoint)."
   (with-test-redis (conn port)
     (let ((store (make-redis-checkpoint-store :prefix "t-nl:"
-                                              :host "127.0.0.1" :port port)))
+                                              :host (%test-redis-host) :port port)))
       (dolist (cp (list (list :session-id "s" :student-id "st" :problem-id "p"
                               :model-id "m" :step-count nil :last-seq nil
                               :status :active :state nil :path nil)
@@ -213,7 +248,7 @@ worker-sess (SREM) and drops sess:<sid>."
   (with-test-redis (conn port)
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w1"
-                                    :redis-host "127.0.0.1" :redis-port port
+                                    :redis-host (%test-redis-host) :redis-port port
                                     :prefix "t-scan:")))
       (unwind-protect
            (let ((sid (server-start-session s "cs2" "52-18" "sub")))
@@ -263,7 +298,7 @@ with one mid-problem session (ones borrow step done, checkpoint saved), then
 w1's lease is deleted (simulated death). Returns (values s1 m1 s2 m2 sid)."
   (let* ((s1 (%worker-server port))
          (m1 (make-cluster-manager :server s1 :worker-id "w1"
-                                   :redis-host "127.0.0.1" :redis-port port
+                                   :redis-host (%test-redis-host) :redis-port port
                                    :prefix prefix))
          (sid (progn (cluster-join m1)
                      (let ((sid (server-start-session s1 "tk" "52-18" "sub")))
@@ -274,7 +309,7 @@ w1's lease is deleted (simulated death). Returns (values s1 m1 s2 m2 sid)."
                        sid)))
          (s2 (%worker-server port))
          (m2 (make-cluster-manager :server s2 :worker-id "w2"
-                                   :redis-host "127.0.0.1" :redis-port port
+                                   :redis-host (%test-redis-host) :redis-port port
                                    :prefix prefix)))
     (redis:red-del (uiop:strcat prefix "worker:w1"))   ; simulated death
     (values s1 m1 s2 m2 sid)))
@@ -315,7 +350,7 @@ log losslessly."
                              (libactr:log-all-events
                               (libactr:make-redis-event-log
                                :key "libactr:student:tk:events"
-                               :host "127.0.0.1" :port port)))))
+                               :host (%test-redis-host) :port port)))))
                (is (member :borrow (mapcar (lambda (x) (getf x :kc)) mastery)))))
         (stop-cluster-manager m1)
         (stop-cluster-manager m2)
@@ -470,7 +505,7 @@ idempotent flip instead of skipping as a foreign collision."
                   (entry (gethash "sub" (server-models s2)))
                   (log (libactr:make-redis-event-log
                         :key (libactr/server:student-events-key "tk")
-                        :host "127.0.0.1" :port port)))
+                        :host (%test-redis-host) :port port)))
              ;; plant OUR half-adopt: handle built from the SAME checkpoint,
              ;; routes never flipped (still w1), claim expired away
              (setf (gethash sid (server-sessions s2))
@@ -526,7 +561,7 @@ refreshed lease are untouched by the sweep itself."
   (with-test-redis (conn port)
     (let* ((s1 (%worker-server port))
            (m1 (make-cluster-manager :server s1 :worker-id "w1"
-                                     :redis-host "127.0.0.1" :redis-port port
+                                     :redis-host (%test-redis-host) :redis-port port
                                      :prefix "t-zb:")))
       (unwind-protect
            (let ((sid (progn (cluster-join m1)        ; first beat: beats=1, no sweep
@@ -551,7 +586,7 @@ THIS worker — nothing is dropped."
   (with-test-redis (conn port)
     (let* ((s1 (%worker-server port))
            (m1 (make-cluster-manager :server s1 :worker-id "w1"
-                                     :redis-host "127.0.0.1" :redis-port port
+                                     :redis-host (%test-redis-host) :redis-port port
                                      :prefix "t-zn:")))
       (unwind-protect
            (let ((sid (progn (cluster-join m1)
@@ -601,10 +636,10 @@ writes sess/student/worker-sess keys; step and end flow through verbatim."
   (with-test-redis (conn port)
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w1"
-                                    :redis-host "127.0.0.1" :redis-port port
+                                    :redis-host (%test-redis-host) :redis-port port
                                     :prefix "t-px:"))
            (p (make-tutor-proxy :port (%find-free-port)
-                                :redis-host "127.0.0.1" :redis-port port
+                                :redis-host (%test-redis-host) :redis-port port
                                 :prefix "t-px:")))
       (unwind-protect
            (progn
@@ -645,7 +680,7 @@ writes sess/student/worker-sess keys; step and end flow through verbatim."
 (test proxy.unknown-session-404
   (with-test-redis (conn port)
     (let ((p (make-tutor-proxy :port (%find-free-port)
-                               :redis-host "127.0.0.1" :redis-port port
+                               :redis-host (%test-redis-host) :redis-port port
                                :prefix "t-404:")))
       (unwind-protect
            (multiple-value-bind (body status)
@@ -671,7 +706,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
   (with-test-redis (conn port)
     (let* ((s1 (%worker-server port))
            (m1 (make-cluster-manager :server s1 :worker-id "w1"
-                                     :redis-host "127.0.0.1" :redis-port port
+                                     :redis-host (%test-redis-host) :redis-port port
                                      :prefix "t-rt:"))
            (sid (progn (cluster-join m1)
                        (let ((sid (server-start-session s1 "rt" "52-18" "sub")))
@@ -679,7 +714,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
                          sid)))
            (dead-port (%find-free-port))          ; bound then released: nothing listens
            (p (make-tutor-proxy :port (%find-free-port)
-                                :redis-host "127.0.0.1" :redis-port port
+                                :redis-host (%test-redis-host) :redis-port port
                                 :prefix "t-rt:"))
            ;; the "doomed worker": accepts the forwarded step, flips the route
            ;; to the live worker (the takeover), then kills the connection —
@@ -689,7 +724,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
            (doom-port (%find-free-port))
            (doom-sock (usocket:socket-listen "127.0.0.1" doom-port :reuse-address t))
            (doom-conn (let ((redis:*connection* nil))
-                        (redis:connect :host "127.0.0.1" :port port)))
+                        (redis:connect :host (%test-redis-host) :port port)))
            (doom-th (bordeaux-threads:make-thread
                      (lambda ()
                        (ignore-errors
@@ -767,7 +802,7 @@ student -> 404."
            (sid (server-start-session s "mp" "52-18" "sub")))
       (server-step-session s sid '(("type" . "digit") ("value" . "4")))
       (let ((p (make-tutor-proxy :port (%find-free-port)
-                                 :redis-host "127.0.0.1" :redis-port port
+                                 :redis-host (%test-redis-host) :redis-port port
                                  :prefix "t-my:")))
         (unwind-protect
              (progn
@@ -786,7 +821,7 @@ student -> 404."
                    ;; downcase the raw symbol case-mismatches here.
                    (let* ((log (libactr:make-redis-event-log
                                 :key (libactr/server:student-events-key "mp")
-                                :host "127.0.0.1" :port port))
+                                :host (%test-redis-host) :port port))
                           (events (libactr:log-all-events log))
                           (expected (mapcar (lambda (x)
                                               (libactr/server:kc->json (getf x :kc)))
@@ -899,7 +934,7 @@ threads (they kept ticking on a manager the operator believed restarted)."
   (with-test-redis (conn port)
     (let* ((s (%worker-server port))
            (m (make-cluster-manager :server s :worker-id "w-id"
-                                    :redis-host "127.0.0.1" :redis-port port
+                                    :redis-host (%test-redis-host) :redis-port port
                                     :prefix "t-id:" :heartbeat-interval 0.2
                                     :scan-interval 0.2 :takeover-interval 0.2)))
       (unwind-protect
@@ -932,13 +967,13 @@ NON-sticky implementation would deterministically pick the OTHER worker
     (let* ((s1 (%worker-server port))
            (s2 (%worker-server port))
            (m1 (make-cluster-manager :server s1 :worker-id "wa"
-                                     :redis-host "127.0.0.1" :redis-port port
+                                     :redis-host (%test-redis-host) :redis-port port
                                      :prefix "t-sy:"))
            (m2 (make-cluster-manager :server s2 :worker-id "wb"
-                                     :redis-host "127.0.0.1" :redis-port port
+                                     :redis-host (%test-redis-host) :redis-port port
                                      :prefix "t-sy:"))
            (p (make-tutor-proxy :port (%find-free-port)
-                                :redis-host "127.0.0.1" :redis-port port
+                                :redis-host (%test-redis-host) :redis-port port
                                 :prefix "t-sy:")))
       (unwind-protect
            (progn
@@ -996,7 +1031,7 @@ retry-to-same-worker-fails-again)."
   (with-test-redis (conn port)
     (let* ((s1 (%worker-server port))
            (m1 (make-cluster-manager :server s1 :worker-id "w1"
-                                     :redis-host "127.0.0.1" :redis-port port
+                                     :redis-host (%test-redis-host) :redis-port port
                                      :prefix "t-rr:"))
            (sid (progn (cluster-join m1)
                        (let ((sid (server-start-session s1 "rr" "52-18" "sub")))
@@ -1014,7 +1049,7 @@ retry-to-same-worker-fails-again)."
                                 (incf count)
                                 (usocket:socket-close c)))))))
            (p (make-tutor-proxy :port (%find-free-port)
-                                :redis-host "127.0.0.1" :redis-port port
+                                :redis-host (%test-redis-host) :redis-port port
                                 :prefix "t-rr:")))
       (unwind-protect
            (progn

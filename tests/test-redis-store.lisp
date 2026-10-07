@@ -29,47 +29,80 @@
   ;; slashless STRING alone still fails UIOP's pathnamep gate — see fixture).
   (format nil "/tmp/~a-~a-~a" prefix (get-universal-time) (gensym)))
 
+(defun %external-redis ()
+  "External-redis mode: LIBACTR_TEST_REDIS_HOST and LIBACTR_TEST_REDIS_PORT as
+two values, or nil when unset. When set, the suite treats that redis as a
+DISPOSABLE test instance (FLUSHDB on fixture entry) instead of self-starting a
+local redis-server — a host without a redis-server binary can point the suite
+at a scratch instance elsewhere (e.g. a dedicated port on a VM). NEVER point
+this at a redis holding real data."
+  (let ((host (uiop:getenv "LIBACTR_TEST_REDIS_HOST"))
+        (port (uiop:getenv "LIBACTR_TEST_REDIS_PORT")))
+    (when (and host (plusp (length host))
+               port (plusp (length port)))
+      (values host (parse-integer port)))))
+
+(defun %test-redis-host ()
+  "The redis host the suite connects to: the external instance when
+LIBACTR_TEST_REDIS_HOST/PORT is set, else loopback (the self-started
+disposable redis)."
+  (multiple-value-bind (h p) (%external-redis)
+    (declare (ignore p))
+    (or h "127.0.0.1")))
+
 (defmacro with-test-redis ((conn-var port-var) &body body)
-  "Start a disposable redis-server (--appendonly yes) on a free high port, bind
-CONN-VAR to a fresh cl-redis connection and PORT-VAR to the port; FLUSHDB to
-ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
-  (let ((binary (gensym)) (dir (gensym)) (port (gensym)))
-    `(if (null (%redis-server-binary))
-         (5am:skip "no redis-server binary found")
-         (let ((,port (%find-free-port))
-               (,dir (%unique-dir "libactr-redis")))
-           ;; ensure-directory-pathname: a slashless namestring's last component
-           ;; parses as a NAME, and ensure-directories-exist would not create it.
-           (ensure-directories-exist (uiop:ensure-directory-pathname ,dir))
-           (uiop:run-program (list (%redis-server-binary)
-                                   "--port" (princ-to-string ,port)
-                                   "--daemonize" "yes" "--appendonly" "yes"
-                                   "--dir" ,dir "--save" ""
-                                   "--logfile" (format nil "~a/redis.log" ,dir))
-                             :output :string :error-output :string)
-           (sleep 1)
-           (let ((,conn-var (redis:connect :host "127.0.0.1" :port ,port))
-                 (,port-var ,port))
-             ;; Ensure a clean database regardless of any persisted AOF.
+  "Disposable redis for the suite: either an EXTERNAL instance
+(LIBACTR_TEST_REDIS_HOST/PORT — connected directly, FLUSHDBed on entry,
+treated as disposable test infrastructure; no spawn, no shutdown) or, by
+default, a self-started redis-server (--appendonly yes) on a free high port.
+Binds CONN-VAR to a fresh cl-redis connection and PORT-VAR to the port. SKIP
+when neither is available."
+  (let ((dir (gensym)) (port (gensym)) (ext-host (gensym)) (ext-port (gensym)))
+    `(multiple-value-bind (,ext-host ,ext-port) (%external-redis)
+       (if ,ext-host
+           (let ((,conn-var (redis:connect :host ,ext-host :port ,ext-port))
+                 (,port-var ,ext-port))
+             ;; the external instance is disposable test infrastructure
              (let ((redis:*connection* ,conn-var))
                (redis:red-flushdb))
              (unwind-protect (progn ,@body)
-               (ignore-errors (redis:disconnect))
-               (ignore-errors
-                 (uiop:run-program (list "redis-cli" "-p" (princ-to-string ,port)
-                                         "shutdown" "nosave")
-                                   :output :string :error-output :string))
-               (sleep 1)
-               ;; ensure-directory-pathname (final review): delete-directory-tree
-               ;; takes a physical non-wildcard directory PATHNAME — a namestring
-               ;; (slash or not) fails its pathnamep gate and the ignore-errors
-               ;; silently skipped cleanup, leaking /tmp/libactr-redis-* dirs.
-               (ignore-errors (uiop:delete-directory-tree
-                               (uiop:ensure-directory-pathname ,dir) :validate t))))))))
+               (ignore-errors (redis:disconnect))))
+           (if (null (%redis-server-binary))
+               (5am:skip "no redis-server binary found (set LIBACTR_TEST_REDIS_HOST/PORT to use an external disposable instance)")
+               (let ((,port (%find-free-port))
+                     (,dir (%unique-dir "libactr-redis")))
+                 ;; ensure-directory-pathname: a namestring's last component
+                 ;; parses as a NAME, and ensure-directories-exist would not create it.
+                 (ensure-directories-exist (uiop:ensure-directory-pathname ,dir))
+                 (uiop:run-program (list (%redis-server-binary)
+                                         "--port" (princ-to-string ,port)
+                                         "--daemonize" "yes" "--appendonly" "yes"
+                                         "--dir" ,dir "--save" ""
+                                         "--logfile" (format nil "~a/redis.log" ,dir))
+                                   :output :string :error-output :string)
+                 (sleep 1)
+                 (let ((,conn-var (redis:connect :host (%test-redis-host) :port ,port))
+                       (,port-var ,port))
+                   ;; Ensure a clean database regardless of any persisted AOF.
+                   (let ((redis:*connection* ,conn-var))
+                     (redis:red-flushdb))
+                   (unwind-protect (progn ,@body)
+                     (ignore-errors (redis:disconnect))
+                     (ignore-errors
+                       (uiop:run-program (list "redis-cli" "-p" (princ-to-string ,port)
+                                               "shutdown" "nosave")
+                                         :output :string :error-output :string))
+                     (sleep 1)
+                     ;; ensure-directory-pathname (final review): delete-directory-tree
+                     ;; takes a physical non-wildcard directory PATHNAME — a namestring
+                     ;; (slash or not) fails its pathnamep gate and the ignore-errors
+                     ;; silently skipped cleanup, leaking /tmp/libactr-redis-* dirs.
+                     (ignore-errors (uiop:delete-directory-tree
+                                     (uiop:ensure-directory-pathname ,dir) :validate t))))))))))
 
 (test redis-event-log.round-trip-equivalence
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "libactr:test:ev" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:ev" :host (%test-redis-host) :port port))
            (mem (make-event-log)))
       ;; same events appended to both
       (dolist (kc '(t nil t))
@@ -89,9 +122,15 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
                  '(t nil t))))))
 
 (test redis-event-log.aof-persistence-across-restart
-  "Append events, kill redis, relaunch on the same dir (AOF replays), assert all events survive."
-  :skipped-if (lambda () (null (%redis-server-binary)))
-  (let* ((dir (%unique-dir "libactr-redis-aof"))
+  "Append events, kill redis, relaunch on the same dir (AOF replays), assert all events survive.
+Skipped under external-redis mode (the external instance must not be killed)
+and when no local redis-server binary exists. NOTE: fiveam has no :skipped-if
+option (it was silently ignored — this test ran unconditionally, which is why
+it failed on hosts without a usable redis-server fixture); the skip is a
+5am:skip CHECK at body start, the suite's established idiom."
+  (if (or (%external-redis) (null (%redis-server-binary)))
+      (5am:skip "AOF kill/relaunch needs a local redis-server binary and must not kill an external instance")
+      (let* ((dir (%unique-dir "libactr-redis-aof"))
          (port (%find-free-port))
          (key "libactr:test:aof"))
     (ensure-directories-exist (uiop:ensure-directory-pathname dir))
@@ -102,7 +141,7 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
                                    "--dir" dir "--save" "" "--logfile" (format nil "~a/redis.log" dir))
                              :output :string :error-output :string)
            (sleep 1)
-           (let ((log (make-redis-event-log :key key :host "127.0.0.1" :port port)))
+           (let ((log (make-redis-event-log :key key :host (%test-redis-host) :port port)))
              (log-append log (make-log-event :student-id "s1" :kc-event (make-kc-event :kc 'add :correct-p t)))
              (log-append log (make-log-event :student-id "s1" :kc-event (make-kc-event :kc 'add :correct-p nil)))
              (is (= 2 (log-last-seq log))))
@@ -116,7 +155,7 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
                                    "--dir" dir "--save" "" "--logfile" (format nil "~a/redis2.log" dir))
                              :output :string :error-output :string)
            (sleep 1)
-           (let ((log (make-redis-event-log :key key :host "127.0.0.1" :port port)))
+           (let ((log (make-redis-event-log :key key :host (%test-redis-host) :port port)))
              (is (= 2 (log-last-seq log)))
              (is (= 2 (length (log-all-events log))))))
       (ignore-errors
@@ -124,7 +163,7 @@ ensure a clean slate; shutdown + cleanup after. SKIP if no redis-server binary."
                           :output :string :error-output :string))
       (sleep 1)
       (ignore-errors (uiop:delete-directory-tree
-                      (uiop:ensure-directory-pathname dir) :validate t)))))
+                      (uiop:ensure-directory-pathname dir) :validate t))))))
 
 (test redis-event-log.non-nil-summaries-round-trip
   "REGRESSION (C1): a log-event with NON-NIL intent-summary and result-summary
@@ -139,7 +178,7 @@ converter (mirrors src/http-api.lisp's json-encode). The existing 9 tests
 passed only because their fixtures used make-log-event with default nil
 summaries — this test closes that gap."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "libactr:test:ni" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:ni" :host (%test-redis-host) :port port))
            ;; the exact non-nil summary shapes produced by step-session
            (ev (make-log-event
                 :student-id "s1" :session-id "sess-x" :problem-id "5+2"
@@ -163,7 +202,7 @@ summaries — this test closes that gap."
   "B4: a kc symbol round-trips with its package. kc 'add in THIS test package
 re-emerges as the SAME symbol (eq), not LIBACTR:ADD."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "libactr:test:kcid" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:kcid" :host (%test-redis-host) :port port))
            (original-kc 'add))                       ; interned in :libactr/redis-store-test
       (log-append rlog (make-log-event :student-id "s1"
                                        :kc-event (make-kc-event :kc original-kc :correct-p t)))
@@ -176,7 +215,7 @@ re-emerges as the SAME symbol (eq), not LIBACTR:ADD."
 (test redis-event-log.summaries-decoded
   "B2: intent/result summaries are populated on decode (not dropped to nil)."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "libactr:test:summ" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:summ" :host (%test-redis-host) :port port))
            (ev (make-log-event :student-id "s1"
                                :kc-event (make-kc-event :kc 'add :correct-p t)
                                :intent-summary '((goal sum five))
@@ -190,7 +229,7 @@ re-emerges as the SAME symbol (eq), not LIBACTR:ADD."
   "B1: the raw stored JSON does NOT carry a (stale, always-0) seq field; seq is
 derived from list position on read."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "libactr:test:noseq" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:noseq" :host (%test-redis-host) :port port))
            (key (redis-event-log-key rlog)))
       (log-append rlog (make-log-event :student-id "s1"
                                        :kc-event (make-kc-event :kc 'add :correct-p t)))
@@ -205,7 +244,7 @@ derived from list position on read."
   "B3: disconnect-log closes the cl-redis connection and clears the conn slot;
 idempotent."
   (with-test-redis (conn port)
-    (let ((rlog (make-redis-event-log :key "libactr:test:disc" :host "127.0.0.1" :port port)))
+    (let ((rlog (make-redis-event-log :key "libactr:test:disc" :host (%test-redis-host) :port port)))
       (log-append rlog (make-log-event :student-id "s1"
                                        :kc-event (make-kc-event :kc 'add :correct-p t)))
       (is (not (null (redis-event-log-connection rlog))))
@@ -218,7 +257,7 @@ idempotent."
 in-memory log with identical events (the spec §5.4 'log present → lossless
 recompute' guarantee). Also validates B4 (kc identity must match for bucketing)."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "libactr:test:replay" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:replay" :host (%test-redis-host) :port port))
            (mem (make-event-log)))
       (dolist (correct '(t t nil t))
         (let ((ev (make-log-event :student-id "s1" :problem-id "p1"
@@ -261,7 +300,7 @@ equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
              (_ (dolist (e events) (log-append mem e)))
              (mem-mastery (libactr:compute-mastery (log-all-events mem))))
         (let ((rlog (make-redis-event-log :key "libactr:test:pt-symbols"
-                                          :host "127.0.0.1" :port port)))
+                                          :host (%test-redis-host) :port port)))
           (unwind-protect
                (progn
                  (dolist (e events) (log-append rlog e))
@@ -296,7 +335,7 @@ equals the in-memory fold (KT replay fidelity on symbol-bearing summaries)."
 symbols round-trip as THE SAME symbols (name+package, eq) — not strings, not
 char lists. Status keyword :on-path comes back as the keyword itself."
   (with-test-redis (conn port)
-    (let* ((rlog (make-redis-event-log :key "libactr:test:symrt" :host "127.0.0.1" :port port))
+    (let* ((rlog (make-redis-event-log :key "libactr:test:symrt" :host (%test-redis-host) :port port))
            (sym-goed (intern "GOED" :libactr/past-tense-tutor))
            (sym-verb (intern "GO" :libactr/past-tense-tutor))
            (sym-prod (intern "RETRIEVE-IRREGULAR" :libactr/past-tense-tutor))
@@ -331,7 +370,7 @@ still works."
                         "\"result\":[\"on-path\",\"initialize-addition\",null,0]}")))
       (let ((redis:*connection* conn))
         (redis:red-rpush key legacy-json))
-      (let* ((rlog (make-redis-event-log :key key :host "127.0.0.1" :port port))
+      (let* ((rlog (make-redis-event-log :key key :host (%test-redis-host) :port port))
              (all (log-all-events rlog))
              (e (first all)))
         (is (= 1 (length all)))
@@ -349,7 +388,7 @@ still works."
     (let ((key "libactr:test:mixed")
           (legacy "{\"student_id\":\"s1\",\"kc\":\"ADD\",\"kc_package\":\"LIBACTR/REDIS-STORE-TEST\",\"correct\":false,\"intent\":[[\"goal\",\"sum\",\"five\"]],\"result\":[\"on-path\",\"initialize-addition\",null,0]}"))
       (let ((redis:*connection* conn)) (redis:red-rpush key legacy))
-      (let ((rlog (make-redis-event-log :key key :host "127.0.0.1" :port port)))
+      (let ((rlog (make-redis-event-log :key key :host (%test-redis-host) :port port)))
         (log-append rlog (make-log-event
                           :student-id "s1"
                           :kc-event (make-kc-event :kc :add-fractions :correct-p t)
@@ -368,7 +407,7 @@ still works."
   (with-test-redis (conn port)
     (let* ((pkg (make-package (gensym "LIBACTR/MISSING-")))
            (sym (intern "WIDGET" pkg))
-           (rlog (make-redis-event-log :key "libactr:test:misspkg" :host "127.0.0.1" :port port))
+           (rlog (make-redis-event-log :key "libactr:test:misspkg" :host (%test-redis-host) :port port))
            (ev (make-log-event :student-id "s1"
                                :kc-event (make-kc-event :kc 'add :correct-p t)
                                :intent-summary `((goal widget ,sym))
@@ -398,7 +437,7 @@ unchanged, dotted pairs included."
 (test redis-event-log.concurrent-append-and-read-are-serialized
   (with-test-redis (conn port)
     (let* ((rlog (make-redis-event-log :key "libactr:test:evconc"
-                                       :host "127.0.0.1" :port port))
+                                       :host (%test-redis-host) :port port))
            (n 30)
            (writer (bt:make-thread
                     (lambda ()

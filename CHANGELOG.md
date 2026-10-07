@@ -3,6 +3,32 @@
 All notable changes to libactr are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
+## Unreleased — test infrastructure (post-0.4.1)
+
+The redis-dependent suites can now run against an EXTERNAL disposable redis:
+setting `LIBACTR_TEST_REDIS_HOST`/`LIBACTR_TEST_REDIS_PORT` makes the
+redis-store and cluster fixtures connect there directly (FLUSHDB on entry —
+never point it at real data) instead of self-starting a local redis-server,
+which lets hosts without a redis-server binary run the full baselines
+(verified against a scratch instance on a VM: `:libactr/redis-store` 51 pass
++ 1 designed skip, `:libactr/cluster` 128/128 including the kill-worker e2e).
+Host threading fixes along the way:
+
+- The ~50 hardcoded loopback hosts in the redis tests are unified behind a
+  `%test-redis-host` helper (external host when set, else 127.0.0.1); the e2e
+  worker subprocesses and in-process servers thread the external host too.
+- fiveam has no `:skipped-if` option — it was silently ignored, so the
+  AOF-restart test ran unconditionally and failed on hosts without a usable
+  local redis-server fixture (mistakenly believed skipped since it was
+  written). It now uses the `5am:skip` check idiom and skips under
+  external-redis mode as well (the external instance must not be killed).
+- e2e worker kill: `uiop:terminate-process` degrades to `taskkill /pid <n>`
+  WITHOUT `/F` on Windows and hung the whole image in
+  SB-WIN32::WIN32-PROCESS-WAIT (run-evidenced via a thread-backtrace
+  watchdog), wedging every prior run at the kill step and cascading into the
+  host's virtual-network stack. `%terminate-worker` now force-kills via
+  `taskkill /F` on Windows and keeps terminate-process elsewhere.
+
 ## 0.4.1 (2026-10-07) — concurrency, robustness, and scalability review fixes
 
 Maintenance-mode defect fixes from a purpose-based review (libactr as a
