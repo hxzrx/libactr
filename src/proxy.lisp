@@ -26,6 +26,9 @@
    (prefix :reader proxy-prefix :initarg :prefix :initform "libactr:cluster:")
    (kt-params :reader proxy-kt-params :initarg :kt-params :initform (libactr:make-kt-params))
    (forward-timeout :reader proxy-forward-timeout :initarg :forward-timeout :initform 5)
+   ;; Review F8: the proxy reads each forwarded body into memory before
+   ;; forwarding — cap it (bytes; nil = unlimited), same policy as the workers.
+   (max-body-size :reader proxy-max-body-size :initarg :max-body-size :initform 65536)
    (conn :accessor proxy-conn :initform nil)
    ;; Controller-mandated (Task 8 ruling, same as the manager/store): this ONE
    ;; lazy cl-redis connection is multiplexed by hunchentoot's per-connection
@@ -85,6 +88,12 @@ lock serializes the lazy connect and every command."
 
 (defun %raw-body ()
   (or (hunchentoot:raw-post-data :request hunchentoot:*request* :force-text t) ""))
+
+(defun %proxy-body-ok-p (p raw)
+  "Review F8: RAW (the already-read forward body) within the proxy's
+max-body-size (the workers enforce their own cap on arrival)."
+  (let ((limit (proxy-max-body-size p)))
+    (or (null limit) (<= (length raw) limit))))
 
 ;; --- forwarding ----------------------------------------------------------------
 
@@ -178,10 +187,13 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
                       (values "{\"error\":\"worker unreachable\"}" 503)))))))))))
 
 (defun %proxy-start (p)
-  (let* ((raw (%raw-body))
-         (alist (yason:parse raw :object-as :alist))
-         (student-id (cdr (assoc "student_id" alist :test #'string=)))
-         (live (proxy-live-workers p)))
+  (let ((raw (%raw-body)))
+    (unless (%proxy-body-ok-p p raw)
+      (return-from %proxy-start
+        (%respond "{\"error\":\"request body too large\"}" 413)))
+    (let* ((alist (yason:parse raw :object-as :alist))
+           (student-id (cdr (assoc "student_id" alist :test #'string=)))
+           (live (proxy-live-workers p)))
     (cond
       ((null live) (%respond "{\"error\":\"no live workers\"}" 503))
       (t (let* ((sticky (and student-id
@@ -228,23 +240,27 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
                                               (first w))
                            (redis:red-sadd (uiop:strcat (proxy-prefix p) "worker-sess:" (first w))
                                            sid)))))
-                   (%respond body status)))))))))
+                   (%respond body status))))))))))
 
 (defun %proxy-step (p)
-  (let* ((raw (%raw-body))
-         (alist (yason:parse raw :object-as :alist))
-         (sid (cdr (assoc "session_id" alist :test #'string=))))
-    (multiple-value-bind (body status)
-        (%proxy-forward-session p "step" sid raw)
-      (%respond body status))))
+  (let* ((raw (%raw-body)))
+    (if (%proxy-body-ok-p p raw)
+        (let* ((alist (yason:parse raw :object-as :alist))
+               (sid (cdr (assoc "session_id" alist :test #'string=))))
+          (multiple-value-bind (body status)
+              (%proxy-forward-session p "step" sid raw)
+            (%respond body status)))
+        (%respond "{\"error\":\"request body too large\"}" 413))))
 
 (defun %proxy-end (p)
-  (let* ((raw (%raw-body))
-         (alist (yason:parse raw :object-as :alist))
-         (sid (cdr (assoc "session_id" alist :test #'string=))))
-    (multiple-value-bind (body status)
-        (%proxy-forward-session p "end" sid raw)
-      (%respond body status))))
+  (let* ((raw (%raw-body)))
+    (if (%proxy-body-ok-p p raw)
+        (let* ((alist (yason:parse raw :object-as :alist))
+               (sid (cdr (assoc "session_id" alist :test #'string=))))
+          (multiple-value-bind (body status)
+              (%proxy-forward-session p "end" sid raw)
+            (%respond body status)))
+        (%respond "{\"error\":\"request body too large\"}" 413))))
 
 (defun %proxy-mastery (p)
   ;; Location-free (spec §5.2 protocol 5): computed HERE from the redis event
@@ -288,27 +304,33 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
 
 (defun make-tutor-proxy (&key (port 0) (redis-host "127.0.0.1") (redis-port 6379)
                            (prefix "libactr:cluster:") (kt-params (libactr:make-kt-params))
-                           (forward-timeout 5))
+                           (forward-timeout 5) (max-body-size 65536))
   "Create + start the front proxy on PORT (0 = OS-assigned; read it back via
 proxy-port). Reuses libactr/server's tutor-acceptor subclass for per-instance
 dispatch (no global hunchentoot:*dispatch-table*). FORWARD-TIMEOUT bounds each
-outbound forward's connect+read."
-  (let ((p (make-instance 'tutor-proxy :port port :redis-host redis-host
-                          :redis-port redis-port :prefix prefix
-                          :kt-params (or kt-params (libactr:make-kt-params))
-                          :forward-timeout forward-timeout)))
-    (setf (proxy-acceptor p)
-          (make-instance 'libactr/server:tutor-acceptor :port port
-                         :taskmaster (make-instance
-                                      'hunchentoot:one-thread-per-connection-taskmaster)))
-    (setf (libactr/server:tutor-acceptor-dispatch-table (proxy-acceptor p))
-          (mapcar (lambda (spec)
-                    (hunchentoot:create-prefix-dispatcher (car spec) (cdr spec)))
-                  (proxy-handlers p)))
-    (hunchentoot:start (proxy-acceptor p))
-    ;; write the OS-assigned port back (see the port slot note above)
-    (setf (proxy-port p) (hunchentoot:acceptor-port (proxy-acceptor p)))
-    p))
+outbound forward's connect+read. KT-PARAMS is validated at construction
+(review F9: check-kt-params fail-fast — the location-free mastery folds with
+it). MAX-BODY-SIZE (review F8) caps accepted request bodies in bytes
+(413 beyond; nil = unlimited)."
+  (let ((params (or kt-params (libactr:make-kt-params))))
+    (libactr:check-kt-params params "make-tutor-proxy :kt-params")
+    (let ((p (make-instance 'tutor-proxy :port port :redis-host redis-host
+                            :redis-port redis-port :prefix prefix
+                            :kt-params params
+                            :forward-timeout forward-timeout
+                            :max-body-size max-body-size)))
+      (setf (proxy-acceptor p)
+            (make-instance 'libactr/server:tutor-acceptor :port port
+                           :taskmaster (make-instance
+                                        'hunchentoot:one-thread-per-connection-taskmaster)))
+      (setf (libactr/server:tutor-acceptor-dispatch-table (proxy-acceptor p))
+            (mapcar (lambda (spec)
+                      (hunchentoot:create-prefix-dispatcher (car spec) (cdr spec)))
+                    (proxy-handlers p)))
+      (hunchentoot:start (proxy-acceptor p))
+      ;; write the OS-assigned port back (see the port slot note above)
+      (setf (proxy-port p) (hunchentoot:acceptor-port (proxy-acceptor p)))
+      p)))
 
 (defun stop-tutor-proxy (p)
   "Stop the acceptor and disconnect redis. Safe multiple times."

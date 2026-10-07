@@ -386,3 +386,42 @@ unchanged, dotted pairs included."
          (a (let ((yason:*parse-object-as* :alist)) (yason:parse json)))
          (decoded (untag-symbols (cdr (assoc "intent" a :test #'string=)))))
     (is (equal '((("sym" . 5) ("pkg" . 7))) decoded))))
+
+;;; --- Review F2: per-log connection serialization --------------------------------
+;;;
+;;; cl-redis connections are single-socket, not thread-safe. Before the fix,
+;;; with-redis only dynamically rebound redis:*connection* per thread — two
+;;; request threads using the SAME redis-event-log (a step's RPUSH vs a mastery
+;;; read's LRANGE 0 -1 for one student) interleaved RESP frames on one socket.
+;;; The per-instance lock serializes every command (and the lazy connect).
+
+(test redis-event-log.concurrent-append-and-read-are-serialized
+  (with-test-redis (conn port)
+    (let* ((rlog (make-redis-event-log :key "libactr:test:evconc"
+                                       :host "127.0.0.1" :port port))
+           (n 30)
+           (writer (bt:make-thread
+                    (lambda ()
+                      (dotimes (i n)
+                        (log-append rlog
+                                    (make-log-event
+                                     :student-id "s1" :problem-id "p1"
+                                     :kc-event (make-kc-event :kc 'add
+                                                              :correct-p t)))))))
+           (reader (bt:make-thread
+                    (lambda ()
+                      (loop
+                        (unless (bt:thread-alive-p writer) (return))
+                        (log-all-events rlog)
+                        (log-last-seq rlog))))))
+      (bt:join-thread writer)
+      (bt:join-thread reader)
+      ;; the log is intact: n events, contiguous seqs, correct kc stream
+      (let ((events (log-all-events rlog)))
+        (is (= n (length events)))
+        (is (equal (mapcar #'log-event-seq events)
+                   (loop for i from 1 to n collect i)))
+        (is (every (lambda (e)
+                     (and (log-event-kc-event e)
+                          (kc-event-correct-p (log-event-kc-event e))))
+                   events))))))

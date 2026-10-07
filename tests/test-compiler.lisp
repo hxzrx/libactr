@@ -150,3 +150,40 @@
   ;; state).
   (let ((md (libactr:read-model-file *addition-model*)))
     (is (eq (libactr:compile-model md) md))))
+
+;;; ---------- Review F7: out-of-subset LHS modifiers error loudly ---------------
+
+(defun %raw-production-model (raw-lhs)
+  "A model-definition with ONE production carrying RAW-LHS (the reader's
+pre-compile shape (buffer modifier raw-slot-tests))."
+  (libactr::make-model-definition
+   :chunk-types (make-hash-table)
+   :chunks (make-hash-table)
+   :productions (list (make-production 'probe raw-lhs nil nil :correct))
+   :initial-goal nil :params nil))
+
+(test compiler.lhs-buffer-clear-modifier-signals
+  "F7: an LHS -buf> pattern (a '-goal>' segment) is outside the subset; it used
+to reach make-buffer-pattern's slot type and die as an opaque TYPE-ERROR — now
+compile-model signals a diagnostic naming the production and pattern."
+  (let ((md (%raw-production-model '((goal :- ((arg1 :raw nil)))))))
+    (signals error (compile-model md))))
+
+(test compiler.lhs-request-modifier-signals
+  "F7: an LHS +buf> pattern is outside the subset (RHS-only) — same diagnostic."
+  (let ((md (%raw-production-model '((retrieval :+ ((isa :raw number)))))))
+    (signals error (compile-model md))))
+
+(test compiler.lhs-special-action-signals
+  "F7: an LHS special action (!output! ...) used to be SILENTLY DROPPED by
+compile-pattern — now a diagnostic error."
+  (let ((md (%raw-production-model '((output :! ((=answer)))))))
+    (signals error (compile-model md))))
+
+(test compiler.rhs-request-and-special-actions-still-accepted
+  "F7 control: the tutorial addition model (RHS +retrieval> requests and
+!output! actions) still compiles — the subset restriction is LHS-only."
+  (let ((md (compile-model
+             (read-model-file
+              (asdf:system-relative-pathname "act-r" "tutorial/unit1/addition.lisp")))))
+    (is (= 4 (length (model-definition-productions md))))))

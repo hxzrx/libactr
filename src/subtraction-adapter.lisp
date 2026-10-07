@@ -78,19 +78,11 @@ bad-tutor-request (400 over HTTP)."
 
 (defun %action-int (action)
   "The student's reported value (an integer digit; always-borrow answers may
-be two-digit, e.g. 13). A missing or non-integer value signals
-bad-tutor-request. B1 (phase 14): the missing entry is checked explicitly —
-(parse-integer nil) signals a TYPE-ERROR in SBCL (nil is not a string), NOT a
-parse-error, so the handler-case alone let it escape as a 500 (the phase-14
-audit's parse-error assumption was falsified by the RED run)."
-  (let ((raw (cdr (assoc "value" action :test #'string=))))
-    (unless raw
-      (libactr:signal-bad-request
-       "libactr/subtraction-adapter: action ~s is missing the \"value\" entry" action))
-    (handler-case (parse-integer raw)
-      (parse-error ()
-        (libactr:signal-bad-request
-         "libactr/subtraction-adapter: action value must be an integer, got ~s" raw)))))
+be two-digit, e.g. 13). Review F5: delegates to the shared adapter-action-
+integer — missing, non-string (an unquoted JSON number used to sail past the
+nil-only phase-14 guard into (parse-integer 6) -> TYPE-ERROR -> 500), and
+non-integer entries all signal bad-tutor-request."
+  (libactr:adapter-action-integer action "value" "subtraction-adapter"))
 
 ;;; --- adapter protocol ---
 
@@ -113,7 +105,7 @@ overriding the model's default initial-goal so one compiled model serves any
 propagate-borrow). See the file header for the detection order and the
 stage-driven column routing. Returns the intent(s) for server-step-session."
   (flet ((gi (name) (libactr:adapter-intern a name)))
-    (let* ((type (cdr (assoc "type" action :test #'string=)))
+    (let* ((type (libactr:adapter-action-string action "type" "subtraction-adapter"))
            (d (%action-int action))
            (stage (libactr:adapter-goal-slot a session "STAGE"))
            (top-ones (libactr:adapter-goal-slot a session "TOP-ONES"))

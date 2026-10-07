@@ -3,6 +3,68 @@
 All notable changes to libactr are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
+## 0.4.1 (2026-10-07) — concurrency, robustness, and scalability review fixes
+
+Maintenance-mode defect fixes from a purpose-based review (libactr as a
+multi-user-safe, high-performance, thread-safe tutoring dependency). The new
+exports are user-directed exceptions to the public-surface freeze; tier
+semantics are unchanged.
+
+- **F1 registry concurrency (thread safety).** Every read AND write of the
+  tutor-server registries (students/sessions/models) now goes under the
+  registry lock — including the step/mastery/health lookups and the
+  end-session remhash, which previously took no lock at all (plain CL hash
+  tables are unsafe under concurrent reader+writer access).
+  server-start-session was restructured into three phases (registry resolve →
+  unlocked build+prepare → registry register) so adapter code no longer
+  serializes unrelated students' starts. The cluster scan/takeover ticks
+  iterate a registry snapshot instead of a live maphash. New exports:
+  `server-sessions-snapshot`, `server-register-handle`,
+  `server-find-session-handle`, `server-model-entry`.
+- **F2 redis connection serialization (thread safety).** redis-event-log's
+  single cl-redis connection is guarded by a per-instance bordeaux lock (the
+  same ruling the cluster manager and proxy already followed): a step's RPUSH
+  and a concurrent mastery LRANGE for the same student used to interleave RESP
+  frames on one socket. `libactr/redis-store` now depends on bordeaux-threads.
+- **F3 shared event-log locking (thread safety).** A per-student lock
+  (`server-log-lock`, exported) serializes every access to a student's shared
+  event log — step-path appends, end/checkpoint `log-last-seq` reads, mastery
+  reads — on both the in-memory and redis backends (the session lock cannot
+  cover the log: it outlives any one session).
+- **F4 incremental mastery (performance).** The inline `:mastery` in step
+  responses and GET /student/mastery previously folded the student's ENTIRE
+  history on every call (on the redis backend a full `LRANGE 0 -1` plus one
+  JSON parse per event per step — cost grew without bound with the student's
+  cross-problem history). A per-student BKT cache now folds only events
+  appended since the last call; results are identical to compute-mastery by
+  construction (first call / kt-params change / shrunken log fall back to a
+  full replay).
+- **F5 unified action-field parsing (robustness).** Shared
+  `adapter-action-string` / `adapter-action-integer` helpers (exported from
+  :libactr) make every malformed student action a 400 bad-tutor-request:
+  fraction's missing-value hole (the one domain the phase-14 B1 sweep missed)
+  and — across all four adapters — unquoted JSON numbers, which used to reach
+  `parse-integer`/`string-upcase` as integers and TYPE-ERROR into HTTP 500s.
+- **F6 ACT-R value equality (fidelity).** Slot comparisons now mirror official
+  ACT-R's chunk-slot-equal (eq / case-insensitive string / equalp) instead of
+  plain `equal` — mixed-type numbers and case-differing strings no longer
+  diverge from the dual-track oracle.
+- **F7 out-of-subset diagnostics (usability).** compile-model rejects LHS
+  `+buf>`/`-buf>`/`!action!` patterns with a diagnostic naming the production
+  (was: an opaque struct TYPE-ERROR, or a silent drop); read-model-file accepts
+  legal name-only add-dm declarations (`(shark)`) as empty chunks and rejects
+  genuinely malformed entries (was: a silent skip that quietly dropped facts);
+  multiple SGP forms accumulate instead of last-wins.
+- **F8 service hardening.** `start-tutor-server` / `make-tutor-proxy` accept
+  `:max-body-size` (default 64 KiB): oversized POST bodies are refused with
+  413 before being read; `student_id` is validated at session start
+  (non-empty printable string of at most 128 characters — 400 otherwise; it is
+  embedded in redis keys and event records).
+- **F9 BKT parameter validation.** `check-kt-params` (exported) enforces every
+  parameter strictly inside (0,1) and G+S<1 per set including overrides —
+  fail-fast at server/proxy construction, backstop in compute-mastery (a
+  violating set used to divide by zero mid-fold).
+
 ## Unreleased — dev infrastructure
 
 Vendored a frozen ACT-R snapshot under `vendor/act-r/` (act-r@`da413e6`,

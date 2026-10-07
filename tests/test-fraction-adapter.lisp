@@ -311,3 +311,36 @@ TYPE-ERROR 500s at (/ cdenom den1) / (%gcd nil nil)."
              (declare (ignore plist))
              (is (= 400 status))))
       (libactr/server:stop-tutor-server s))))
+
+;;; --- Review F5: unified action-field parsing (missing/non-string → 400) -------
+
+(test fraction-adapter.missing-and-nonstring-values-are-bad-requests
+  "F5: fraction was the one domain missed by the phase-14 B1 sweep — a missing
+\"value\" entry hit (parse-integer nil), a TYPE-ERROR that escaped as a 500,
+and an unquoted JSON number (decoded as an integer) did the same. All
+malformed field shapes now signal bad-tutor-request via the shared
+adapter-action-integer."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (libactr/server:server-start-session s "f5" "1/2+1/3" "frac")))
+           ;; common-denom: missing value / unquoted number
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session s sid '(("type" . "common-denom"))))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '(("type" . "common-denom") ("value" . 6))))
+           ;; non-integer string
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '(("type" . "common-denom") ("value" . "six"))))
+           ;; sum: missing one of the two entries / non-string type
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '(("type" . "sum") ("denom" . "6"))))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '(("type" . "sum") ("num" . "5") ("denom" . 6))))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '((type . 5) ("value" . "6")))))
+      (libactr/server:stop-tutor-server s))))

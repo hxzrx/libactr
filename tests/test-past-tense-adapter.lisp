@@ -256,3 +256,20 @@ invalid. The explicit loop re-checks the same specs directly."
            (signals libactr:bad-tutor-request
              (libactr/server:server-step-session s sid '(("type" . "answer")))))
       (libactr/server:stop-tutor-server s))))
+
+;;; --- Review F5: unified action-field parsing (non-string value → 400) ---------
+
+(test past-tense-adapter.nonstring-value-is-bad-request
+  "F5: an unquoted JSON number decoded past the nil-only guard and
+string-upcase'd into a TYPE-ERROR 500; the shared helper makes it (and a
+non-string type field) a bad-tutor-request."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (libactr/server:server-start-session s "f5" "go" "pt")))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '(("type" . "answer") ("value" . 5))))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '(("type" . 5) ("value" . "went")))))
+      (libactr/server:stop-tutor-server s))))

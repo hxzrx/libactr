@@ -4,15 +4,28 @@
 ;;;; STORE-ASSIGNED atomically by RPUSH's returned length (race-free under any
 ;;;; writer topology). cl-redis uses a global redis:*connection*; under
 ;;;; thread-per-request each call dynamically rebinds *connection* to THIS log's
-;;;; own connection. No global mutable state in this file.
+;;;; own connection. Review F2: cl-redis connections are single-socket and not
+;;;; thread-safe (the same ruling cluster.lisp/proxy.lisp already lock under) —
+;;;; every command on a log's ONE connection is serialized under the log's
+;;;; per-instance lock (the dynamic rebind alone left two request threads
+;;;; interleaving RESP frames on one socket: /session/step's RPUSH vs
+;;;; /student/mastery's LRANGE for the same student). No global mutable state
+;;;; in this file.
 (in-package :libactr)
 
 (defclass redis-event-log ()
   ((key  :reader redis-event-log-key :initarg :key)
    (host :reader redis-event-log-host :initarg :host :initform "127.0.0.1")
    (port :reader redis-event-log-port :initarg :port :initform 6379)
-   (conn :reader redis-event-log-connection :initform nil))
-  (:documentation "Append-only event log backed by a Redis LIST with AOF persistence."))
+   (conn :reader redis-event-log-connection :initform nil)
+   ;; Review F2: serializes the lazy connect AND every command on the log's
+   ;; single socket (also closes the double-connect window of the old
+   ;; check-then-set lazy init).
+   (lock :reader redis-event-log-lock
+         :initform (bt:make-lock "redis-event-log")))
+  (:documentation "Append-only event log backed by a Redis LIST with AOF persistence.
+One cl-redis connection, lazily opened; every operation on it serialized under
+the instance lock (single-socket, not thread-safe)."))
 
 (defun redis-event-log-p (x)
   "Type predicate for redis-event-log (defclass does not auto-generate -p)."
@@ -23,18 +36,20 @@
   (make-instance 'redis-event-log :key key :host host :port port))
 
 (defmacro with-redis ((log) &body body)
-  "Ensure a connection on LOG and dynamically bind redis:*connection* to it for BODY.
-cl-redis's connect refuses if *connection* is already set globally; we dynamically
-rebind it to nil so each log opens its own independent connection."
+  "Ensure a connection on LOG and dynamically bind redis:*connection* to it for BODY,
+all under the log's per-instance lock (review F2). cl-redis's connect refuses if
+*connection* is already set globally; we dynamically rebind it to nil so each
+log opens its own independent connection."
   (let ((l (gensym)))
-    `(let* ((,l ,log)
-            (conn (or (slot-value ,l 'conn)
-                      (setf (slot-value ,l 'conn)
-                            (let ((redis:*connection* nil))
-                              (redis:connect :host (redis-event-log-host ,l)
-                                             :port (redis-event-log-port ,l)))))))
-       (let ((redis:*connection* conn))
-         ,@body))))
+    `(let ((,l ,log))
+       (bt:with-lock-held ((redis-event-log-lock ,l))
+         (let ((conn (or (slot-value ,l 'conn)
+                         (setf (slot-value ,l 'conn)
+                               (let ((redis:*connection* nil))
+                                 (redis:connect :host (redis-event-log-host ,l)
+                                                :port (redis-event-log-port ,l)))))))
+           (let ((redis:*connection* conn))
+             ,@body))))))
 
 ;; --- log-event <-> JSON (yason) ----------------------------------------------
 ;; NOTE: yason's default *symbol-key-encoder* is ENCODE-SYMBOL-KEY-ERROR, so
@@ -191,12 +206,14 @@ produced the phase-10 char-list tree). Circular structure is not handled
     (redis:red-llen (redis-event-log-key log))))
 
 (defmethod disconnect-log ((log redis-event-log))
-  "Close the cl-redis connection if open; idempotent. Does NOT create a connection."
-  (let ((conn (slot-value log 'conn)))
-    (when conn
-      (let ((redis:*connection* conn))
-        (ignore-errors (redis:disconnect)))
-      (setf (slot-value log 'conn) nil)))
+  "Close the cl-redis connection if open; idempotent. Does NOT create a connection.
+Under the log lock (review F2: an in-flight op on another thread holds it)."
+  (bt:with-lock-held ((redis-event-log-lock log))
+    (let ((conn (slot-value log 'conn)))
+      (when conn
+        (let ((redis:*connection* conn))
+          (ignore-errors (redis:disconnect)))
+        (setf (slot-value log 'conn) nil))))
   log)
 
 (defmethod serialize-event-log ((log redis-event-log))

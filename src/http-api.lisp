@@ -79,16 +79,13 @@ array-of-arrays instead of array-of-objects)."
 than symbol-name) so that future non-symbol KCs (e.g. strings) are handled."
   (princ-to-string kc))
 
-(defun trace-result->response-plist (result adapter session kt-params)
+(defun trace-result->response-plist (result adapter session mastery)
   "Build the step-response plist from a trace-result plus its adapter/session
-context. Includes the KC of the first event (the step's KC), aggregate mastery
-from the student's full event log, and the domain-specific done flag.
-KT-PARAMS (Phase 9 Task 2) is the server's kt-params instance, threaded to
-compute-mastery so per-KC BKT overrides reach the inline :mastery."
-  (let* ((kc-event (first (libactr:trace-result-events result)))
-         (mastery (libactr:compute-mastery
-                   (libactr:log-all-events (libactr:session-log session))
-                   :kt-params kt-params)))
+context. Includes the KC of the first event (the step's KC), the aggregate
+MASTERY (precomputed by the caller — handle-step obtains it from the server's
+cached %student-mastery, review F4: this used to fold the student's ENTIRE
+event log here on every step), and the domain-specific done flag."
+  (let ((kc-event (first (libactr:trace-result-events result))))
     (list :status (libactr:trace-result-status result)
           :production (let ((p (libactr:trace-result-production result)))
                         (and p (libactr:production-name p)))
@@ -126,12 +123,14 @@ compute-mastery so per-KC BKT overrides reach the inline :mastery."
   "Start a session. BODY is the decoded alist: student_id, problem_id, model_id.
 Returns (values (:session_id sid :student_id sid) 200) on success, or
 (values (:error \"unknown model_id\") 404) when model-id is not registered.
-A bad-tutor-request from the adapter's prepare-session (malformed/semantically invalid problem-id) maps to 400."
+A bad-tutor-request from the adapter's prepare-session (malformed/semantically
+invalid problem-id) or from student-id validation (review F8) maps to 400.
+The model-registry check goes through server-model-entry (registry-locked, F1)."
   (let ((student-id (cdr (assoc "student_id" body :test #'string=)))
         (problem-id (cdr (assoc "problem_id" body :test #'string=)))
         (model-id   (cdr (assoc "model_id"   body :test #'string=))))
     (cond
-      ((null (gethash model-id (server-models server)))
+      ((null (server-model-entry server model-id))
        (values (list :error "unknown model_id") 404))
       (t (handler-case
              (let ((sid (server-start-session server student-id problem-id model-id)))
@@ -162,8 +161,14 @@ A bad-tutor-request from adapt-action (malformed action / unexpected state) maps
         ((eq adapter :conflict)
          (values (list :error "session ended") 409))
         (t
-         (values (trace-result->response-plist result adapter session
-                                                 (server-kt-params server)) 200))))))
+         ;; Review F4: the inline :mastery comes from the server's cached
+         ;; incremental fold (under the student's log lock), NOT a full
+         ;; log-all-events + compute-mastery replay per step. Computed AFTER
+         ;; server-step-session returned, so this step's own event is included.
+         (values (trace-result->response-plist
+                  result adapter session
+                  (%student-mastery server (libactr:session-student-id session)))
+                 200))))))
 
 (defun handle-end (server body)
   "End a session. BODY is the decoded alist: session_id. Returns:
@@ -213,9 +218,39 @@ the JSON string as the Hunchentoot handler response."
      (setf (hunchentoot:return-code*) ,status-var)
      (json-encode plist)))
 
-(defun %read-json-body ()
+;;; --- request-body size cap (review F8) ----------------------------------------
+;;;
+;;; The tutor endpoints take tiny JSON documents; an unbounded raw-post-data
+;;; read lets one client wedge arbitrary memory per request thread. The cap is
+;;; enforced twice: on the DECLARED content-length BEFORE the body is read (the
+;;; meaningful bound), and on the actual length after reading (a chunked or
+;;; lying client). Pure predicate %body-size-violation-p is the unit-tested
+;;; core; the hunchentoot-touching wrappers stay untested per this file's
+;;; stated policy (see the Two-layers note at the top).
+
+(defun %body-size-violation-p (declared-length actual-length limit)
+  "Pure predicate: does a request violate the body-size LIMIT? DECLARED-LENGTH
+is the content-length header value (nil when absent/unparseable); ACTUAL-LENGTH
+is the read body's length (nil when not yet read). nil LIMIT disables the cap."
+  (and limit
+       (or (and declared-length (> declared-length limit))
+           (and actual-length (> actual-length limit)))))
+
+(defun %request-content-length ()
+  "The request's declared content-length as an integer, or nil when the header
+is absent or not an integer. Never signals."
+  (let ((header (ignore-errors (hunchentoot:header-in* :content-length))))
+    (and header (ignore-errors (parse-integer header :junk-allowed t)))))
+
+(define-condition %body-too-large (error)
+  ()
+  (:documentation "Internal: the request body exceeded the server's
+max-body-size (review F8). Raised at the wrapper layer; mapped to HTTP 413."))
+
+(defun %read-json-body (server)
   "Read the raw request body and json-decode it. Returns nil if there is no
-body.
+body. Signals %body-too-large when the actual body exceeds the server's
+max-body-size (the wrap-body layer maps it to 413).
 
 NOTE: the brief specified (raw-post-data :request *request* :force-string t).
 Hunchentoot 1.3.1 (this deployment) has :FORCE-TEXT and :FORCE-BINARY, not
@@ -223,22 +258,45 @@ Hunchentoot 1.3.1 (this deployment) has :FORCE-TEXT and :FORCE-BINARY, not
 runtime. We use :FORCE-TEXT to coerce text/* and application/json bodies to a
 string."
   (let ((raw (hunchentoot:raw-post-data :request hunchentoot:*request*
-                                         :force-text t)))
+                                        :force-text t)))
+    (when (%body-size-violation-p nil (and raw (length raw))
+                                  (server-max-body-size server))
+      (error '%body-too-large))
     (and raw (json-decode raw))))
+
+(defun %respond-body-too-large ()
+  "The 413 response body (review F8). Toplevel so the handler closures hold a
+plain fdefinition."
+  (with-json-response (%ignored-status)
+    (values '(:error "request body too large") 413)))
 
 (defun make-handlers (server)
   "Return a list of (prefix . handler-fn) pairs for the 5 endpoints. Each
 handler-fn is a Hunchentoot-compatible zero-argument function that returns the
-JSON string response."
+JSON string response. The three POST endpoints are wrapped by wrap-body
+(review F8): the declared content-length is checked against max-body-size
+BEFORE the body is read (413 without reading), and a post-read violation
+signaled by %read-json-body is mapped to 413 the same way."
   (flet ((wrap (thunk)
-           (lambda () (with-json-response (status) (funcall thunk)))))
+           (lambda () (with-json-response (status) (funcall thunk))))
+         (wrap-body (thunk)
+           ;; OUTSIDE wrap: on a violation this returns its own fully-formed
+           ;; 413 response (with-json-response applied exactly once); on the
+           ;; happy path it just passes through the (already wrapped) handler's
+           ;; response string.
+           (lambda ()
+             (if (%body-size-violation-p (%request-content-length) nil
+                                         (server-max-body-size server))
+                 (%respond-body-too-large)
+                 (handler-case (funcall thunk)
+                   (%body-too-large () (%respond-body-too-large)))))))
     (list
      (cons "/session/start"
-           (wrap (lambda () (handle-start server (%read-json-body)))))
+           (wrap-body (wrap (lambda () (handle-start server (%read-json-body server))))))
      (cons "/session/step"
-           (wrap (lambda () (handle-step  server (%read-json-body)))))
+           (wrap-body (wrap (lambda () (handle-step  server (%read-json-body server))))))
      (cons "/session/end"
-           (wrap (lambda () (handle-end   server (%read-json-body)))))
+           (wrap-body (wrap (lambda () (handle-end   server (%read-json-body server))))))
      (cons "/student/mastery"
            (wrap (lambda ()
                    (handle-mastery server

@@ -138,3 +138,68 @@
               (asdf:system-relative-pathname "act-r" "tutorial/unit1/addition.lisp"))))
     (is (every #'null (mapcar #'production-feedback
                               (model-definition-productions md))))))
+
+;;; ---------- Review F7: add-dm subset contract + sgp accumulation -------------
+
+(defun %tmp-model-path (name)
+  (pathname (format nil "/tmp/libactr-~a.lisp" name)))
+
+(test reader.name-only-dm-entries-are-empty-chunks
+  "F7: a NAME-only add-dm entry ((shark) — the tutorial semantic.lisp shape) is
+accepted as an empty chunk (nil isa, no slots) instead of being silently
+dropped; the standard named+isa shape is unchanged."
+  (let ((tmp (%tmp-model-path "dm-name-only")))
+    (with-open-file (f tmp :direction :output :if-exists :supersede)
+      (print '(clear-all) f)
+      (print '(define-model dm1
+                (chunk-type property object attribute value)
+                (add-dm
+                 (shark) (dangerous)
+                 (p1 isa property object shark attribute dangerous value true))
+                (goal-focus (isa property object shark))) f))
+    (unwind-protect
+        (let* ((md (read-model-file tmp))
+               (dm (model-definition-chunks md)))
+          (is (= 3 (hash-table-count dm)))
+          ;; name-only entries: present, empty
+          (let ((shark (gethash 'shark dm)))
+            (is (not (null shark)))
+            (is (null (chunk-isa shark)))
+            (is (null (chunk-slots shark))))
+          ;; standard entry unchanged
+          (let ((p1 (gethash 'p1 dm)))
+            (is (eq 'property (chunk-isa p1)))
+            (is (= 3 (length (chunk-slots p1))))))
+      (delete-file tmp))))
+
+(test reader.unnamed-dm-chunk-signals
+  "F7: an UNNAMED chunk ((isa type ...) — legal upstream ACT-R but outside the
+libactr subset) used to be SILENTLY SKIPPED; it now signals an error naming the
+entry (fail loudly — the model quietly matched less than intended)."
+  (let ((tmp (%tmp-model-path "dm-unnamed")))
+    (with-open-file (f tmp :direction :output :if-exists :supersede)
+      (print '(clear-all) f)
+      (print '(define-model dm2
+                (chunk-type number number next)
+                (add-dm
+                 (isa number number one next two))) f))
+    (unwind-protect
+        (signals error (read-model-file tmp))
+      (delete-file tmp))))
+
+(test reader.multiple-sgp-forms-accumulate
+  "F7: multiple SGP forms accumulate into params (the old reader kept only the
+LAST one, silently discarding earlier parameter declarations)."
+  (let ((tmp (%tmp-model-path "sgp-accumulate")))
+    (with-open-file (f tmp :direction :output :if-exists :supersede)
+      (print '(clear-all) f)
+      (print '(define-model sgp1
+                (sgp :esc t)
+                (sgp :lf .05 :ans 0.2)) f))
+    (unwind-protect
+        (let ((params (libactr::model-definition-params (read-model-file tmp))))
+          (is (= 6 (length params)))
+          (is (find :esc params))
+          (is (find :lf params))
+          (is (find 0.2 params :test #'equalp)))
+      (delete-file tmp))))

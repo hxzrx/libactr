@@ -82,6 +82,9 @@
    #:kt-params-l0 #:kt-params-transit #:kt-params-guess #:kt-params-slip
    #:kt-params-overrides
    #:kt-update #:kt-posterior #:kt-params-for
+   ;; BKT 参数契约校验(F9:每个参数 ∈ (0,1) 且 G+S<1;server/proxy 构造与
+   ;; compute-mastery 的 fail-fast 入口)
+   #:check-kt-params
    ;; ===== 稳定契约:authoring 层(apply-kc-map/bug-DSL/validate-bug-spec/符号 codec) =====
    ;; 面向领域作者:声明式 KC 归因、最小 bug-DSL(一处声明 → 产生式/检测/
    ;; prime 三件套)、spec 校验器、符号-tag codec。纯函数,零全局注册表
@@ -116,6 +119,8 @@
    #:adapter-model-package #:adapter-terminal-production
    #:adapter-intern #:adapter-goal-slot #:adapter-fact
    #:adapter-set-goal #:adapter-prime-pair #:adapter-primed-intent
+   ;; Review F5:统一 action 字段解析(缺失/非字符串/非整数 → bad-tutor-request)
+   #:adapter-action-field #:adapter-action-string #:adapter-action-integer
    ;; Phase 12: bug-DSL 运行时半边(prime fact + hidden intent 从同一 spec 派生)
    #:bug-goal-env #:bug-intent
    ;; 统一 malformed-input 条件(适配器 signal;HTTP 层映射 400)

@@ -28,6 +28,38 @@ keys are compared by eql (assoc default) — use keyword or symbol kc ids. No
 nesting: overrides live only on the top-level PARAMS."
   (or (cdr (assoc kc (kt-params-overrides params))) params))
 
+;;; ---------------------------------------------------------------------------
+;;; Parameter validation (review F9). The G+S<1 "non-deceptive region" invariant
+;;; was previously a docstring-only contract: an override with G+S>=1 drives
+;;; kt-update's Bayes denominator to zero (division by zero -> HTTP 500) or
+;;; negative. check-kt-params makes the invariant enforceable at the boundaries
+;;; where parameter sets enter the system (server/proxy construction, and
+;;; compute-mastery as the backstop). Pure: signals on violation, returns PARAMS.
+(defun %check-one-kt-params (p label)
+  (dolist (which '(:l0 :transit :guess :slip))
+    (let ((v (ecase which
+               (:l0 (kt-params-l0 p)) (:transit (kt-params-transit p))
+               (:guess (kt-params-guess p)) (:slip (kt-params-slip p)))))
+      (unless (and (realp v) (< 0 v) (< v 1))
+        (error "libactr: ~a has ~a = ~s — every BKT parameter must be a real in (0,1) exclusive"
+               label which v))))
+  (let ((g (kt-params-guess p)) (s (kt-params-slip p)))
+    (unless (< (+ g s) 1)
+      (error "libactr: ~a has guess ~s + slip ~s >= 1 — the non-deceptive-region invariant (G+S<1) keeps kt-update's denominator positive"
+             label g s))))
+
+(defun check-kt-params (params &optional (label "kt-params"))
+  "Signal an error when PARAMS (or any of its per-KC overrides) violates the BKT
+parameter contract: each of L0/T/G/S a real strictly inside (0,1), and
+G+S<1 per parameter set. LABEL names the offending set in the message. Returns
+PARAMS on success. Fail-fast seam for server/proxy construction; compute-mastery
+calls it as the backstop."
+  (check-type params kt-params)
+  (%check-one-kt-params params label)
+  (dolist (o (kt-params-overrides params) params)
+    (%check-one-kt-params (cdr o)
+                          (format nil "~a override ~a" label (car o)))))
+
 (defun kt-update (p-l correct-p params)
   "One BKT step. Equation (b) [correct] or (c) [incorrect] gives the posterior
 P(L|obs) via Bayes; equation (d) applies transit (learning may occur on this

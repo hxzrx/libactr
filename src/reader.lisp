@@ -89,7 +89,10 @@
                   ((string= head "GOAL-FOCUS")
                    (setf initial-goal (parse-goal-focus (cdr inner) dm)))
                   ((string= head "SGP")
-                   (setf params (cdr inner)))
+                   ;; Review F7: multiple SGP forms accumulate (the old
+                   ;; last-wins silently discarded earlier parameter
+                   ;; declarations — the params alist is informational).
+                   (setf params (append params (cdr inner))))
                   (t nil)))))))
       (make-model-definition :chunk-types ct :chunks dm
                              :productions (nreverse productions)
@@ -124,14 +127,30 @@
 
 (defun parse-dm (body)
   "Parse an add-dm body into (name . chunk) pairs.
-   Each entry is (name isa type slot val slot val ...)."
-  (loop :for entry :in body
-        :when (and (consp entry) (sym= (second entry) "ISA"))
+   Accepted entry shapes (review F7 — everything else SIGNALS an error naming
+   the entry; the old silent skip dropped facts with no diagnostic and the
+   compiled model quietly matched less than intended):
+     (name isa type slot val ...)   ; the common subset shape
+     (name)                         ; NAME-only declaration — a legal upstream
+                                    ; ACT-R shape (e.g. tutorial semantic.lisp's
+                                    ; (shark) (dangerous) ...): an empty chunk
+                                    ; with no type and no slots
+   Rejected (outside the subset): atoms, unnamed chunks ((isa type ...)), and
+   (name slot val ...) without an ISA marker."
+  (flet ((bad (entry)
+           (error "libactr: read-model-file: add-dm entry ~s is outside the subset (expected (name isa type slot val ...) or a name-only (name) declaration); unnamed chunks are not supported"
+                  entry)))
+    (loop :for entry :in body
+          :do (cond
+                ((and (consp entry) (sym= (second entry) "ISA")))          ; standard
+                ((and (consp entry) (null (rest entry))
+                      (symbolp (first entry))))                            ; (name)
+                (t (bad entry)))
           :collect (let* ((name (first entry))
                           (type (third entry))
                           (pairs (loop :for (k v) :on (cdddr entry) :by #'cddr
                                        :when k :collect (cons k v))))
-                     (cons name (make-chunk :isa type :slots pairs)))))
+                     (cons name (make-chunk :isa type :slots pairs))))))
 
 (defun parse-goal-focus (body dm-table)
   "Parse a goal-focus body into a chunk.

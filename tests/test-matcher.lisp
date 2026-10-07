@@ -380,3 +380,59 @@
           (libactr:make-chunk :isa 'number :slots '((number . one))))
     (is-false (query-matches-p prod state-empty))
     (is-false (query-matches-p prod state-full))))
+
+;;; ---------- Review F6: official ACT-R value equality --------------------------
+;;;
+;;; libactr previously compared slot values with EQUAL; official ACT-R's
+;;; chunk-slot-equal (actr7.x framework/chunks.lisp) is EQ, else STRING-EQUAL
+;;; for strings, else EQUALP. slot-value-equal mirrors that: strings compare
+;;; case-insensitively and mixed-type numbers agree ((equalp 5 5.0) is T).
+
+(defun %pattern-production (slot-tests)
+  "A one-pattern production over the goal buffer for value-equality probes."
+  (make-production
+   'probe
+   (list (make-buffer-pattern 'goal := 'probe-type slot-tests))
+   nil nil :correct))
+
+(defun %state-with-goal (slots)
+  (let ((state (make-buffer-state)))
+    (set-buffer-chunk state 'goal (make-chunk :isa 'probe-type :slots slots))
+    state))
+
+(test matcher.string-literal-matches-case-insensitively
+  "F6: a :literal string test matches a chunk slot value differing only in
+case (official string-equal semantics; EQUAL under-called this)."
+  (let ((prod (%pattern-production
+               (list (make-slot-test 'sum :literal "SIX"))))
+        (state (%state-with-goal '((sum . "six")))))
+    (is (= 1 (length (matching-productions (list prod) state))))))
+
+(test matcher.variable-binding-agrees-across-numeric-types
+  "F6: a variable bound to 5 agrees with a later 5.0 test (official EQUALP
+semantics; EQUAL treated them as a conflict)."
+  (let ((prod (%pattern-production
+               (list (make-slot-test 'sum :variable '=x)
+                     (make-slot-test 'count :literal 5.0))))
+        (state (%state-with-goal '((sum . 5) (count . 5)))))
+    (is (= 1 (length (matching-productions (list prod) state))))))
+
+(test matcher.negation-uses-value-equality
+  "F6: a negated literal excludes values that are EQUALP/STRING-EQUAL to it —
+(¬ sum = \"SIX\") does NOT match a chunk holding \"six\"."
+  (let ((prod (%pattern-production
+               (list (make-slot-test 'sum :negation (cons :literal "SIX")))))
+        (state (%state-with-goal '((sum . "six")))))
+    (is (null (matching-productions (list prod) state)))))
+
+(test matcher.literal-still-exact-for-symbols
+  "F6 control: symbol literals still compare exactly (EQ path), and a genuinely
+different value still fails."
+  (let ((prod (%pattern-production
+               (list (make-slot-test 'sum :literal 'six))))
+        (state (%state-with-goal '((sum . six)))))
+    (is (= 1 (length (matching-productions (list prod) state)))))
+  (let ((prod (%pattern-production
+               (list (make-slot-test 'sum :literal 'seven))))
+        (state (%state-with-goal '((sum . six)))))
+    (is (null (matching-productions (list prod) state)))))

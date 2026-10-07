@@ -93,12 +93,10 @@ compiled model serves any verb). Returns the session."
   the derived regular-p / known-p); no match -> bare intent (off-path,
   incl. unknown verbs — design behavior)."
   (flet ((gi (name) (libactr:adapter-intern a name)))
-    (let* ((type (cdr (assoc "type" action :test #'string=)))
-           (raw-answer (cdr (assoc "value" action :test #'string=))))
-      ;; B1 (phase 14): missing value / unset verb were TYPE-ERROR 500s.
-      (unless raw-answer
-        (libactr:signal-bad-request
-         "libactr/past-tense-adapter: answer action is missing \"value\""))
+    (let* ((type (libactr:adapter-action-string action "type" "past-tense-adapter"))
+           ;; Review F5: shared string guard — missing AND non-string values
+           ;; (an unquoted JSON number used to string-upcase into a 500).
+           (raw-answer (libactr:adapter-action-string action "value" "past-tense-adapter")))
       (let* ((answer (string-upcase raw-answer))
              (verb-sym (libactr:adapter-goal-slot a session "VERB")))
         (unless verb-sym

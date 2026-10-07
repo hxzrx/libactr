@@ -60,13 +60,13 @@ bad-tutor-request (400 over HTTP)."
           (values num1 den1 num2 den2))))))
 
 (defun %action-int (action key)
-  "The student's integer answer for KEY; a non-integer signals
-bad-tutor-request."
-  (let ((raw (cdr (assoc key action :test #'string=))))
-    (handler-case (parse-integer raw)
-      (parse-error ()
-        (libactr:signal-bad-request
-         "libactr/fraction-adapter: action ~a must be an integer, got ~s" key raw)))))
+  "The student's integer answer for KEY (review F5: delegates to the shared
+adapter-action-integer — missing, non-string, and non-integer entries all
+signal bad-tutor-request. The old hand-rolled parse-integer let a missing entry
+((parse-integer nil) is a TYPE-ERROR, not a parse-error) and an unquoted JSON
+number escape as HTTP 500s — the phase-14 B1 fix covered the other three
+domains but fraction was missed)."
+  (libactr:adapter-action-integer action key "fraction-adapter"))
 
 ;;; --- adapter protocol ---
 
@@ -85,7 +85,7 @@ model's default initial-goal so one compiled model serves any problem."
 computes the correct value, detects the bug (if any), and primes retrieval with
 the matching fact (lcm-fact / sum-fact / reduce-fact / bug-fact). See spec §6."
   (flet ((gi (name) (libactr:adapter-intern a name)))
-    (let* ((type (cdr (assoc "type" action :test #'string=)))
+    (let* ((type (libactr:adapter-action-string action "type" "fraction-adapter"))
            (num1 (libactr:adapter-goal-slot a session "NUM1"))
            (den1 (libactr:adapter-goal-slot a session "DEN1"))
            (num2 (libactr:adapter-goal-slot a session "NUM2"))

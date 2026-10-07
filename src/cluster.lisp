@@ -117,17 +117,18 @@ heartbeat; the per-request hot path is untouched (spec §4.1)."
   "A1: drop local session-handles whose sess: route names another worker.
 Runs under the manager redis lock (caller holds it); takes NO session locks
 (an in-flight step racing the remhash is the documented bounded residual).
-Collect-then-drop (maphash must not run concurrent remhash on the same
-table). server-drop-session nests the students-lock inside the manager lock
-— safe: no code path takes them in the opposite order (server-start-session
-issues zero redis commands while holding students-lock)."
+Review F1: iterates the REGISTRY SNAPSHOT (server-sessions-snapshot — a live
+maphash over the sessions table races concurrent setf/remhash from request
+threads; plain CL hash tables are unsafe under concurrent reader+writer).
+server-drop-session nests the students-lock inside the manager lock — safe:
+no code path takes them in the opposite order (server-start-session issues
+zero redis commands while holding the registry lock)."
   (let ((stale nil))
-    (maphash (lambda (sid handle)
-               (declare (ignore handle))
-               (let ((owner (redis:red-hget (cluster-sess-key m sid) "worker")))
-                 (when (and owner (not (string= owner (cluster-worker-id m))))
-                   (push (cons sid owner) stale))))
-             (libactr/server:server-sessions (cluster-server m)))
+    (dolist (pair (libactr/server:server-sessions-snapshot (cluster-server m)))
+      (let ((sid (car pair)))
+        (let ((owner (redis:red-hget (cluster-sess-key m sid) "worker")))
+          (when (and owner (not (string= owner (cluster-worker-id m))))
+            (push (cons sid owner) stale)))))
     (dolist (entry stale)
       (libactr/server:server-drop-session (cluster-server m) (car entry))
       ;; P01 (parked-minors cleanup): log the owner OBSERVED at scan time —
@@ -311,35 +312,42 @@ intern, arrays of tags map to lists, scalars pass through.]"
 
 (defun cluster-scan-tick (m)
   "One scan pass over the LOCAL server's active sessions: snapshot each under
-its session lock (consistent state, no step-hot-path cost) into the
-checkpoint store; then reconcile the worker-sess reverse index (sids no
-longer local -> SREM + drop the sess route). Returns (values checked
-dropped)."
+its session lock AND the student's log lock (both consistent, no step-hot-path
+cost — the log lock covers checkpoint-session's log-last-seq read of the
+shared student log) into the checkpoint store; then reconcile the worker-sess
+reverse index (sids no longer local -> SREM + drop the sess route). Returns
+(values checked dropped). Review F1: iterates the registry SNAPSHOT, never a
+live maphash (request threads setf/remhash the table concurrently). Lock
+order: session -> log -> store-redis (the same chain the step path uses)."
   (let ((checked 0) (dropped 0) (seen nil))
-    ;; [deviation from brief, one paren: the brief's maphash form was one
-    ;; close short (lambda never closed -> maphash swallowed the following
-    ;; with-cluster-redis form as a third argument); same class of defect as
-    ;; Task 7's fixture tail.]
-    (maphash (lambda (sid handle)
-               (push sid seen)
-               (incf checked)
-               ;; double parens: with-lock-held's lock clause takes ONE form
-               ;; (bordeaux apiv2 (place &key timeout)); a reader call is that
-               ;; one form [brief defect — brief used single parens].
-               (bordeaux-threads:with-lock-held ((libactr/server:handle-lock handle))
-                 (save-checkpoint (cluster-store m) sid
-                                  (libactr:checkpoint-session
-                                   (libactr/server:handle-session handle)))))
-             (libactr/server:server-sessions (cluster-server m)))
+    (dolist (pair (libactr/server:server-sessions-snapshot (cluster-server m)))
+      (let ((sid (car pair))
+            (handle (cdr pair)))
+        (push sid seen)
+        (incf checked)
+        (bordeaux-threads:with-lock-held ((libactr/server:handle-lock handle))
+          (bordeaux-threads:with-lock-held
+              ((libactr/server:server-log-lock
+                (cluster-server m)
+                (libactr:session-student-id (libactr/server:handle-session handle))))
+            (save-checkpoint (cluster-store m) sid
+                             (libactr:checkpoint-session
+                              (libactr/server:handle-session handle)))))))
     (with-cluster-redis (m)
-      (let ((key (cluster-worker-sess-key m (cluster-worker-id m))))
+      (let ((key (cluster-worker-sess-key m (cluster-worker-id m)))
+            ;; registry-locked snapshot taken AFTER the checkpoint pass —
+            ;; strictly fresher than SEEN (review F1: the old bare gethash
+            ;; here was an unlocked registry read).
+            (local (mapcar #'car
+                           (libactr/server:server-sessions-snapshot
+                            (cluster-server m)))))
         (dolist (sid (redis:red-smembers key))
           ;; TOCTOU (final review): a session installed + SADDed AFTER the
-          ;; maphash snapshot above is missing from SEEN; deleting its worker-
+          ;; snapshot above is missing from SEEN; deleting its worker-
           ;; sess entry + route here would 404 a live session forever. Only
-          ;; delete when the sid is absent from the local hash NOW as well.
+          ;; delete when the sid is absent from the local table NOW as well.
           (unless (or (member sid seen :test #'string=)
-                      (gethash sid (libactr/server:server-sessions (cluster-server m))))
+                      (member sid local :test #'string=))
             (incf dropped)
             (redis:red-srem key sid)
             (redis:red-del (cluster-sess-key m sid))))))
@@ -399,7 +407,7 @@ untouched, claim held until TTL) — the retry is closed by the five-field
 marker in cluster-takeover-tick."
   (let* ((server (cluster-server m))
          (model-id (getf checkpoint :model-id))
-         (entry (gethash model-id (libactr/server:server-models server))))
+         (entry (libactr/server:server-model-entry server model-id)))
     (unless entry
       (error "libactr/cluster: takeover of ~a needs model ~a registered locally"
              sid model-id))
@@ -410,12 +418,13 @@ marker in cluster-takeover-tick."
                  :key (libactr/server:student-events-key student-id)
                  :host (cluster-redis-host m) :port (cluster-redis-port m)))
            (session (libactr:restore-from-checkpoint checkpoint model log)))
-      (setf (gethash sid (libactr/server:server-sessions server))
-            (make-instance 'libactr/server:session-handle
-                           :session session
-                           :lock (bordeaux-threads:make-lock
-                                  (format nil "session-~a" sid))
-                           :adapter adapter))
+      (libactr/server:server-register-handle
+       server sid
+       (make-instance 'libactr/server:session-handle
+                      :session session
+                      :lock (bordeaux-threads:make-lock
+                             (format nil "session-~a" sid))
+                      :adapter adapter))
       (with-cluster-redis (m)
         ;; A4 (phase 14): the route flip — both routes (HSET+HINCRBY each),
         ;; the reverse index (SREM/SADD), and the claim delete — is ONE
@@ -503,13 +512,13 @@ return 0"
                 ;; checkpoint -> drop; local sid occupied -> OUR half-adopt
                 ;; (marker matches) retries the idempotent flip, a foreign
                 ;; collision skips with a warning; else adopt.
-                ;; Single gethash read (final review): the previous shape read
-                ;; the sessions table twice (test + marker arm) — a TOCTOU
-                ;; window if the table changed between the two reads.
+                ;; Single registry-locked read (final review + F1): the
+                ;; previous shape read the sessions table TWICE (test + marker
+                ;; arm) — a TOCTOU window if the table changed between the two
+                ;; reads — and unlocked, racing request threads.
                 (let* ((cp (load-checkpoint (cluster-store m) sid))
-                       (h (and cp (gethash sid
-                                          (libactr/server:server-sessions
-                                           (cluster-server m))))))
+                       (h (and cp (libactr/server:server-find-session-handle
+                                   (cluster-server m) sid))))
                   (cond
                     ((null cp)
                      ;; P09 (parked-minors cleanup): not silent — the same

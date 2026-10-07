@@ -60,13 +60,14 @@
 
 (defun covers-p (intent effect-state)
   "Subset-consistent coverage: every (buffer slot value) in INTENT.assignments
-   must EQUAL EFFECT-STATE's value at (buffer slot). Extra slots the production
-   changed (that the student didn't express) are ignored. Any expressed slot
-   that contradicts the effect → not covered."
+   must agree with EFFECT-STATE's value at (buffer slot) under slot-value-equal
+   (official ACT-R value equality — matcher.lisp; review F6). Extra slots the
+   production changed (that the student didn't express) are ignored. Any
+   expressed slot that contradicts the effect → not covered."
   (every (lambda (assign)
            (destructuring-bind (buffer slot value) assign
              (let ((chunk (buffer-chunk effect-state buffer)))
-               (and chunk (equal (chunk-slot chunk slot) value)))))
+               (and chunk (slot-value-equal (chunk-slot chunk slot) value)))))
          (step-intent-assignments intent)))
 
 ;; Disambiguation strategy protocol.

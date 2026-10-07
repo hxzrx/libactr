@@ -56,6 +56,18 @@
 
 ;; ------------------------------------------------------------------ helpers
 
+(defun slot-value-equal (a b)
+  "Value equality for chunk-slot comparisons — mirrors official ACT-R's
+chunk-slot-equal (actr7.x framework/chunks.lisp): EQ, else case-insensitive
+STRING= when both are strings, else EQUALP. Review F6: libactr previously used
+EQUAL everywhere, which disagrees with the oracle on mixed-type numbers
+((equalp 5 5.0) is T, (equal 5 5.0) is NIL) and on string case — a model using
+either would dual-track diverge. libactr slot values never hold chunk
+references, so the official chunk-identity clause has no analogue here."
+  (or (eq a b)
+      (and (stringp a) (stringp b) (string-equal a b))
+      (equalp a b)))
+
 (defun chunk-slot (chunk slot)
   "Value of SLOT inside CHUNK's slots alist, or nil if absent."
   (cdr (assoc slot (chunk-slots chunk))))
@@ -77,13 +89,14 @@
 
 (defun bind (var value bindings)
   "Return a bindings alist with VAR -> VALUE added.  If VAR is already bound,
-   the existing binding must agree (EQUAL) — returns the same alist in that
-   case.  On disagreement returns the sentinel :conflict so callers can
-   distinguish a failed unification from a freshly extended alist.  Never
-   mutates the input alist."
+   the existing binding must agree (slot-value-equal — official ACT-R value
+   equality, see its docstring) — returns the same alist in that case.  On
+   disagreement returns the sentinel :conflict so callers can distinguish a
+   failed unification from a freshly extended alist.  Never mutates the input
+   alist."
   (let ((existing (assoc var bindings)))
     (cond ((null existing) (acons var value bindings))
-          ((equal (cdr existing) value) bindings)
+          ((slot-value-equal (cdr existing) value) bindings)
           (t :conflict))))
 
 ;; ------------------------------------------------------ single-slot matching
@@ -97,7 +110,7 @@
   (let ((actual (chunk-slot chunk (slot-test-slot st))))
     (ecase (slot-test-kind st)
       (:literal
-       (if (equal actual (slot-test-operand st))
+       (if (slot-value-equal actual (slot-test-operand st))
            bindings
            :libactr-match-fail))
       (:variable
@@ -109,14 +122,14 @@
        (destructuring-bind (inner-kind . inner-val) (slot-test-operand st)
          (ecase inner-kind
            (:literal
-            (if (not (equal actual inner-val))
+            (if (not (slot-value-equal actual inner-val))
                 bindings
                 :libactr-match-fail))
            (:variable
             ;; Negated variable must be bound elsewhere first; if it is not,
             ;; we cannot decide and conservatively fail.
             (let ((bv (assoc inner-val bindings)))
-              (if (and bv (not (equal actual (cdr bv))))
+              (if (and bv (not (slot-value-equal actual (cdr bv))))
                   bindings
                   :libactr-match-fail)))))))))
 

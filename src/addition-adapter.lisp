@@ -82,15 +82,12 @@ All failures signal bad-tutor-request (400 over HTTP)."
     (values (intern (%num-word a) pkg) (intern (%num-word b) pkg))))
 
 (defun %action-value (action a)
-  "Read the \"value\" entry of ACTION (an alist with string keys, as decoded by
-the HTTP layer) and intern it as a model-package uppercase symbol via the base
-adapter-intern. B1 (phase 14): a missing value entry signals bad-tutor-request
-(string-upcase of nil used to reach a TYPE-ERROR -> HTTP 500)."
-  (let ((raw (cdr (assoc "value" action :test #'string=))))
-    (unless raw
-      (libactr:signal-bad-request
-       "libactr/addition-adapter: action ~s is missing the \"value\" entry" action))
-    (libactr:adapter-intern a (string-upcase raw))))
+  "Read the \"value\" entry of ACTION and intern it as a model-package uppercase
+symbol via the base adapter-intern (review F5: the shared adapter-action-string
+makes missing AND non-string entries — an unquoted JSON number used to
+string-upcase into a TYPE-ERROR 500 — bad-tutor-request 400s)."
+  (libactr:adapter-intern
+   a (string-upcase (libactr:adapter-action-string action "value" "addition-adapter"))))
 
 ;;; --- adapter protocol ---
 
@@ -116,7 +113,7 @@ PRIME slot (Phase 6 multi-step). Action types:
   :submit      -> terminate-addition (retrieval primed with the current sum,
                   bundled on the intent's PRIME slot)."
   (flet ((gi (name) (libactr:adapter-intern a name)))
-    (let ((type (cdr (assoc "type" action :test #'string=))))
+    (let ((type (libactr:adapter-action-string action "type" "addition-adapter")))
       (cond
         ((string= type "start")
          ;; initialize-addition's LHS has no =retrieval> test; no priming needed.

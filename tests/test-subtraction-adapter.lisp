@@ -292,3 +292,19 @@ and 400 over the handler (phase 12 debt #1/#2)."
              (libactr/server:server-step-session
               s sid '(("type" . "digit") ("value" . "1")))))              ; stage DONE
       (libactr/server:stop-tutor-server s))))
+
+;;; --- Review F5: unified action-field parsing (non-string value → 400) ---------
+
+(test subtraction-adapter.nonstring-value-is-bad-request
+  "F5: the phase-14 nil guard only caught a MISSING value — an unquoted JSON
+number (decoded as an integer) sailed into (parse-integer 6), a TYPE-ERROR
+500. The shared helper makes every non-string shape a bad-tutor-request."
+  (let ((s (%server)))
+    (unwind-protect
+         (let ((sid (libactr/server:server-start-session s "f5" "52-18" "sub")))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session
+              s sid '(("type" . "digit") ("value" . 4))))
+           (signals libactr:bad-tutor-request
+             (libactr/server:server-step-session s sid '((type . 4)))))
+      (libactr/server:stop-tutor-server s))))

@@ -132,6 +132,42 @@ layer maps it to 400. Programmatic callers see the condition itself."))
   "Signal a bad-tutor-request with a formatted MESSAGE. Never returns."
   (error 'bad-tutor-request :message (apply #'format nil format-control args)))
 
+;;; ===========================================================================
+;;; Review F5: unified action-field parsing. The four domain adapters each
+;;; hand-rolled the same \"read an entry from the decoded action alist\" logic,
+;;; with divergent robustness: (parse-integer nil) signals a TYPE-ERROR (not a
+;;; parse-error) that escaped every handler-case as an HTTP 500, and an unquoted
+;;; JSON number decodes as an INTEGER that no nil-guard catches. These helpers
+;;; make every malformed shape (missing entry, non-string entry, non-integer
+;;; string) a bad-tutor-request (400 at the HTTP boundary) with ONE message
+;;; shape across domains. DOMAIN names the adapter in the message (e.g.
+;;; \"fraction-adapter\").
+
+(defun adapter-action-field (action key)
+  "ACTION alist (string keys, as decoded at the HTTP boundary) -> the raw value
+at KEY, or nil when absent. Pure lookup; no validation."
+  (cdr (assoc key action :test #'string=)))
+
+(defun adapter-action-string (action key &optional (domain "adapter"))
+  "The string value at KEY in ACTION. Signals bad-tutor-request when the entry
+is missing or not a string (nil, an unquoted JSON number, a nested object) —
+the 500-class TYPE-ERRORs of the hand-rolled lookups, unified."
+  (let ((raw (adapter-action-field action key)))
+    (unless (stringp raw)
+      (signal-bad-request "libactr/~a: action ~s needs a string \"~a\" entry, got ~s"
+                          domain action key raw))
+    raw))
+
+(defun adapter-action-integer (action key &optional (domain "adapter"))
+  "The integer value at KEY in ACTION (parsed from its string entry). Signals
+bad-tutor-request when the entry is missing/not a string (via
+adapter-action-string) or not a parseable integer."
+  (let ((raw (adapter-action-string action key domain)))
+    (handler-case (parse-integer raw)
+      (parse-error ()
+        (signal-bad-request "libactr/~a: action \"~a\" must be an integer, got ~s"
+                            domain key raw)))))
+
 (defun bug-goal-env (adapter session)
   "The goal chunk's slots alist, verbatim — the goal half of a bug-detection
 environment (problem variables + prior-step state). nil when the goal buffer

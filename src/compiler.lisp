@@ -130,12 +130,30 @@
 
 ;; ------------------------------------------------------------- entry point
 
+(defun %check-lhs-subset (prod)
+  "Review F7: reject out-of-subset LHS buffer modifiers with a diagnostic that
+names the production and the offending pattern. The reader accepts :+ :- :!
+modifiers (legal RHS shapes — a +retrieval> request, a -buffer> clear, a
+!output! action — and the '-' slot-negation prefix can attach to a buffer
+marker), but an LHS pattern may only be a =buf> content test or a ?buf> state
+query. Without this check such a pattern reached make-buffer-pattern's slot
+type declaration (member := :?) and died as an opaque raw TYPE-ERROR (or, for
+special actions, was silently dropped by compile-pattern)."
+  (dolist (raw (production-lhs prod))
+    (when (and (consp raw) (member (second raw) '(:+ :- :!)))
+      (error "libactr: compile-model: production ~a: LHS pattern ~s is outside the subset — the LHS supports =buf> content tests and ?buf> state queries only (the ~s modifier is RHS-only)"
+             (production-name prod) (first raw) (second raw))))
+  prod)
+
 (defun compile-model (md)
   "Compile a model-definition in place: merge chunk-type inheritance, then
    rewrite every production's lhs (buffer-pattern) and rhs (action).  Returns
-   MD.  No global state — pure transform of the argument."
+   MD.  No global state — pure transform of the argument.  Signals a diagnostic
+   error when a production's LHS carries an out-of-subset buffer modifier
+   (+buf>/-buf>/!action! — see %check-lhs-subset)."
   (merge-chunk-type-slots (model-definition-chunk-types md))
   (dolist (prod (model-definition-productions md))
+    (%check-lhs-subset prod)
     (setf (production-lhs prod)
           (remove nil (mapcar #'compile-pattern (production-lhs prod))))
     (setf (production-rhs prod)

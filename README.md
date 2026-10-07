@@ -136,10 +136,14 @@ Endpoints:
 The domain adapter is the single engine/domain seam: it parses the action,
 computes the correct answer, detects declared bugs, and returns the
 step-intent(s) to trace. `start-tutor-server` also accepts `:redis-config
-(:host ... :port ...)` (durable per-student event logs via `libactr/redis-store`)
-and `:kt-params` (per-KC Bayesian overrides reaching both mastery call
-sites). Per-student starts are idempotent per server: while a student has an
-active session, repeat starts return its id.
+(:host ... :port ...)` (durable per-student event logs via `libactr/redis-store`),
+`:kt-params` (per-KC Bayesian overrides reaching both mastery call
+sites), and `:max-body-size` (request-body cap in bytes, default 64 KiB —
+oversized POSTs get 413 before being read; nil disables). Per-student starts
+are idempotent per server: while a student has an active session, repeat
+starts return its id. Mastery values are served from a per-student incremental
+BKT cache (only events appended since the last call are folded — identical to
+a full replay by construction).
 
 ## Scale it (libactr/cluster)
 
@@ -234,7 +238,7 @@ production shape.
 |---|---|---|
 | `libactr` | Core engine: reader → compiler → matcher → tracer, sessions, event log, checkpoints, BKT knowledge tracing, authoring/bug-DSL — pure, zero globals, `:depends-on ()` | — |
 | `libactr/server` | HTTP service layer: `tutor-server`, model registry, per-session locks, adapter protocol + reusable base, JSON wire format | `libactr`, hunchentoot, bordeaux-threads, yason |
-| `libactr/redis-store` | Durable Redis (AOF) event-log backend, specializes the event-log protocol seam | `libactr`, cl-redis, yason |
+| `libactr/redis-store` | Durable Redis (AOF) event-log backend, specializes the event-log protocol seam | `libactr`, cl-redis, yason, bordeaux-threads |
 | `libactr/cluster` | Multi-worker orchestration: manager (lease/checkpoint/takeover), checkpoint stores, front proxy | `libactr/server`, `libactr/redis-store`, dexador, yason |
 | `libactr/oracle` | Dev-time dual-track oracle (runs models under the vendored ACT-R snapshot and compares) | `libactr`, `act-r` |
 | `libactr/addition-tutor` | Reference example tutor (act-r tutorial addition model + buggy library + KC map) | `libactr` |
@@ -323,6 +327,7 @@ tiers state audience and stability) plus the `:libactr/cluster` package.
 | `compute-mastery` | fold events into per-KC `(:kc :correct :total :accuracy :p-l)`; P(L) is Corbett & Anderson BKT |
 | `kt-params`, `kt-params-p`, `make-kt-params`, `-l0`, `-transit`, `-guess`, `-slip`, `-overrides` | BKT four parameters + per-KC override table |
 | `kt-update`, `kt-posterior`, `kt-params-for` | BKT primitives (single-observation update, final posterior, per-KC parameter lookup) |
+| `check-kt-params` | fail-fast BKT contract check: every parameter in (0,1) and G+S<1 per set incl. overrides |
 
 ### Tier 3 — authoring (stable contract)
 
@@ -345,9 +350,21 @@ tiers state audience and stability) plus the `:libactr/cluster` package.
 | `standard-domain-adapter` | reusable adapter base: model-package/terminal-production slots, plumbing helpers, default `step-done?` |
 | `adapter-model-package`, `adapter-terminal-production` | base-class configuration readers |
 | `adapter-intern`, `adapter-goal-slot`, `adapter-fact`, `adapter-set-goal`, `adapter-prime-pair`, `adapter-primed-intent` | adapter plumbing helpers (interning, goal reads/writes, fact chunks, primed intents) |
+| `adapter-action-field`, `adapter-action-string`, `adapter-action-integer` | unified decoded-action field reads — missing/non-string/non-integer entries signal `bad-tutor-request` (400), never a 500 |
 | `bug-goal-env`, `bug-intent` | bug-DSL runtime half: the goal environment and the prime + hidden intent pair derived from one spec |
 | `bad-tutor-request`, `bad-tutor-request-message`, `signal-bad-request` | unified malformed-input condition (adapters signal; HTTP maps to 400) |
 | `redis-event-log`, `redis-event-log-p`, `make-redis-event-log`, `-connection`, `-key`, `-host`, `-port` | durable Redis event-log backend |
+
+### `:libactr/server` package — concurrency seams (`libactr/server` system)
+
+| Symbol | Short description |
+|---|---|
+| `server-sessions-snapshot` | registry-locked fresh alist copy of the sessions registry (iterators never maphash the live table) |
+| `server-register-handle` | install a session-handle under an id (registry-locked write; the cluster takeover path) |
+| `server-find-session-handle` | registry-locked session-handle lookup |
+| `server-model-entry` | registry-locked model-registry lookup |
+| `server-log-lock` | the per-student lock serializing every access to that student's shared event log (and its mastery-cache entry) |
+| `server-max-body-size` | per-server request-body cap in bytes (nil = unlimited) |
 
 ### `:libactr/cluster` package (`libactr/cluster` system)
 
@@ -391,14 +408,15 @@ sbcl --non-interactive --eval '(ql:quickload :libactr/cluster-test)' --eval '(5a
 # :libactr/past-tense-tutor, :libactr/subtraction-tutor, :libactr/empirical
 ```
 
-Green baseline at 0.4.0, re-verified 2026-09-02 against the vendored
-oracle (SBCL 2.6.8, assertion-level FiveAM counts, 0
-failures / 0 skips): `:libactr` 381, `:libactr/server` 316, `:libactr/cluster` 128,
-`:libactr/redis-store` 51, `:libactr/empirical` 35, `:libactr/fraction-tutor` 22,
-`:libactr/past-tense-tutor` 24, `:libactr/subtraction-tutor` 21; the concurrent and
-dual legs rerun the `:libactr` suite with bordeaux/act-r loaded (407 / 414 as
-run). The cluster e2e spawns real SBCL worker subprocesses and kills one
-mid-problem.
+Green baseline at 0.4.1 (review fixes F1-F9), re-verified 2026-10-07 on
+SBCL 2.6.7 with the core suite re-verified identical on CCL 1.13 (Windows;
+assertion-level FiveAM counts, 0 failures): `:libactr` 409, `:libactr/server`
+366, `:libactr/empirical` 35, `:libactr/fraction-tutor` 22,
+`:libactr/past-tense-tutor` 24, `:libactr/subtraction-tutor` 21; the concurrent
+and dual legs rerun the `:libactr` suite with bordeaux/act-r loaded (435 /
+468 as run). The redis-dependent suites need a redis-server binary on unix-style
+paths (they skip without one); the cluster e2e spawns real SBCL worker
+subprocesses and kills one mid-problem.
 
 ## Dual-track validation
 

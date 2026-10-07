@@ -884,3 +884,213 @@ students-lock WITHOUT ending the session (no end-event) and is idempotent."
              (is (null (gethash sid (server-sessions s))))
              (is (null (libactr/server:server-drop-session s sid)))))  ; idempotent
       (stop-tutor-server s))))
+
+;;; ---------------------------------------------------------------------------
+;;; Review fixes F1/F3/F4/F8: registry read-path locking, shared-log locking,
+;;; incremental mastery cache, request-body cap + student-id validation.
+;;; ---------------------------------------------------------------------------
+
+(test server.new-review-exports-present
+  "F1/F3/F5/F9 introduced exports (user-directed exceptions recorded in the
+CHANGELOG): the registry/log concurrency seams, the unified action-field
+helpers, and check-kt-params."
+  (dolist (s '("SERVER-SESSIONS-SNAPSHOT" "SERVER-LOG-LOCK" "SERVER-REGISTER-HANDLE"
+               "SERVER-FIND-SESSION-HANDLE" "SERVER-MODEL-ENTRY" "SERVER-MAX-BODY-SIZE"))
+    (is (eq :external (nth-value 1 (find-symbol s :libactr/server)))
+        "~a not exported" s))
+  (dolist (s '("CHECK-KT-PARAMS" "ADAPTER-ACTION-FIELD" "ADAPTER-ACTION-STRING"
+               "ADAPTER-ACTION-INTEGER"))
+    (is (eq :external (nth-value 1 (find-symbol s :libactr)))
+        "~a not exported" s)))
+
+(test server.sessions-snapshot-is-a-registry-copy
+  "F1: server-sessions-snapshot returns a fresh alist copy of the sessions
+registry (the locked read seam the cluster ticks iterate)."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (let ((sid (server-start-session server "snap" "5+2" "add")))
+             (let ((snap (libactr/server:server-sessions-snapshot server)))
+               (is (= 1 (length snap)))
+               (is (string= sid (caar snap)))
+               (is (typep (cdar snap) 'session-handle)))
+             (server-end-session server sid)
+             (is (null (libactr/server:server-sessions-snapshot server)))))
+      (stop-tutor-server server))))
+
+(test server.concurrent-mixed-registry-read-write-stress
+  "F1/F3: N threads run the FULL operation mix (starts + steps + mastery +
+health + ends) concurrently on one server. Before the fix the step/mastery/
+health read paths touched the registries and the shared in-memory student log
+with NO lock while other threads wrote them. Every op must return its contract
+value; at quiesce the registry is consistent (all sessions ended, N students)."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil))
+        (n 8) (cycles 6) (errors nil))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (let ((threads
+                   (loop for i from 1 to n collect
+                         (let ((student (format nil "stress-~a" i)))
+                           (bt:make-thread
+                            (lambda ()
+                              (loop repeat cycles
+                                    do (handler-case
+                                           (let ((sid (server-start-session
+                                                       server student "5+2" "add")))
+                                             (dotimes (k 3)
+                                               (server-step-session server sid
+                                                                    '((type . start))))
+                                             (server-student-mastery server student)
+                                             (server-health server)
+                                             (server-end-session server sid))
+                                         (error (c)
+                                           (push (princ-to-string c) errors))))))))))
+             (mapcar #'bt:join-thread threads)
+             (is (null errors) "unexpected errors: ~a" errors)
+             ;; quiesced state: no active sessions, N students
+             (is (zerop (hash-table-count (server-sessions server))))
+             (is (= n (hash-table-count (server-students server))))))
+      (stop-tutor-server server))))
+
+(test server.mastery-read-during-steps-is-consistent
+  "F3: a mastery reader thread loops while a stepper thread appends to the SAME
+student's shared in-memory log. Before the fix the reader iterated the vector
+the writer was extending (unlocked). The reader must complete without error,
+and at quiesce the mastery result equals a from-scratch fold of the log. (The
+stub's repeated steps after the first are off-path-unclassified — kc nil,
+skipped by mastery — so the strong invariant is reader-safety + equality with
+the recompute, not an observation count.)"
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil))
+        (k 40))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (let* ((sid (server-start-session server "racy" "5+2" "add"))
+                  (stepper (bt:make-thread
+                            (lambda ()
+                              (dotimes (i k)
+                                (server-step-session server sid '((type . start)))))))
+                  (reader (bt:make-thread
+                           (lambda ()
+                             (loop
+                               (unless (bt:thread-alive-p stepper) (return))
+                               (handler-case (server-student-mastery server "racy")
+                                 (error (c) (return (princ-to-string c)))))))))
+             (bt:join-thread stepper)
+             (is (null (bt:join-thread reader)) "mastery reader errored")
+             ;; at quiesce: cached result == from-scratch recompute of the log
+             (let* ((ss (gethash "racy" (server-students server)))
+                    (recompute (compute-mastery
+                                (log-all-events (student-session-log ss))
+                                :kt-params (libactr/server:server-kt-params server))))
+               (is (equalp (server-student-mastery server "racy") recompute))
+               ;; and the log itself holds every appended event
+               (is (= k (log-last-seq (student-session-log ss)))))))
+      (stop-tutor-server server))))
+
+(test server.mastery-incremental-equals-recompute
+  "F4: with mastery calls interleaved between steps and session boundaries
+(cache hits + incremental folds + post-end continuation), the cached result
+equals a from-scratch compute-mastery fold of the same log, to the bit."
+  (flet ((from-scratch (server student-id)
+           (let ((ss (gethash student-id (server-students server))))
+             (compute-mastery (log-all-events (student-session-log ss))
+                              :kt-params (libactr/server:server-kt-params server)))))
+    (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+      (unwind-protect
+           (progn
+             (multiple-value-bind (md adapter) (%stub-model+adapter)
+               (register-model server "add" md adapter))
+             (let ((sid1 (server-start-session server "inc" "5+2" "add")))
+               (dotimes (i 5)
+                 (server-step-session server sid1 '((type . start)))
+                 ;; interleaved mastery reads exercise the cache
+                 (server-student-mastery server "inc")
+                 (is (equalp (server-student-mastery server "inc")
+                             (from-scratch server "inc"))
+                     "cache diverged after step ~a" i))
+               (server-end-session server sid1))
+             ;; second session for the same student: the fold CONTINUES across
+             ;; the boundary
+             (let ((sid2 (server-start-session server "inc" "3+1" "add")))
+               (dotimes (i 3)
+                 (server-step-session server sid2 '((type . start))))
+               (is (equalp (server-student-mastery server "inc")
+                           (from-scratch server "inc")))
+               (server-end-session server sid2)))
+        (stop-tutor-server server)))))
+
+(test server.start-tutor-server-rejects-bad-kt-params
+  "F9: server construction validates :kt-params fail-fast (a G+S>=1 override
+used to divide by zero at mastery time)."
+  (signals error
+    (start-tutor-server :port 0 :start-acceptor-p nil
+                        :kt-params (make-kt-params :guess 0.8d0 :slip 0.3d0))))
+
+(test server.start-validates-student-id
+  "F8: student_id is validated at session start — non-empty, printable, at most
+128 characters (it is embedded in redis keys and event records). A bad id
+signals bad-tutor-request (400 at the HTTP boundary)."
+  (let ((server (start-tutor-server :port 0 :start-acceptor-p nil)))
+    (unwind-protect
+         (progn
+           (multiple-value-bind (md adapter) (%stub-model+adapter)
+             (register-model server "add" md adapter))
+           (signals bad-tutor-request
+             (server-start-session server "" "5+2" "add"))
+           (signals bad-tutor-request
+             (server-start-session server nil "5+2" "add"))
+           (signals bad-tutor-request
+             (server-start-session server (make-string 200 :initial-element #\a)
+                                   "5+2" "add"))
+           (multiple-value-bind (resp status)
+               (libactr/server::handle-start
+                server '(("student_id" . "") ("problem_id" . "5+2")
+                         ("model_id" . "add")))
+             (declare (ignore resp))
+             (is (= 400 status))))
+      (stop-tutor-server server))))
+
+(test http.body-size-violation-predicate
+  "F8: the pure body-cap predicate — declared content-length, actual length,
+and a nil limit disabling the cap."
+  (let ((fn (symbol-function 'libactr/server::%body-size-violation-p)))
+    (is (null (funcall fn 100 nil nil)))            ; cap disabled
+    (is (null (funcall fn nil nil 64)))             ; nothing declared/read
+    (is (funcall fn 100 nil 64))                    ; declared over
+    (is (funcall fn nil 100 64))                    ; actual over
+    (is (null (funcall fn 64 64 64)))               ; exactly at the cap: fine
+    (is (funcall fn 65 65 64))                      ; one over: violation
+    (is (null (funcall fn nil 10 64)))))            ; under: fine
+
+(test http.body-cap-413-over-wire
+  "F8 over the wire: a server with :max-body-size 64 rejects an oversized
+POST body with 413 (declared content-length path — the body is refused before
+being read) and serves a small one normally (404 unknown session). dexador
+signals on 4xx/5xx, so statuses are read from the condition (the proxy's
+established pattern)."
+  (flet ((post-status (port json)
+           (handler-case
+               (multiple-value-bind (body status)
+                   (dex:post (format nil "http://127.0.0.1:~a/session/step" port)
+                             :content json)
+                 (declare (ignore body))
+                 status)
+             (dex:http-request-failed (c) (dex:response-status c)))))
+    (let* ((port (%find-free-port))
+           (s (libactr/server:start-tutor-server :port port :start-acceptor-p t
+                                                 :max-body-size 64)))
+      (unwind-protect
+           (progn
+             (sleep 0.3)
+             (is (= 413 (post-status
+                         port
+                         "{\"session_id\":\"x\",\"action\":{\"type\":\"start\",\"value\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}")))
+             ;; small body still served (404 unknown session — not 413)
+             (is (= 404 (post-status port "{\"session_id\":\"x\",\"action\":{}}"))))
+        (libactr/server:stop-tutor-server s)))))

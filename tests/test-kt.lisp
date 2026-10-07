@@ -60,3 +60,38 @@ with transit=0.01 the fold climbs slower -> strictly lower P(L)."
     (is (approx (kt-posterior (list t t t) base) 52/55))
     (is (< (kt-posterior (list t t t) slow)
            (kt-posterior (list t t t) base)))))
+
+;;; ---------- Review F9: BKT parameter-contract validation ----------------------
+
+(test kt.check-kt-params-accepts-valid-sets
+  "F9: the default set and a legal override table pass check-kt-params (returns
+the params)."
+  (let ((p (make-kt-params)))
+    (is (eq p (check-kt-params p))))
+  (let ((p (make-kt-params
+            :overrides (list (cons :kc (make-kt-params :transit 0.3d0))))))
+    (is (eq p (check-kt-params p)))))
+
+(test kt.check-kt-params-rejects-deceptive-region
+  "F9: G+S>=1 drives kt-update's Bayes denominator to zero — rejected at the
+boundary instead of dividing by zero at mastery time."
+  (signals error (check-kt-params (make-kt-params :guess 0.7d0 :slip 0.4d0))))
+
+(test kt.check-kt-params-rejects-out-of-range
+  "F9: every parameter must be a real strictly inside (0,1)."
+  (signals error (check-kt-params (make-kt-params :transit 1.0d0)))
+  (signals error (check-kt-params (make-kt-params :l0 0.0d0)))
+  (signals error (check-kt-params (make-kt-params :slip 1.5d0))))
+
+(test kt.check-kt-params-rejects-bad-override
+  "F9: overrides are validated too (a violating per-KC set used to slip through
+to the fold)."
+  (signals error
+    (check-kt-params
+     (make-kt-params
+      :overrides (list (cons :some-kc (make-kt-params :guess 0.9d0 :slip 0.2d0)))))))
+
+(test kt.compute-mastery-signals-on-bad-params
+  "F9 backstop: compute-mastery validates before folding (a clear error, not a
+division by zero mid-fold)."
+  (signals error (compute-mastery nil :kt-params (make-kt-params :guess 0.8d0 :slip 0.3d0))))
