@@ -677,6 +677,30 @@ writes sess/student/worker-sess keys; step and end flow through verbatim."
         (stop-cluster-manager m)
         (stop-tutor-server s)))))
 
+(test proxy.health-reports-version
+  "Phase 15: the PROXY's /engine/v1/health carries \"version\" like a
+worker's health does — one engine version across direct-worker and
+through-proxy deployments. Cached in the tutor-proxy instance at
+construction (the same ASDF component-version read tutor-server uses).
+Asserted over the wire as a non-empty string alongside the pre-existing
+status/workers fields."
+  (with-test-redis (conn port)
+    (let ((p (make-tutor-proxy :port (%find-free-port)
+                               :redis-host (%test-redis-host) :redis-port port
+                               :prefix "t-hv:")))
+      (unwind-protect
+           (multiple-value-bind (body status)
+               (%get (format nil "http://127.0.0.1:~a/engine/v1/health"
+                             (proxy-port p)))
+             (is (= 200 status))
+             (let ((parsed (yason:parse body :object-as :alist)))
+               ;; pre-existing fields survive (additive change)
+               (is (assoc "status" parsed :test #'string=))
+               (is (assoc "workers" parsed :test #'string=))
+               (let ((v (cdr (assoc "version" parsed :test #'string=))))
+                 (is (and (stringp v) (plusp (length v)))))))
+        (stop-tutor-proxy p)))))
+
 (test proxy.unknown-session-404
   (with-test-redis (conn port)
     (let ((p (make-tutor-proxy :port (%find-free-port)

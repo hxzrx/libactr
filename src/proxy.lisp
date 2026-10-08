@@ -12,6 +12,15 @@
 ;;;; worker directly or through this proxy.
 (in-package :libactr/cluster)
 
+(defun %libactr-version ()
+  "The libactr system's version string (libactr.asd's :version), via ASDF
+component-version. Phase 15: read ONCE per tutor-proxy construction and
+cached in the instance's version slot — /engine/v1/health serves it from
+there (no per-request ASDF access). Local mirror of libactr/server's internal
+helper of the same name (not exported; the same discipline as the %jsonable
+mirror of its json-encode below)."
+  (asdf:component-version (asdf:find-system "libactr")))
+
 (defclass tutor-proxy ()
   ((acceptor :accessor proxy-acceptor :initform nil)
    ;; [brief defect, run-evidenced: PORT was a :reader — with the default
@@ -39,6 +48,9 @@
    ;; use is serialized under this per-instance lock.
    (redis-lock :reader proxy-redis-lock
                :initform (bt2:make-lock :name "proxy-redis"))
+   ;; Phase 15: the engine version reported by the proxy's /engine/v1/health
+   ;; (same source and caching discipline as tutor-server's version slot).
+   (version :reader proxy-version :initarg :version :initform (%libactr-version))
    (rr :accessor proxy-rr :initform 0))
   (:documentation "Front-door proxy. Holds its own redis connection + a
 round-robin cursor for worker selection at session start."))
@@ -294,7 +306,12 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
         (libactr:disconnect-log (libactr:student-session-log ss))))))
 
 (defun %proxy-health (p)
-  (%respond (%json (list :status "ok" :workers (length (proxy-live-workers p)))) 200))
+  "Liveness + live-worker count + the engine version (Phase 15 — additive:
+status/workers keep their shape, mirroring tutor-server's health)."
+  (%respond (%json (list :status "ok"
+                         :workers (length (proxy-live-workers p))
+                         :version (proxy-version p)))
+            200))
 
 ;; --- lifecycle ---------------------------------------------------------------------
 

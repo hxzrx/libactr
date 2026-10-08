@@ -18,13 +18,12 @@ this is a BREAKING wire change for existing HTTP clients:
   are unchanged. Redis keys, the adapter protocol, and the core are
   untouched.
 - **`/engine/v1/health` now reports `"version"`** — the libactr system
-  version (libactr.asd's `:version`), read once per tutor-server construction
-  via ASDF `component-version` and cached in the instance (new `version` slot
-  on `tutor-server`, internal `server-version` reader — not exported). The
-  response is additive: `status`/`active_sessions`/`students` keep their
-  shape. Note the cluster PROXY's own `/engine/v1/health` still reports
-  `{status, workers}` (it is a different liveness body, not a tutor-server)
-  and does not carry `version` yet.
+  version (libactr.asd's `:version`), read once per construction via ASDF
+  `component-version` and cached in the instance (new `version` slots on
+  `tutor-server` and `tutor-proxy`, internal `server-version`/`proxy-version`
+  readers — not exported). Both health bodies carry it, additive in each:
+  the tutor-server's `status`/`active_sessions`/`students`/`version` and the
+  cluster proxy's `status`/`workers`/`version`.
 
 ## 0.4.2 (2026-10-08) — CCL portability, bordeaux-threads APIv2, external-redis test infrastructure
 
