@@ -26,8 +26,10 @@ self-contained: a fresh clone runs all ten test suites standalone.
 - [Quicklisp](https://www.quicklisp.org/) for the service-layer deps:
   hunchentoot, bordeaux-threads, yason (server); cl-redis (redis-store);
   dexador (cluster); fiveam (tests).
-- `redis-server` — only for `libactr/redis-store`, `libactr/cluster`, and their tests
-  (suites self-start one and skip when absent).
+- `redis-server` — only for `libactr/redis-store`, `libactr/cluster`, and their tests.
+  The suites self-start one and skip when absent; alternatively, point
+  `LIBACTR_TEST_REDIS_HOST` / `LIBACTR_TEST_REDIS_PORT` at an external
+  DISPOSABLE instance (the fixture FLUSHDBs it on entry — never use real data).
 - No external `act-r/` checkout needed: the dev-time dual-track oracle
   (`libactr/oracle`, `libactr/dual`) runs against the vendored frozen ACT-R
   snapshot under `vendor/act-r/` (LGPL-2.1). Runtime never loads it.
