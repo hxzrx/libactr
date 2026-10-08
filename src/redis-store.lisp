@@ -8,9 +8,9 @@
 ;;;; thread-safe (the same ruling cluster.lisp/proxy.lisp already lock under) —
 ;;;; every command on a log's ONE connection is serialized under the log's
 ;;;; per-instance lock (the dynamic rebind alone left two request threads
-;;;; interleaving RESP frames on one socket: /session/step's RPUSH vs
-;;;; /student/mastery's LRANGE for the same student). No global mutable state
-;;;; in this file.
+;;;; interleaving RESP frames on one socket: /engine/v1/session/step's RPUSH vs
+;;;; /engine/v1/student/mastery's LRANGE for the same student). No global
+;;;; mutable state in this file.
 (in-package :libactr)
 
 (defclass redis-event-log ()

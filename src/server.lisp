@@ -286,7 +286,7 @@ registry entries and odd keys). Signals bad-tutor-request (400 over HTTP)."
 
 ;;; --- incremental mastery (review F4) ------------------------------------------
 ;;;
-;;; The step response's inline :mastery and GET /student/mastery previously
+;;; The step response's inline :mastery and GET /engine/v1/student/mastery previously
 ;;; folded the student's ENTIRE event history on every call (log-all-events:
 ;;; on the redis backend a full LRANGE 0 -1 plus one JSON parse per event per
 ;;; step — cost grew without bound with the student's cross-problem history).
