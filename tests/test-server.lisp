@@ -592,6 +592,29 @@ pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
                             :test #'string=))))))
       (libactr/server:stop-tutor-server s))))
 
+(test http.health-reports-version
+  "Phase 15: /engine/v1/health carries a \"version\" field — the libactr
+system version (libactr.asd's :version), read ONCE at server start via ASDF
+component-version and cached in the tutor-server instance (no per-request
+ASDF access). Asserted over the wire as a non-empty string, alongside the
+pre-existing fields (status/active_sessions/students keep their shape)."
+  (let* ((port (%find-free-port))
+         (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
+    (unwind-protect
+         (progn
+           (sleep 0.3)
+           (multiple-value-bind (body status)
+               (dex:get (format nil "http://127.0.0.1:~a/engine/v1/health" port))
+             (is (= 200 status))
+             (let ((parsed (yason:parse body :object-as :alist)))
+               ;; pre-existing fields survive (additive change)
+               (is (assoc "status" parsed :test #'string=))
+               (is (assoc "active_sessions" parsed :test #'string=))
+               (is (assoc "students" parsed :test #'string=))
+               (let ((v (cdr (assoc "version" parsed :test #'string=))))
+                 (is (and (stringp v) (plusp (length v))))))))
+      (libactr/server:stop-tutor-server s))))
+
 (test http.concurrent-different-sessions-parallel
   "N threads each drive a DIFFERENT session over HTTP; all succeed independently
 (Phase 5 isolation under real concurrent HTTP traffic). The server starts N

@@ -125,7 +125,7 @@ curl -s 'localhost:5000/engine/v1/student/mastery?student_id=lea'
 
 curl -s localhost:5000/engine/v1/session/end -d '{"session_id":"sess-s897"}'
 curl -s localhost:5000/engine/v1/health
-# => {"status":"ok","active_sessions":0,"students":1}
+# => {"status":"ok","active_sessions":0,"students":1,"version":"0.5.0"}
 ```
 
 Endpoints:
@@ -136,7 +136,7 @@ Endpoints:
 | `POST /engine/v1/session/step` | `{"session_id","action"}` | `status` (`on-path`/`off-path-buggy`/`off-path`), `production`, `feedback`, inline per-KC `mastery` |
 | `POST /engine/v1/session/end` | `{"session_id"}` | end summary (`ok`) |
 | `GET /engine/v1/student/mastery` | `?student_id=` | per-KC `kc`,`correct`,`total`,`accuracy`,`p_l` |
-| `GET /engine/v1/health` | — | `status`,`active_sessions`,`students` |
+| `GET /engine/v1/health` | — | `status`,`active_sessions`,`students`,`version` |
 
 The domain adapter is the single engine/domain seam: it parses the action,
 computes the correct answer, detects declared bugs, and returns the
@@ -245,9 +245,10 @@ single-steppable (`cluster-heartbeat-tick` etc.) for deterministic tests.
 
 Feature-complete since `0.3.0`; the library is in maintenance mode:
 defects are fixed, the public surface does not move (user-directed
-exceptions are recorded in the CHANGELOG). `1.0.0` will be cut once a
-real consumer project has validated libactr as a dependency in
-production shape.
+exceptions are recorded in the CHANGELOG — `0.5.0` is one such: the
+consumer-driven `/engine/v1` route prefix, breaking for HTTP clients).
+`1.0.0` will be cut once a real consumer project has validated libactr
+as a dependency in production shape.
 
 ## System matrix
 

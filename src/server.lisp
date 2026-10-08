@@ -99,6 +99,14 @@ The cognitive-session itself (libactr core) holds no lock slot."))
 
 ;;; --- tutor-server: the infrastructure-state container -------------------------
 
+(defun %libactr-version ()
+  "The libactr system's version string (libactr.asd's :version), read via ASDF
+component-version. Phase 15: called ONCE per tutor-server construction and
+cached in the instance's version slot — /engine/v1/health serves it from there
+(no per-request ASDF access). ASDF is always present when this runs: the
+system itself is compiled and loaded BY ASDF (quicklisp path included)."
+  (asdf:component-version (asdf:find-system "libactr")))
+
 (defclass tutor-server ()
   ((acceptor       :accessor server-acceptor       :initform nil)
    (port           :reader   server-port           :initarg :port :initform 0)
@@ -130,7 +138,13 @@ The cognitive-session itself (libactr core) holds no lock slot."))
    ;; server uses (or kt-params (libactr:make-kt-params)) so an explicitly-nil key still
    ;; yields a real kt-params (avoids overriding the initform with nil).
    (kt-params      :reader   server-kt-params      :initarg :kt-params
-                   :initform (libactr:make-kt-params)))
+                   :initform (libactr:make-kt-params))
+   ;; Phase 15: the engine version reported by /engine/v1/health. Read once
+   ;; via ASDF at construction (see %libactr-version) — the initform means
+   ;; even a direct make-instance gets a real value; :version overrides it
+   ;; for tests/embeddings that want to pin the reported string.
+   (version        :reader   server-version        :initarg :version
+                   :initform (%libactr-version)))
   (:documentation "Infrastructure-state container. Each instance owns its own
 acceptor, registries, and per-student event logs. Multiple tutor-servers can
 coexist (no global mutable state) — the multi-user-safety invariant is
@@ -623,11 +637,14 @@ from-scratch fold by construction (see %fold-mastery-entries)."
         (%student-mastery server student-id ss))))
 
 (defun server-health (server)
-  "Return a shallow health plist: liveness plus counter shape. (The HTTP layer
-in Task 4 serializes this to JSON.) The registry counts are read under the
-registry lock (review F1: hash-table-count on a table a request thread may be
-mutating is an unlocked reader)."
+  "Return a shallow health plist: liveness, counter shape, and the engine
+version (Phase 15 — the cached libactr.asd :version, see %libactr-version;
+additive: the pre-existing status/active_sessions/students keys are
+unchanged). (The HTTP layer serializes this to JSON.) The registry counts are
+read under the registry lock (review F1: hash-table-count on a table a request
+thread may be mutating is an unlocked reader)."
   (bt2:with-lock-held ((server-students-lock server))
     (list :status "ok"
           :active_sessions (hash-table-count (server-sessions server))
-          :students (hash-table-count (server-students server)))))
+          :students (hash-table-count (server-students server))
+          :version (server-version server))))

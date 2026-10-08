@@ -3,6 +3,29 @@
 All notable changes to libactr are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
+## 0.5.0 (2026-10-08) — /engine/v1 route prefix (breaking), health reports version
+
+Consumer-driven interface change (first real consumer's policy: all service
+interfaces carry a versioned prefix), so the minor version bumps per semver —
+this is a BREAKING wire change for existing HTTP clients:
+
+- **All five endpoints moved under `/engine/v1`** (on the tutor-server AND the
+  cluster front proxy, whose forwards carry the prefix too):
+  `/session/start`, `/session/step`, `/session/end`, `/student/mastery`,
+  `/health` → `/engine/v1/session/start`, `/engine/v1/session/step`,
+  `/engine/v1/session/end`, `/engine/v1/student/mastery`,
+  `/engine/v1/health`. Path-only: JSON bodies, status codes, and semantics
+  are unchanged. Redis keys, the adapter protocol, and the core are
+  untouched.
+- **`/engine/v1/health` now reports `"version"`** — the libactr system
+  version (libactr.asd's `:version`), read once per tutor-server construction
+  via ASDF `component-version` and cached in the instance (new `version` slot
+  on `tutor-server`, internal `server-version` reader — not exported). The
+  response is additive: `status`/`active_sessions`/`students` keep their
+  shape. Note the cluster PROXY's own `/engine/v1/health` still reports
+  `{status, workers}` (it is a different liveness body, not a tutor-server)
+  and does not carry `version` yet.
+
 ## 0.4.2 (2026-10-08) — CCL portability, bordeaux-threads APIv2, external-redis test infrastructure
 
 The redis-dependent suites can now run against an EXTERNAL disposable redis:
