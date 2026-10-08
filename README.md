@@ -107,24 +107,24 @@ Notes:
 From the shell:
 
 ```bash
-curl -s localhost:5000/session/start \
+curl -s localhost:5000/engine/v1/session/start \
      -d '{"student_id":"lea","problem_id":"5+2","model_id":"add"}'
 # => {"session_id":"sess-s897","student_id":"lea"}
 
-curl -s localhost:5000/session/step \
+curl -s localhost:5000/engine/v1/session/step \
      -d '{"session_id":"sess-s897","action":{"type":"start"}}'
 # => {"status":"on-path","production":"initialize-addition","mastery":[...],...}
 
-curl -s localhost:5000/session/step \
+curl -s localhost:5000/engine/v1/session/step \
      -d '{"session_id":"sess-s897","action":{"type":"next-total","value":"six"}}'
 # => {"status":"on-path","production":"increment-sum",...}
 
-curl -s 'localhost:5000/student/mastery?student_id=lea'
+curl -s 'localhost:5000/engine/v1/student/mastery?student_id=lea'
 # => {"student_id":"lea","kc":[{"kc":"INCREMENT-COUNT","correct":1,"total":1,
 #     "accuracy":1.0,"p_l":0.4},{"kc":"INCREMENT-SUM",...},{"kc":"INITIALIZE-ADDITION",...}]}
 
-curl -s localhost:5000/session/end -d '{"session_id":"sess-s897"}'
-curl -s localhost:5000/health
+curl -s localhost:5000/engine/v1/session/end -d '{"session_id":"sess-s897"}'
+curl -s localhost:5000/engine/v1/health
 # => {"status":"ok","active_sessions":0,"students":1}
 ```
 
@@ -132,11 +132,11 @@ Endpoints:
 
 | Method + path | Body / query | Returns |
 |---|---|---|
-| `POST /session/start` | `{"student_id","problem_id","model_id"}` | `session_id` |
-| `POST /session/step` | `{"session_id","action"}` | `status` (`on-path`/`off-path-buggy`/`off-path`), `production`, `feedback`, inline per-KC `mastery` |
-| `POST /session/end` | `{"session_id"}` | end summary (`ok`) |
-| `GET /student/mastery` | `?student_id=` | per-KC `kc`,`correct`,`total`,`accuracy`,`p_l` |
-| `GET /health` | — | `status`,`active_sessions`,`students` |
+| `POST /engine/v1/session/start` | `{"student_id","problem_id","model_id"}` | `session_id` |
+| `POST /engine/v1/session/step` | `{"session_id","action"}` | `status` (`on-path`/`off-path-buggy`/`off-path`), `production`, `feedback`, inline per-KC `mastery` |
+| `POST /engine/v1/session/end` | `{"session_id"}` | end summary (`ok`) |
+| `GET /engine/v1/student/mastery` | `?student_id=` | per-KC `kc`,`correct`,`total`,`accuracy`,`p_l` |
+| `GET /engine/v1/health` | — | `status`,`active_sessions`,`students` |
 
 The domain adapter is the single engine/domain seam: it parses the action,
 computes the correct answer, detects declared bugs, and returns the
@@ -191,9 +191,9 @@ workers whose lease expired: atomic `SET NX EX` claim (exactly one taker),
 rebuild via `restore-from-checkpoint`, route flip to the new worker.
 
 **Ingress, two forms.** Either the built-in `tutor-proxy` — round-robin worker
-choice at `/session/start`, sticky routing by `session_id`/`student_id`
+choice at `/engine/v1/session/start`, sticky routing by `session_id`/`student_id`
 afterwards, one re-resolve+retry on transport failure (takeover-transparent
-continuation), and `/student/mastery` served straight from Redis
+continuation), and `/engine/v1/student/mastery` served straight from Redis
 (location-free, no worker involved) — or an external load balancer. With an
 external LB the Redis routing table (`sess:<sid>`, `student:<id>`, written at
 start and flipped by takeover) remains the source of truth for where each
@@ -227,7 +227,7 @@ session — the event log is unharmed.
   hosts hit the OOM killer: the worker dies silently mid-load — its log just
   stops, no error — and the failure surfaces downstream as lease expiry,
   takeover churn, or proxy 503s, never as an out-of-memory report.
-- *Repeat starts are sticky.* At `/session/start` the proxy first consults
+- *Repeat starts are sticky.* At `/engine/v1/session/start` the proxy first consults
   the student's existing route: when that worker is still live, the request
   is forwarded to it and the worker's own same-student idempotency returns
   the active session (same session_id) — clients may retry start freely.

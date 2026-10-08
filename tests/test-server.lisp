@@ -555,7 +555,7 @@ portable ephemeral-port idiom and is fine for smoke tests."
 (test http.real-smoke-over-wire
   "End-to-end over real HTTP: start a tutor-server with a live Hunchentoot
 acceptor on an ephemeral port, register the reference addition model+adapter,
-then dexador-drive /health, /session/start, and /session/step. Asserts each
+then dexador-drive /engine/v1/health, /engine/v1/session/start, and /engine/v1/session/step. Asserts each
 response is 200 + has the expected JSON body shape. Proves the
 tutor-acceptor per-instance dispatch-table is populated and routes hit the
 pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
@@ -567,25 +567,25 @@ pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
                                       (libactr/addition-adapter:build-addition-model)
                                       (libactr/addition-adapter:make-addition-adapter))
            (sleep 0.3)                          ; acceptor is up; brief's paranoia window
-           ;; /health -> 200 + JSON {"status": "ok", ...}
+           ;; /engine/v1/health -> 200 + JSON {"status": "ok", ...}
            (multiple-value-bind (body status)
-               (dex:get (format nil "http://127.0.0.1:~a/health" port))
+               (dex:get (format nil "http://127.0.0.1:~a/engine/v1/health" port))
              (is (= 200 status))
              (is (assoc "status" (yason:parse body :object-as :alist)
                         :test #'string=)))
-           ;; /session/start -> 200 + JSON {"session_id": "...", "student_id": "a"}
+           ;; /engine/v1/session/start -> 200 + JSON {"session_id": "...", "student_id": "a"}
            (multiple-value-bind (body status)
-               (dex:post (format nil "http://127.0.0.1:~a/session/start" port)
+               (dex:post (format nil "http://127.0.0.1:~a/engine/v1/session/start" port)
                          :content "{\"student_id\":\"a\",\"problem_id\":\"5+2\",\"model_id\":\"add\"}")
              (is (= 200 status))
              (let ((sid (cdr (assoc "session_id"
                                     (yason:parse body :object-as :alist)
                                     :test #'string=))))
                (is (stringp sid))
-               ;; /session/step -> 200 + JSON step response (action start fires
+               ;; /engine/v1/session/step -> 200 + JSON step response (action start fires
                ;; initialize-addition under the addition adapter).
                (multiple-value-bind (b2 s2)
-                   (dex:post (format nil "http://127.0.0.1:~a/session/step" port)
+                   (dex:post (format nil "http://127.0.0.1:~a/engine/v1/session/step" port)
                              :content (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"start\"}}" sid))
                  (is (= 200 s2))
                  (is (assoc "status" (yason:parse b2 :object-as :alist)
@@ -598,7 +598,7 @@ pure handler fns (Tasks 4 + 5 wiring is live over the wire)."
 DISTINCT student-sessions (one per student-id) — one cognitive-session each —
 because server-start-session is now IDEMPOTENT per student (a same-student
 second start returns the existing active session's id). Each thread POSTs a
-/session/step to ITS OWN session-id. Every step fires initialize-addition
+/engine/v1/session/step to ITS OWN session-id. Every step fires initialize-addition
 under that session's per-session lock — no shared mutable target across
 threads, so all N responses are 200 and there is no crosstalk. This is the
 Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
@@ -621,7 +621,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                                           (yason:parse
                                            (nth-value 0
                                             (dex:post
-                                             (format nil "http://127.0.0.1:~a/session/start" port)
+                                             (format nil "http://127.0.0.1:~a/engine/v1/session/start" port)
                                              :content (format nil "{\"student_id\":\"u~a\",\"problem_id\":\"5+2\",\"model_id\":\"add\"}" i)))
                                            :object-as :alist)
                                           :test #'string=))))
@@ -634,7 +634,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                                     (lambda ()
                                       (nth-value 1
                                        (dex:post
-                                        (format nil "http://127.0.0.1:~a/session/step" port)
+                                        (format nil "http://127.0.0.1:~a/engine/v1/session/step" port)
                                         :content (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"start\"}}"
                                                          sid)))))))))
              (is (= n (length sids)))
@@ -648,11 +648,11 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
 ;;; --- Phase 5 Task 7: addition full-problem end-to-end over real HTTP -----------
 ;;;
 ;;; Drives a COMPLETE 5+2 problem (start -> next-total six -> next-total seven ->
-;;; submit -> GET /student/mastery -> end) over real HTTP against the reference
+;;; submit -> GET /engine/v1/student/mastery -> end) over real HTTP against the reference
 ;;; addition model + adapter. This is the closing integration test of the Phase 5
 ;;; service layer: every endpoint, the addition adapter's two-step-per-action
 ;;; contract, and the shared student log all wired together. Asserts 200s on every
-;;; step, and that /student/mastery returns kc-tagged mastery data (proves the
+;;; step, and that /engine/v1/student/mastery returns kc-tagged mastery data (proves the
 ;;; shared student log is being aggregated from the per-session event log).
 ;;;
 ;;; NOTE (Phase 6): the addition adapter's :next-total now returns BOTH steps
@@ -673,10 +673,10 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                           (dex:post (format nil "http://127.0.0.1:~a~a" port path) :content json)
                         (values (yason:parse body :object-as :alist) status)))
                     (jstep (sid action)
-                      (post "/session/step"
+                      (post "/engine/v1/session/step"
                             (format nil "{\"session_id\":\"~a\",\"action\":~a}" sid action))))
              (let ((sid (cdr (assoc "session_id"
-                                    (post "/session/start"
+                                    (post "/engine/v1/session/start"
                                           "{\"student_id\":\"lea\",\"problem_id\":\"5+2\",\"model_id\":\"add\"}")
                                     :test #'string=))))
                ;; full 5+2: start, six, seven, submit (mirror addition-tutor demonstrate)
@@ -699,7 +699,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                ;; per-KC entries are JSON OBJECTS (each yields a KC name via the
                ;; "kc" cons) and that a known addition KC (increment-sum) appears.
                (multiple-value-bind (body status)
-                   (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=lea" port))
+                   (dex:get (format nil "http://127.0.0.1:~a/engine/v1/student/mastery?student_id=lea" port))
                  (is (= 200 status))
                  (let ((kcs (mapcar (lambda (entry)
                                       (cdr (assoc "kc" entry :test #'string=)))
@@ -708,7 +708,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                    (is (find "INCREMENT-SUM" kcs :test #'string=))))
                ;; end
                (multiple-value-bind (body status)
-                   (post "/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
+                   (post "/engine/v1/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
                  (declare (ignore body))
                  (is (= 200 status))))))
       (libactr/server:stop-tutor-server s))))
@@ -721,7 +721,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
 ;;; trace-result->response-plist (http-api.lisp, called by handle-step). So per-KC
 ;;; Bayesian overrides never reached HTTP mastery. These tests prove the
 ;;; per-server kt-params slot threads through to BOTH compute-mastery call sites:
-;;; the GET /student/mastery path (test 1) and the inline :mastery in the step
+;;; the GET /engine/v1/student/mastery path (test 1) and the inline :mastery in the step
 ;;; response (test 2). The stub's on-path step produces an initialize-addition KC
 ;;; (name-fallback, interned in :libactr/server-test); the tests key the override on
 ;;; 'initialize-addition (same package symbol -> eql match in kt-params-for).
@@ -1077,7 +1077,7 @@ established pattern)."
   (flet ((post-status (port json)
            (handler-case
                (multiple-value-bind (body status)
-                   (dex:post (format nil "http://127.0.0.1:~a/session/step" port)
+                   (dex:post (format nil "http://127.0.0.1:~a/engine/v1/session/step" port)
                              :content json)
                  (declare (ignore body))
                  status)

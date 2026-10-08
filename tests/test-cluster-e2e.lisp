@@ -114,7 +114,7 @@ all with the SAME session_id (transparent continuation)."
            ;; [brief defect, namespace-evidenced: the brief gave the proxy
            ;; :prefix "e2e:" while the workers (whose normative main signature
            ;; takes NO prefix) default to "libactr:cluster:" — the proxy would read
-           ;; e2e:workers (empty) and 503 every /session/start, and the direct
+           ;; e2e:workers (empty) and 503 every /engine/v1/session/start, and the direct
            ;; e2e:sess:/e2e:ckpt: reads would look in a namespace nobody writes
            ;; (checkpoint keys come from the MANAGER's default store at
            ;; libactr:cluster:ckpt:). The proxy uses the DEFAULT prefix (the
@@ -138,7 +138,7 @@ all with the SAME session_id (transparent continuation)."
                                     :redis-host (%test-redis-host) :redis-port port)))
       (flet ((worker-up-p (p)
                (multiple-value-bind (b s) (ignore-errors
-                                            (dex:get (format nil "http://127.0.0.1:~a/health" p)))
+                                            (dex:get (format nil "http://127.0.0.1:~a/engine/v1/health" p)))
                  (declare (ignore b)) (and (numberp s) (= 200 s)))))
         (unwind-protect
              (progn
@@ -156,7 +156,7 @@ all with the SAME session_id (transparent continuation)."
                (is (%poll-until (lambda () (worker-up-p p2)) 90))
                ;; start through the proxy
                (multiple-value-bind (body status)
-                   (dex:post (format nil "http://127.0.0.1:~a/session/start" (proxy-port proxy))
+                   (dex:post (format nil "http://127.0.0.1:~a/engine/v1/session/start" (proxy-port proxy))
                              :content "{\"student_id\":\"e2e\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
                  (is (= 200 status))
                  (let* ((alist (yason:parse body :object-as :alist))
@@ -175,7 +175,7 @@ all with the SAME session_id (transparent continuation)."
                      (is (and owner t))
                      ;; step the borrow ones column (4 = 12-8)
                      (multiple-value-bind (b2 s2)
-                         (dex:post (format nil "http://127.0.0.1:~a/session/step"
+                         (dex:post (format nil "http://127.0.0.1:~a/engine/v1/session/step"
                                            (proxy-port proxy))
                                    :content (format nil
                                                     "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
@@ -199,7 +199,7 @@ all with the SAME session_id (transparent continuation)."
                             (lambda ()
                               (multiple-value-bind (b3 s3)
                                   (ignore-errors
-                                   (dex:post (format nil "http://127.0.0.1:~a/session/step"
+                                   (dex:post (format nil "http://127.0.0.1:~a/engine/v1/session/step"
                                                      (proxy-port proxy))
                                              :content (format nil
                                                               "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"3\"}}"
@@ -212,7 +212,7 @@ all with the SAME session_id (transparent continuation)."
                        (is (eq t done-p))
                        ;; end through the proxy
                        (multiple-value-bind (b4 s4)
-                           (dex:post (format nil "http://127.0.0.1:~a/session/end"
+                           (dex:post (format nil "http://127.0.0.1:~a/engine/v1/session/end"
                                              (proxy-port proxy))
                                      :content (format nil "{\"session_id\":\"~a\"}" sid))
                          (declare (ignore b4))
@@ -220,7 +220,7 @@ all with the SAME session_id (transparent continuation)."
                        ;; mastery: served from redis, both workers' events
                        (multiple-value-bind (b5 s5)
                            (dex:get (format nil
-                                            "http://127.0.0.1:~a/student/mastery?student_id=e2e"
+                                            "http://127.0.0.1:~a/engine/v1/student/mastery?student_id=e2e"
                                             (proxy-port proxy)))
                          (is (= 200 s5))
                          (let ((kcs (mapcar (lambda (x) (cdr (assoc "kc" x :test #'string=)))

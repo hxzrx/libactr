@@ -4,9 +4,12 @@
 ;;;; request body via dexador and passes worker statuses through verbatim
 ;;;; (dexador signals on 4xx/5xx — unwrapped via its condition readers); one
 ;;;; re-resolve+retry on transport failure (takeover-transparent continuation).
-;;;; /student/mastery is computed HERE from redis (location-free — no worker
-;;;; involved). NO global mutable state: everything on the tutor-proxy
+;;;; /engine/v1/student/mastery is computed HERE from redis (location-free — no
+;;;; worker involved). NO global mutable state: everything on the tutor-proxy
 ;;;; instance; dispatch via libactr/server's tutor-acceptor (per-instance table).
+;;;; Phase 15: routes and forwards both carry the /engine/v1 prefix, mirroring
+;;;; src/http-api.lisp — clients see ONE wire contract whether they dial a
+;;;; worker directly or through this proxy.
 (in-package :libactr/cluster)
 
 (defclass tutor-proxy ()
@@ -162,7 +165,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
            (let ((url (and id (proxy-worker-url p id))))
              (if url
                  (multiple-value-bind (body status)
-                     (%forward-post (uiop:strcat url "/session/" endpoint) raw
+                     (%forward-post (uiop:strcat url "/engine/v1/session/" endpoint) raw
                                     (proxy-forward-timeout p))
                    (if (eq status :transport) nil (values body status id)))
                  nil))))
@@ -217,7 +220,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
                                    (incf (proxy-rr p)))
                                  (length live))
                             live)))
-                (url (format nil "http://~a:~a/session/start"
+                (url (format nil "http://~a:~a/engine/v1/session/start"
                              (second w) (third w))))
            (multiple-value-bind (body status)
                (%forward-post url raw (proxy-forward-timeout p))
@@ -296,11 +299,13 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
 ;; --- lifecycle ---------------------------------------------------------------------
 
 (defun proxy-handlers (p)
-  (list (cons "/session/start" (lambda () (%proxy-start p)))
-        (cons "/session/step"   (lambda () (%proxy-step p)))
-        (cons "/session/end"    (lambda () (%proxy-end p)))
-        (cons "/student/mastery" (lambda () (%proxy-mastery p)))
-        (cons "/health" (lambda () (%proxy-health p)))))
+  "The proxy's 5 dispatch entries — same /engine/v1 routes the workers serve
+(Phase 15), so the proxy is a drop-in front door."
+  (list (cons "/engine/v1/session/start" (lambda () (%proxy-start p)))
+        (cons "/engine/v1/session/step"   (lambda () (%proxy-step p)))
+        (cons "/engine/v1/session/end"    (lambda () (%proxy-end p)))
+        (cons "/engine/v1/student/mastery" (lambda () (%proxy-mastery p)))
+        (cons "/engine/v1/health" (lambda () (%proxy-health p)))))
 
 (defun make-tutor-proxy (&key (port 0) (redis-host "127.0.0.1") (redis-port 6379)
                            (prefix "libactr:cluster:") (kt-params (libactr:make-kt-params))

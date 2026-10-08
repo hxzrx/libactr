@@ -1,5 +1,9 @@
 ;;;; src/http-api.lisp — HTTP handlers (5 endpoints) + JSON + error codes (Phase 5)
 ;;;
+;;; Phase 15: every endpoint lives under the versioned /engine/v1 prefix
+;;; (consumer-driven interface-policy change; breaking, hence 0.5.0). Wire
+;;; bodies are unchanged — the move is path-only.
+;;;
 ;;; Two layers:
 ;;;   * PURE LOGIC functions handle-start / handle-step / handle-end /
 ;;;     handle-mastery / handle-health. Each takes (server parsed-body) [health
@@ -276,7 +280,9 @@ handler-fn is a Hunchentoot-compatible zero-argument function that returns the
 JSON string response. The three POST endpoints are wrapped by wrap-body
 (review F8): the declared content-length is checked against max-body-size
 BEFORE the body is read (413 without reading), and a post-read violation
-signaled by %read-json-body is mapped to 413 the same way."
+signaled by %read-json-body is mapped to 413 the same way.
+All routes are registered under the versioned /engine/v1 prefix (Phase 15) —
+e.g. POST /engine/v1/session/start, GET /engine/v1/health."
   (flet ((wrap (thunk)
            (lambda () (with-json-response (status) (funcall thunk))))
          (wrap-body (thunk)
@@ -291,18 +297,18 @@ signaled by %read-json-body is mapped to 413 the same way."
                  (handler-case (funcall thunk)
                    (%body-too-large () (%respond-body-too-large)))))))
     (list
-     (cons "/session/start"
+     (cons "/engine/v1/session/start"
            (wrap-body (wrap (lambda () (handle-start server (%read-json-body server))))))
-     (cons "/session/step"
+     (cons "/engine/v1/session/step"
            (wrap-body (wrap (lambda () (handle-step  server (%read-json-body server))))))
-     (cons "/session/end"
+     (cons "/engine/v1/session/end"
            (wrap-body (wrap (lambda () (handle-end   server (%read-json-body server))))))
-     (cons "/student/mastery"
+     (cons "/engine/v1/student/mastery"
            (wrap (lambda ()
                    (handle-mastery server
                                    (or (hunchentoot:get-parameter "student_id")
                                        "")))))
-     (cons "/health"
+     (cons "/engine/v1/health"
            (wrap (lambda () (handle-health server)))))))
 
 (defun install-handlers! (server)
