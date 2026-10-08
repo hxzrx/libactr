@@ -645,7 +645,7 @@ writes sess/student/worker-sess keys; step and end flow through verbatim."
            (progn
              (cluster-join m)
              (multiple-value-bind (body status)
-                 (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                 (%post (format nil "http://127.0.0.1:~a/engine/v1/session/start" (proxy-port p))
                         "{\"student_id\":\"px\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
                (is (= 200 status))
                (let* ((alist (yason:parse body :object-as :alist))
@@ -659,7 +659,7 @@ writes sess/student/worker-sess keys; step and end flow through verbatim."
                  (is (find sid (redis:red-smembers "t-px:worker-sess:w1") :test #'string=))
                  ;; step through the proxy
                  (multiple-value-bind (b2 s2)
-                     (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                     (%post (format nil "http://127.0.0.1:~a/engine/v1/session/step" (proxy-port p))
                             (format nil
                                     "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
                                     sid))
@@ -669,13 +669,37 @@ writes sess/student/worker-sess keys; step and end flow through verbatim."
                                             :test #'string=)))))
                  ;; end through the proxy
                  (multiple-value-bind (b3 s3)
-                     (%post (format nil "http://127.0.0.1:~a/session/end" (proxy-port p))
+                     (%post (format nil "http://127.0.0.1:~a/engine/v1/session/end" (proxy-port p))
                             (format nil "{\"session_id\":\"~a\"}" sid))
                    (declare (ignore b3))
                    (is (= 200 s3))))))
         (stop-tutor-proxy p)
         (stop-cluster-manager m)
         (stop-tutor-server s)))))
+
+(test proxy.health-reports-version
+  "Phase 15: the PROXY's /engine/v1/health carries \"version\" like a
+worker's health does — one engine version across direct-worker and
+through-proxy deployments. Cached in the tutor-proxy instance at
+construction (the same ASDF component-version read tutor-server uses).
+Asserted over the wire as a non-empty string alongside the pre-existing
+status/workers fields."
+  (with-test-redis (conn port)
+    (let ((p (make-tutor-proxy :port (%find-free-port)
+                               :redis-host (%test-redis-host) :redis-port port
+                               :prefix "t-hv:")))
+      (unwind-protect
+           (multiple-value-bind (body status)
+               (%get (format nil "http://127.0.0.1:~a/engine/v1/health"
+                             (proxy-port p)))
+             (is (= 200 status))
+             (let ((parsed (yason:parse body :object-as :alist)))
+               ;; pre-existing fields survive (additive change)
+               (is (assoc "status" parsed :test #'string=))
+               (is (assoc "workers" parsed :test #'string=))
+               (let ((v (cdr (assoc "version" parsed :test #'string=))))
+                 (is (and (stringp v) (plusp (length v)))))))
+        (stop-tutor-proxy p)))))
 
 (test proxy.unknown-session-404
   (with-test-redis (conn port)
@@ -684,7 +708,7 @@ writes sess/student/worker-sess keys; step and end flow through verbatim."
                                :prefix "t-404:")))
       (unwind-protect
            (multiple-value-bind (body status)
-               (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+               (%post (format nil "http://127.0.0.1:~a/engine/v1/session/step" (proxy-port p))
                       "{\"session_id\":\"nope\",\"action\":{\"type\":\"digit\",\"value\":\"1\"}}")
              (declare (ignore body))
              (is (= 404 status)))
@@ -749,7 +773,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
                               (with-output-to-string (out) (yason:encode h out))))
              ;; point the route at a dead port: 503 after the failed retry
              (multiple-value-bind (body status)
-                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                 (%post (format nil "http://127.0.0.1:~a/engine/v1/session/step" (proxy-port p))
                         (format nil
                                 "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
                                 sid))
@@ -758,7 +782,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
              ;; move the route to the live worker -> same call succeeds
              (redis:red-hset (uiop:strcat "t-rt:sess:" sid) "worker" "w1")
              (multiple-value-bind (b2 s2)
-                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                 (%post (format nil "http://127.0.0.1:~a/engine/v1/session/step" (proxy-port p))
                         (format nil
                                 "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
                                 sid))
@@ -777,7 +801,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
                (redis:red-set (uiop:strcat "t-rt:worker:doom")
                               (with-output-to-string (out) (yason:encode h2 out))))
              (multiple-value-bind (b3 s3)
-                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                 (%post (format nil "http://127.0.0.1:~a/engine/v1/session/step" (proxy-port p))
                         (format nil
                                 "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"3\"}}"
                                 sid))
@@ -794,7 +818,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
         (stop-tutor-server s1)))))
 
 (test proxy.mastery-location-free
-  "/student/mastery is served from redis directly: works even though no
+  "/engine/v1/student/mastery is served from redis directly: works even though no
 worker ever registered locally in this process for that student; unknown
 student -> 404."
   (with-test-redis (conn port)
@@ -807,7 +831,7 @@ student -> 404."
         (unwind-protect
              (progn
                (multiple-value-bind (body status)
-                   (%get (format nil "http://127.0.0.1:~a/student/mastery?student_id=mp"
+                   (%get (format nil "http://127.0.0.1:~a/engine/v1/student/mastery?student_id=mp"
                                  (proxy-port p)))
                  (is (= 200 status))
                  (let* ((alist (yason:parse body :object-as :alist))
@@ -832,7 +856,7 @@ student -> 404."
                                           (cdr (assoc "kc" e :test #'string=)))
                                         kc))))))
                (multiple-value-bind (body status)
-                   (%get (format nil "http://127.0.0.1:~a/student/mastery?student_id=ghost"
+                   (%get (format nil "http://127.0.0.1:~a/engine/v1/student/mastery?student_id=ghost"
                                  (proxy-port p)))
                  (declare (ignore body))
                  (is (= 404 status))))
@@ -957,7 +981,7 @@ threads (they kept ticking on a manager the operator believed restarted)."
 ;; package's :use only sees exports): qualified with the same double-colon
 ;; prefix the brief itself uses for proxy-rr; assertions unchanged.]
 (test proxy.sticky-start-same-worker-and-sid
-  "A5: a repeat /session/start for the same student through the proxy lands
+  "A5: a repeat /engine/v1/session/start for the same student through the proxy lands
 on the SAME worker and returns the SAME session_id (the worker's own
 same-student idempotency); when that worker's lease metadata is gone (dead),
 a start still succeeds on a live worker. The rr cursor is pre-set so a
@@ -980,7 +1004,7 @@ NON-sticky implementation would deterministically pick the OTHER worker
              (cluster-join m1)
              (cluster-join m2)
              (multiple-value-bind (b1 st1)
-                 (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                 (%post (format nil "http://127.0.0.1:~a/engine/v1/session/start" (proxy-port p))
                         "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
                (is (= 200 st1))
                (let* ((sid1 (cdr (assoc "session_id" (yason:parse b1 :object-as :alist)
@@ -997,7 +1021,7 @@ NON-sticky implementation would deterministically pick the OTHER worker
                    (is (and other-pos t))
                    (setf (libactr/cluster::proxy-rr p) (1- other-pos)))
                  (multiple-value-bind (b2 st2)
-                     (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                     (%post (format nil "http://127.0.0.1:~a/engine/v1/session/start" (proxy-port p))
                             "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
                    (is (= 200 st2))
                    (is (string= sid1 (cdr (assoc "session_id"
@@ -1009,7 +1033,7 @@ NON-sticky implementation would deterministically pick the OTHER worker
                  ;; dead sticky route: DEL the owner's lease metadata -> rr
                  (redis:red-del (uiop:strcat "t-sy:worker:" owner1))
                  (multiple-value-bind (b3 st3)
-                     (%post (format nil "http://127.0.0.1:~a/session/start" (proxy-port p))
+                     (%post (format nil "http://127.0.0.1:~a/engine/v1/session/start" (proxy-port p))
                             "{\"student_id\":\"sy\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
                    (is (= 200 st3))
                    (is (and (cdr (assoc "session_id"
@@ -1062,7 +1086,7 @@ retry-to-same-worker-fails-again)."
                               (with-output-to-string (out) (yason:encode h out))))
              (redis:red-hset (uiop:strcat "t-rr:sess:" sid) "worker" "ghost")
              (multiple-value-bind (body status)
-                 (%post (format nil "http://127.0.0.1:~a/session/step" (proxy-port p))
+                 (%post (format nil "http://127.0.0.1:~a/engine/v1/session/step" (proxy-port p))
                         (format nil
                                 "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}"
                                 sid))

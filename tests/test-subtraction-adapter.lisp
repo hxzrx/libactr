@@ -167,7 +167,7 @@ problems stay out of the bug-path corpus."
 
 ;;; --- Phase 11 Task 3: full-problem e2e over real HTTP -------------------
 ;;; Mirrors fraction.e2e-full-problem: drive a complete 52-18 borrow problem
-;;; (start -> digit 4 -> digit 3 -> GET /student/mastery -> end) over real
+;;; (start -> digit 4 -> digit 3 -> GET /engine/v1/student/mastery -> end) over real
 ;;; HTTP. Asserts 200s, on-path traces with the visible lowercase wire
 ;;; production symbols, done=false after the borrow column and true after the
 ;;; tens column, and mastery returning 2 KCs (BORROW + COLUMN-SUBTRACT —
@@ -182,7 +182,7 @@ problems stay out of the bug-path corpus."
 
 (test subtraction.e2e-full-problem
   "Full 52-18 borrow problem over real HTTP: start -> digit 4 -> digit 3 ->
-GET /student/mastery -> end. Asserts 200s, on-path, the visible productions,
+GET /engine/v1/student/mastery -> end. Asserts 200s, on-path, the visible productions,
 done=false then true, and both KCs in mastery (array-of-objects wire shape)."
   (let* ((port (%find-free-port))
          (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
@@ -198,12 +198,12 @@ done=false then true, and both KCs in mastery (array-of-objects wire shape)."
                                     :content json)
                         (values (yason:parse body :object-as :alist) status))))
              (let ((sid (cdr (assoc "session_id"
-                                    (post "/session/start"
+                                    (post "/engine/v1/session/start"
                                           "{\"student_id\":\"suo\",\"problem_id\":\"52-18\",\"model_id\":\"sub\"}")
                                     :test #'string=))))
                ;; ones 4 -> subtract-ones-borrow (on-path, NOT done)
                (multiple-value-bind (resp status)
-                   (post "/session/step"
+                   (post "/engine/v1/session/step"
                          (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"4\"}}" sid))
                  (is (= 200 status))
                  (is (string= "on-path" (cdr (assoc "status" resp :test #'string=))))
@@ -212,7 +212,7 @@ done=false then true, and both KCs in mastery (array-of-objects wire shape)."
                  (is (null (cdr (assoc "done" resp :test #'string=)))))
                ;; tens 3 -> subtract-tens-direct (on-path, done)
                (multiple-value-bind (resp status)
-                   (post "/session/step"
+                   (post "/engine/v1/session/step"
                          (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"digit\",\"value\":\"3\"}}" sid))
                  (is (= 200 status))
                  (is (string= "on-path" (cdr (assoc "status" resp :test #'string=))))
@@ -221,7 +221,7 @@ done=false then true, and both KCs in mastery (array-of-objects wire shape)."
                  (is (eq t (cdr (assoc "done" resp :test #'string=)))))
                ;; mastery: both KCs, entries as objects (Phase 9 recursive encode)
                (multiple-value-bind (body status)
-                   (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=suo"
+                   (dex:get (format nil "http://127.0.0.1:~a/engine/v1/student/mastery?student_id=suo"
                                     port))
                  (is (= 200 status))
                  (let ((kcs (mapcar (lambda (entry)
@@ -233,7 +233,7 @@ done=false then true, and both KCs in mastery (array-of-objects wire shape)."
                    (is (find "COLUMN-SUBTRACT" kcs :test #'string=))))
                ;; end
                (multiple-value-bind (body status)
-                   (post "/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
+                   (post "/engine/v1/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
                  (declare (ignore body))
                  (is (= 200 status))))))
       (libactr/server:stop-tutor-server s))))

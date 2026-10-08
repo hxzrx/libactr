@@ -8,7 +8,7 @@ libactr is a **model-tracing tutor engine** (the Carnegie Learning / MATHia line
 
 It is **not ACT-R and never loads ACT-R at runtime**. The vendored frozen snapshot under `vendor/act-r/` (LGPL, system name `act-r`) is a development-time **dual-track oracle** only (`libactr/oracle`, `libactr/dual`): it runs the same models under the real ACT-R interpreter and cross-checks matcher agreement. Any core matcher/compiler semantic change must keep the dual suite green (or explain why the oracle expectation legitimately moved).
 
-The library is in **0.4.x maintenance mode: defect fixes only, public surface frozen**. New exports or signature changes are user-directed exceptions that must be recorded in CHANGELOG.md.
+The library is in **0.5.x maintenance mode: defect fixes only, public surface frozen**. New exports or signature changes are user-directed exceptions that must be recorded in CHANGELOG.md.
 
 ## Commands
 
@@ -34,7 +34,7 @@ LIBACTR_TEST_REDIS_HOST=192.168.182.133 LIBACTR_TEST_REDIS_PORT=6390 \
   sbcl --non-interactive --eval '(ql:quickload :libactr/cluster-test)' --eval '(5am:run! :libactr/cluster)'
 ```
 
-- Suite name = system name minus `-test`. Current baselines (assertion counts, 0 failures; SBCL 2.6.9 Linux, 2026-10-08): `:libactr` 409, `:libactr/concurrent` 435 (reruns `:libactr` with bordeaux loaded), `:libactr/dual` 442 standalone (468 when the concurrent and dual legs share one process), `:libactr/server` 366, `:libactr/redis-store` 51 + 1 designed skip (external-redis mode) or 54 self-started (this box has `/usr/sbin/redis-server`, Redis 8.10.1 — `which` misleads, the fixture probes absolute paths), `:libactr/cluster` 128, `:libactr/empirical` 35, tutors 22/24/21. **Identical on CCL 1.13 (Linux)** — all ten suites in both redis modes, including the dual oracle and the CCL-worker e2e.
+- Suite name = system name minus `-test`. Current baselines (assertion counts, 0 failures; SBCL 2.6.9 Linux, 2026-10-08): `:libactr` 409, `:libactr/concurrent` 435 (reruns `:libactr` with bordeaux loaded), `:libactr/dual` 442 standalone (468 when the concurrent and dual legs share one process), `:libactr/server` 371, `:libactr/redis-store` 51 + 1 designed skip (external-redis mode) or 54 self-started (this box has `/usr/sbin/redis-server`, Redis 8.10.1 — `which` misleads, the fixture probes absolute paths), `:libactr/cluster` 132, `:libactr/empirical` 35, tutors 22/24/21. **Identical on CCL 1.13 (Linux)** — all ten suites in both redis modes, including the dual oracle and the CCL-worker e2e.
 - The external-redis fixture **FLUSHDBs on entry** — never point it at real data.
 - The cluster e2e spawns real worker subprocesses **in the same implementation as the test image** (follow-the-parent; sbcl `--eval` chain, ccl generated `--load` bootstrap — see `%worker-command`) and kills one mid-problem (~4 min runtime).
 - CCL portability check: `ccl --batch --load <script>` (Linux; Windows-era: `D:/Dev/ccl/wx86cl64.exe`) — use a script FILE; `--eval` strings containing package-prefixed symbols (e.g. `5am:...`) fail at read time because the packages don't exist yet. Related, run-evidenced: `uiop:argv0` returns NIL under CCL; an SBCL `--eval` string must hold EXACTLY one complete form (a `#-quicklisp` guard reads as zero forms and kills the process — hence the `(unless (find-package :ql) ...)` idiom in `%worker-command`).

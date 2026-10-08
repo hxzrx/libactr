@@ -137,7 +137,7 @@ logs an :irregular-retrieval kc-event, walk/walked an :regular-inflection one
 ;;; --- Phase 10 Task 4: full-problem e2e over real HTTP -------------------
 ;;; Mirrors fraction.e2e-full-problem: drive two single-step problems (go/went
 ;;; irregular + walk/walked regular) for one student over real HTTP, then GET
-;;; /student/mastery and assert 2 KCs. Also asserts the Phase 9 recursive
+;;; /engine/v1/student/mastery and assert 2 KCs. Also asserts the Phase 9 recursive
 ;;; json-encode wire shape on SYMBOL slot values: production names arrive as
 ;;; lowercase strings and mastery entries as JSON objects in an array.
 
@@ -149,7 +149,7 @@ logs an :irregular-retrieval kc-event, walk/walked an :regular-inflection one
 (test past-tense.e2e-full-problem
   "Two past-tense problems over real HTTP: answer went (irregular) and walked
 (regular) -> both 200 on-path with the visible productions as lowercase JSON
-strings, done=true on the single step, and /student/mastery returning BOTH KCs
+strings, done=true on the single step, and /engine/v1/student/mastery returning BOTH KCs
 as array-of-objects."
   (let* ((port (%find-free-port))
          (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
@@ -166,7 +166,7 @@ as array-of-objects."
              (labels ((answer (verb value)
                         ;; DEVIATION from the brief's helper (step-only): the
                         ;; brief never ends the first problem's session, but
-                        ;; /session/start is idempotent on a student's ACTIVE
+                        ;; /engine/v1/session/start is idempotent on a student's ACTIVE
                         ;; session, so the second start would return the go
                         ;; session's sid and trace "walked" against VERB=GO
                         ;; (off-path unclassified — observed as 5 FAILs on the
@@ -176,14 +176,14 @@ as array-of-objects."
                         ;; unaffected. Same fix as the %answer helper above
                         ;; (Task 3 deviation) and tests/test-empirical.lisp.
                         (let ((sid (cdr (assoc "session_id"
-                                               (post "/session/start"
+                                               (post "/engine/v1/session/start"
                                                      (format nil "{\"student_id\":\"pto\",\"problem_id\":\"~a\",\"model_id\":\"pt\"}" verb))
                                                :test #'string=))))
                           (multiple-value-prog1
-                              (post "/session/step"
+                              (post "/engine/v1/session/step"
                                     (format nil "{\"session_id\":\"~a\",\"action\":{\"type\":\"answer\",\"value\":\"~a\"}}"
                                             sid value))
-                            (post "/session/end"
+                            (post "/engine/v1/session/end"
                                   (format nil "{\"session_id\":\"~a\"}" sid))))))
                ;; go -> went: on-path, retrieve-irregular (lowercase wire symbol), done
                (multiple-value-bind (resp status) (answer "go" "went")
@@ -201,7 +201,7 @@ as array-of-objects."
                  (is (eq t (cdr (assoc "done" resp :test #'string=)))))
                ;; mastery: BOTH KCs, entries as objects (Phase 9 recursive encode)
                (multiple-value-bind (body status)
-                   (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=pto" port))
+                   (dex:get (format nil "http://127.0.0.1:~a/engine/v1/student/mastery?student_id=pto" port))
                  (is (= 200 status))
                  (let ((kcs (mapcar (lambda (entry) (cdr (assoc "kc" entry :test #'string=)))
                                     (cdr (assoc "kc" (yason:parse body :object-as :alist)

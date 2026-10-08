@@ -117,11 +117,11 @@ with buggy-add-across, feedback present."
 ;;; --- Phase 7 Task 4: full-problem e2e over real HTTP -------------------
 ;;;
 ;;; Mirrors addition.e2e-full-problem in tests/test-server.lisp: drive a complete
-;;; 1/2+1/3 problem (start -> common-denom 6 -> sum 5/6 -> GET /student/mastery ->
+;;; 1/2+1/3 problem (start -> common-denom 6 -> sum 5/6 -> GET /engine/v1/student/mastery ->
 ;;; end) over real HTTP (Hunchentoot acceptor + dexador client). Asserts 200s on
 ;;; every call, on-path traces with the visible productions
 ;;; (find-common-denominator / add-fractions), done=true after the sum, and that
-;;; /student/mastery returns 2 KCs (COMMON-DENOMINATOR + ADD-FRACTIONS) — proving
+;;; /engine/v1/student/mastery returns 2 KCs (COMMON-DENOMINATOR + ADD-FRACTIONS) — proving
 ;;; the per-session event log is being aggregated into the shared student log
 ;;; under the fraction domain's KC tagging. %find-free-port is defined locally
 ;;; here (the file's existing %server uses :start-acceptor-p nil; this e2e needs a
@@ -135,7 +135,7 @@ with buggy-add-across, feedback present."
 
 (test fraction.e2e-full-problem
   "Full 1/2+1/3 problem over real HTTP: start -> common-denom 6 -> sum 5/6 ->
-GET /student/mastery -> end. Asserts 200s, on-path, the visible productions,
+GET /engine/v1/student/mastery -> end. Asserts 200s, on-path, the visible productions,
 and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
   (let* ((port (%find-free-port))
          (s (libactr/server:start-tutor-server :port port :start-acceptor-p t)))
@@ -150,10 +150,10 @@ and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
                           (dex:post (format nil "http://127.0.0.1:~a~a" port path) :content json)
                         (values (yason:parse body :object-as :alist) status)))
                     (jstep (sid action)
-                      (post "/session/step"
+                      (post "/engine/v1/session/step"
                             (format nil "{\"session_id\":\"~a\",\"action\":~a}" sid action))))
              (let ((sid (cdr (assoc "session_id"
-                                    (post "/session/start"
+                                    (post "/engine/v1/session/start"
                                           "{\"student_id\":\"flo\",\"problem_id\":\"1/2+1/3\",\"model_id\":\"frac\"}")
                                     :test #'string=))))
                ;; common-denom 6 -> find-common-denominator (on-path)
@@ -177,7 +177,7 @@ and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
                ;; each parsed entry is an alist (("kc" . <NAME>) ("correct" . N)
                ;; ...) and the KC name is behind the "kc" alist cons.
                (multiple-value-bind (body status)
-                   (dex:get (format nil "http://127.0.0.1:~a/student/mastery?student_id=flo" port))
+                   (dex:get (format nil "http://127.0.0.1:~a/engine/v1/student/mastery?student_id=flo" port))
                  (is (= 200 status))
                  (let ((kcs (mapcar (lambda (entry)
                                       (cdr (assoc "kc" entry :test #'string=)))
@@ -188,7 +188,7 @@ and that mastery returns kc-tagged data (:common-denominator + :add-fractions)."
                    (is (find "ADD-FRACTIONS" kcs :test #'string=))))
                ;; end
                (multiple-value-bind (body status)
-                   (post "/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
+                   (post "/engine/v1/session/end" (format nil "{\"session_id\":\"~a\"}" sid))
                  (declare (ignore body))
                  (is (= 200 status))))))
       (libactr/server:stop-tutor-server s))))
