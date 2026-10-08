@@ -29,6 +29,18 @@ Host threading fixes along the way:
   host's virtual-network stack. `%terminate-worker` now force-kills via
   `taskkill /F` on Windows and keeps terminate-process elsewhere.
 
+Full ten-suite baseline verified on Linux (SBCL 2.6.9, 2026-10-08; serial
+runs, 0 failures): core 409, concurrent 435, dual 442, server 366,
+redis-store 54, fraction-tutor 22, past-tense-tutor 24, subtraction-tutor 21,
+empirical 35, cluster 128 including the kill-worker e2e. Two host-level
+findings, no code changes: (a) redis-store reads 54 with a LOCAL redis-server
+— the AOF kill/relaunch test executes its 3 checks instead of the 1 designed
+skip it takes under external-redis mode; (b) the cluster e2e (parent image +
+2 workers ≈ 275 MB RSS each) needs ≈0.5 GB free headroom — on smaller hosts
+the OOM killer silently removes a worker mid-load and the failure masquerades
+as worker-up poll timeouts and proxy 503s. README's cluster guide now carries
+the measured worker footprint as a provisioning hint.
+
 ## 0.4.1 (2026-10-07) — concurrency, robustness, and scalability review fixes
 
 Maintenance-mode defect fixes from a purpose-based review (libactr as a

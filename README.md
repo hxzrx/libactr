@@ -212,6 +212,13 @@ session — the event log is unharmed.
   between takeover and the zombie's next heartbeat is bounded by the heartbeat
   interval. Per-request epoch fencing remains out of scope (hot-path cost);
   the `epoch` route field stays reserved for it.
+- *Size each worker for ~300 MB RSS.* A loaded worker (SBCL image with
+  `libactr/cluster` + a domain adapter, acceptor and manager ticks running)
+  measured ~275 MB RSS steady-state on Linux/SBCL 2.6.9 (~200 MB after a
+  settled GC), with a higher transient while systems load. Under-provisioned
+  hosts hit the OOM killer: the worker dies silently mid-load — its log just
+  stops, no error — and the failure surfaces downstream as lease expiry,
+  takeover churn, or proxy 503s, never as an out-of-memory report.
 - *Repeat starts are sticky.* At `/session/start` the proxy first consults
   the student's existing route: when that worker is still live, the request
   is forwarded to it and the worker's own same-student idempotency returns
