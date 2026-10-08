@@ -1,8 +1,8 @@
 ;;;; tests/test-cluster-e2e.lisp — kill-a-real-worker end-to-end (Phase 13).
-;;;; Joins :libactr/cluster. Self-starts redis + TWO SBCL worker subprocesses
-;;;; (examples/cluster-worker.lisp); the proxy runs IN this test process.
-;;;; SKIP when redis-server is missing (sbcl is the running image's own —
-;;;; required).
+;;;; Joins :libactr/cluster. Self-starts redis + TWO worker subprocesses running
+;;;; the SAME lisp implementation as this test image (follow-the-parent policy;
+;;;; examples/cluster-worker.lisp); the proxy runs IN this test process.
+;;;; SKIP when redis-server is missing.
 (in-package :libactr/cluster-test)
 
 ;; [brief defect, run-evidenced: the brief's skeleton never joins the suite.
@@ -20,14 +20,54 @@
 ;; pass 4 arguments — at runtime the first spawn would signal PROGRAM-ERROR
 ;; (wrong number of arguments). The log wiring lives in the launch-program
 ;; :output/:error-output kwarg; the dead parameter is dropped, calls verbatim.]
-(defun %worker-command (worker-file port redis-port worker-id)
-  (list "sbcl" "--non-interactive"
-        "--eval" "(ql:quickload :libactr/cluster)"
-        "--eval" "(ql:quickload :libactr/subtraction-adapter)"
-        "--load" worker-file
-        "--eval" (format nil "(libactr/cluster-worker:main :port ~a :redis-host ~s :redis-port ~a :worker-id ~s)"
-                         port (or (nth-value 0 (%external-redis)) "127.0.0.1")
-                         redis-port worker-id)))
+(defun %worker-command (dir worker-file port redis-port worker-id)
+  "Full command line for one worker subprocess, running the SAME lisp
+implementation as this test image (follow-the-parent: the e2e must exercise
+the cluster under whichever lisp runs it).
+
+- SBCL: --non-interactive + --eval forms — SBCL reads each --eval only after
+  the previous one has been evaluated, so later forms may reference ql:/
+  libactr package prefixes. Quicklisp setup loads EXPLICITLY (guarded) — no
+  reliance on ~/.sbclrc.
+- CCL: --batch + ONE generated --load bootstrap script (DIR/worker-<id>-
+  bootstrap.lisp): CCL resolves package prefixes in -e forms at READ time,
+  before quicklisp has defined them (run-evidenced; see CLAUDE.md 'CCL
+  portability check'), so package-prefixed --eval strings cannot be used.
+  uiop:argv0 returns NIL under CCL (probed on CCL 1.13/Linux), so the binary
+  resolves via PATH (the /usr/local/bin/ccl wrapper exec's the kernel, so
+  the spawned PID is the lisp — kill semantics unchanged)."
+  (flet ((main-form ()
+           (format nil "(libactr/cluster-worker:main :port ~a :redis-host ~s :redis-port ~a :worker-id ~s)"
+                   port (or (nth-value 0 (%external-redis)) "127.0.0.1")
+                   redis-port worker-id)))
+    #+sbcl
+    (list "sbcl" "--non-interactive"
+          ;; [run-evidenced: a reader-conditional guard (#-quicklisp ...) is
+          ;; ILLEGAL as a bare SBCL --eval — when quicklisp is already loaded
+          ;; it reads as ZERO forms and SBCL's --eval signals (unhandled
+          ;; condition in --disable-debugger mode, observed), killing the
+          ;; worker instantly. A runtime find-package guard is one complete,
+          ;; always-readable form.]
+          "--eval" "(unless (find-package :ql) (load (merge-pathnames \"quicklisp/setup.lisp\" (user-homedir-pathname))))"
+          "--eval" "(ql:quickload :libactr/cluster)"
+          "--eval" "(ql:quickload :libactr/subtraction-adapter)"
+          "--load" worker-file
+          "--eval" (main-form))
+    #+ccl
+    (let ((script (namestring (merge-pathnames
+                               (format nil "worker-~a-bootstrap.lisp" worker-id)
+                               (uiop:ensure-directory-pathname dir)))))
+      (with-open-file (s script :direction :output :if-exists :supersede)
+        (write-line ";;; auto-generated e2e worker bootstrap" s)
+        (write-line "(unless (find-package :ql) (load (merge-pathnames \"quicklisp/setup.lisp\" (user-homedir-pathname))))" s)
+        (write-line "(ql:quickload :libactr/cluster)" s)
+        (write-line "(ql:quickload :libactr/subtraction-adapter)" s)
+        (format s "(load ~s)~%" worker-file)
+        (write-line (main-form) s))
+      (list "ccl" "--batch" "--load" script))
+    #-(or sbcl ccl)
+    (error "e2e worker spawn: unsupported implementation ~a (~a)"
+           (lisp-implementation-type) (lisp-implementation-version))))
 
 (defun %terminate-worker (proc)
   "Force-kill a worker subprocess, portably. On Windows uiop:terminate-process
@@ -106,12 +146,12 @@ all with the SAME session_id (transparent continuation)."
                ;; launch leaked w1 if anything signaled between launch and
                ;; protect entry (poll failure burned 90s then leaked).
                (ensure-directories-exist (uiop:ensure-directory-pathname dir))
-               (setf w1 (uiop:launch-program (%worker-command worker-file p1 port "w1")
+               (setf w1 (uiop:launch-program (%worker-command dir worker-file p1 port "w1")
                                              :output log1 :error-output log1))
                ;; worker 1 up (FASL-cold worst case ~60s; warm ~5-15s)
                (is (%poll-until (lambda () (worker-up-p p1)) 90))
                ;; then worker 2 — serialized (see the let* note above)
-               (setf w2 (uiop:launch-program (%worker-command worker-file p2 port "w2")
+               (setf w2 (uiop:launch-program (%worker-command dir worker-file p2 port "w2")
                                              :output log2 :error-output log2))
                (is (%poll-until (lambda () (worker-up-p p2)) 90))
                ;; start through the proxy

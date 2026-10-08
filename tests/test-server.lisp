@@ -90,7 +90,7 @@ action to an on-path intent), check mastery aggregates, end the session."
              (is (not (null (gethash sid (server-sessions server)))))
              (let ((handle (gethash sid (server-sessions server))))
                (is (typep handle 'session-handle))
-               (is (bt:lock-p (handle-lock handle)))            ; bordeaux lock present
+               (is (bt2:lockp (handle-lock handle)))            ; bordeaux lock present
                (is (typep (handle-adapter handle) 'stub-adapter)))
              ;; step: stub maps ((type . start)) to the on-path initialize intent.
              (multiple-value-bind (result adapter-found session)
@@ -150,7 +150,7 @@ action to an on-path intent), check mastery aggregates, end the session."
                (setf (gethash "conflict-1" (server-sessions server))
                      (make-instance 'session-handle
                                     :session ended-session
-                                    :lock (bt:make-lock "test-conflict")
+                                    :lock (bt2:make-lock :name "test-conflict")
                                     :adapter adapter))
                (multiple-value-bind (result sentinel)
                    (server-step-session server "conflict-1" '((type . start)))
@@ -252,10 +252,10 @@ are EQUAL. This is deterministic — no flake."
              (register-model server "add" md adapter))
            (let ((threads
                    (loop repeat n collect
-                         (bt:make-thread
+                         (bt2:make-thread
                           (lambda ()
                             (server-start-session server "racer" "1+1" "add"))))))
-             (let ((sids (mapcar #'bt:join-thread threads)))
+             (let ((sids (mapcar #'bt2:join-thread threads)))
                ;; all 16 calls returned a string
                (is (= n (length sids)))
                (is (every #'stringp sids))
@@ -290,16 +290,16 @@ the assertion covers the contract)."
              ;; spawn N steppers + 1 ender; join all; collect steppers' results
              (let ((steppers
                      (loop repeat n collect
-                           (bt:make-thread
+                           (bt2:make-thread
                             (lambda ()
                               (multiple-value-list
                                (server-step-session server sid '((type . start))))))))
-                   (ender (bt:make-thread
+                   (ender (bt2:make-thread
                            (lambda ()
                              (multiple-value-list
                               (server-end-session server sid))))))
-               (let ((step-results (mapcar #'bt:join-thread steppers))
-                     (end-result (bt:join-thread ender)))
+               (let ((step-results (mapcar #'bt2:join-thread steppers))
+                     (end-result (bt2:join-thread ender)))
                  ;; every stepper result is one of: success (non-nil first value)
                  ;; or :conflict or :not-found
                  (dolist (r step-results)
@@ -536,7 +536,7 @@ strings; t -> true; nil -> null; numbers/strings pass through."
 ;;;     *parse-object-as*) as a keyword arg and binds it for the call. No need
 ;;;     to wrap with (let ((yason:*parse-object-as* :alist)) ...).
 ;;;   * DEVIATION FROM BRIEF (closure capture): the brief's
-;;;       (loop for sid in sids collect (bt:make-thread (lambda () ...sid...)))
+;;;       (loop for sid in sids collect (bt2:make-thread (lambda () ...sid...)))
 ;;;     captures the SAME loop-variable binding across all lambdas under SBCL
 ;;;     (verified: (loop for x in '(1 2 3) collect (lambda () x)) -> (3 3 3)),
 ;;;     so all N threads would step the LAST session only — defeating the test's
@@ -630,7 +630,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                   ;; binding. See file header note for Phase 5 Task 6.
                   (threads (loop for sid in sids collect
                                  (let ((sid sid))
-                                   (bt:make-thread
+                                   (bt2:make-thread
                                     (lambda ()
                                       (nth-value 1
                                        (dex:post
@@ -639,7 +639,7 @@ Phase 5 analog of Phase 4's tests/test-concurrent.lisp."
                                                          sid)))))))))
              (is (= n (length sids)))
              (is (= n (length (remove-duplicates sids :test #'string=))))
-             (let ((results (mapcar #'bt:join-thread threads)))
+             (let ((results (mapcar #'bt2:join-thread threads)))
                (is (= n (length results)))
                (is (every (lambda (x) (= 200 x)) results)
                    (format nil "expected all ~a results to be 200, got ~a" n results)))))
@@ -935,7 +935,7 @@ value; at quiesce the registry is consistent (all sessions ended, N students)."
            (let ((threads
                    (loop for i from 1 to n collect
                          (let ((student (format nil "stress-~a" i)))
-                           (bt:make-thread
+                           (bt2:make-thread
                             (lambda ()
                               (loop repeat cycles
                                     do (handler-case
@@ -949,7 +949,7 @@ value; at quiesce the registry is consistent (all sessions ended, N students)."
                                              (server-end-session server sid))
                                          (error (c)
                                            (push (princ-to-string c) errors))))))))))
-             (mapcar #'bt:join-thread threads)
+             (mapcar #'bt2:join-thread threads)
              (is (null errors) "unexpected errors: ~a" errors)
              ;; quiesced state: no active sessions, N students
              (is (zerop (hash-table-count (server-sessions server))))
@@ -971,18 +971,18 @@ the recompute, not an observation count.)"
            (multiple-value-bind (md adapter) (%stub-model+adapter)
              (register-model server "add" md adapter))
            (let* ((sid (server-start-session server "racy" "5+2" "add"))
-                  (stepper (bt:make-thread
+                  (stepper (bt2:make-thread
                             (lambda ()
                               (dotimes (i k)
                                 (server-step-session server sid '((type . start)))))))
-                  (reader (bt:make-thread
+                  (reader (bt2:make-thread
                            (lambda ()
                              (loop
-                               (unless (bt:thread-alive-p stepper) (return))
+                               (unless (bt2:thread-alive-p stepper) (return))
                                (handler-case (server-student-mastery server "racy")
                                  (error (c) (return (princ-to-string c)))))))))
-             (bt:join-thread stepper)
-             (is (null (bt:join-thread reader)) "mastery reader errored")
+             (bt2:join-thread stepper)
+             (is (null (bt2:join-thread reader)) "mastery reader errored")
              ;; at quiesce: cached result == from-scratch recompute of the log
              (let* ((ss (gethash "racy" (server-students server)))
                     (recompute (compute-mastery

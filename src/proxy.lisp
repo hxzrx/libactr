@@ -35,7 +35,7 @@
    ;; handler threads — single-socket, not thread-safe — so all proxy redis
    ;; use is serialized under this per-instance lock.
    (redis-lock :reader proxy-redis-lock
-               :initform (bordeaux-threads:make-lock "proxy-redis"))
+               :initform (bt2:make-lock :name "proxy-redis"))
    (rr :accessor proxy-rr :initform 0))
   (:documentation "Front-door proxy. Holds its own redis connection + a
 round-robin cursor for worker selection at session start."))
@@ -53,7 +53,7 @@ connection is single-socket and hunchentoot is thread-per-connection; the
 lock serializes the lazy connect and every command."
   (let ((pp (gensym)))
     `(let ((,pp ,p))
-       (bordeaux-threads:with-lock-held ((proxy-redis-lock ,pp))
+       (bt2:with-lock-held ((proxy-redis-lock ,pp))
          (let* ((conn (or (proxy-conn ,pp)
                           (setf (proxy-conn ,pp)
                                 (let ((redis:*connection* nil))
@@ -212,7 +212,7 @@ written, EVERY routed step/end read nil and 404'd. nth-value 0 instead.]"
                        ;; [hardening, Task 8 ruling: the round-robin cursor
                        ;; bumps under the instance lock — thread-per-connection
                        ;; handlers would otherwise race the incf.]
-                       (nth (mod (bordeaux-threads:with-lock-held
+                       (nth (mod (bt2:with-lock-held
                                      ((proxy-redis-lock p))
                                    (incf (proxy-rr p)))
                                  (length live))
@@ -338,7 +338,7 @@ it). MAX-BODY-SIZE (review F8) caps accepted request bodies in bytes
   (setf (proxy-acceptor p) nil)
   (when (proxy-conn p)
     ;; under the lock: an in-flight handler thread may hold the connection
-    (bordeaux-threads:with-lock-held ((proxy-redis-lock p))
+    (bt2:with-lock-held ((proxy-redis-lock p))
       (let ((redis:*connection* (proxy-conn p)))
         (ignore-errors (redis:disconnect)))
       (setf (proxy-conn p) nil)))

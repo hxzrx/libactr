@@ -51,7 +51,7 @@
    ;; scan / takeover) multiplex this ONE connection, so all manager redis
    ;; use (lazy connect included) is serialized under this per-instance lock.
    (redis-lock         :reader cluster-redis-lock
-                       :initform (bordeaux-threads:make-lock "cluster-redis"))
+                       :initform (bt2:make-lock :name "cluster-redis"))
    (threads            :accessor cluster-threads :initform nil)
    (beats              :accessor cluster-beats :initform 0)
    (running            :accessor cluster-running :initform nil))
@@ -72,7 +72,7 @@ single-socket, not thread-safe — the lock serializes the lazy connect and
 every command (controller-mandated, Task 7 review ruling)."
   (let ((mm (gensym)))
     `(let ((,mm ,m))
-       (bordeaux-threads:with-lock-held ((cluster-redis-lock ,mm))
+       (bt2:with-lock-held ((cluster-redis-lock ,mm))
          (let* ((conn (or (cluster-conn ,mm)
                           (setf (cluster-conn ,mm)
                                 (let ((redis:*connection* nil))
@@ -194,7 +194,7 @@ under session-id SID, overwriting any previous one."))
    ;; single-socket, not thread-safe — the scan thread (and Task 9's takeover)
    ;; multiplex this ONE connection, so all use is serialized under this lock.
    (lock :reader redis-checkpoint-store-lock
-         :initform (bordeaux-threads:make-lock "cluster-store-redis")))
+         :initform (bt2:make-lock :name "cluster-store-redis")))
   (:documentation "Redis-backed checkpoint store. JSON via the Task-1 symbol
 codec: explicit schema (spec §8 Interfaces) — top-level scalars, tagged status,
 state as an ARRAY of {buffer isa slots[]} entries (buffer/slot names must keep
@@ -214,7 +214,7 @@ cl-redis connections are single-socket, not thread-safe, and the scan thread
 (Task 8) plus the takeover thread (Task 9) share this store's connection."
   (let ((st (gensym)))
     `(let ((,st ,store))
-       (bordeaux-threads:with-lock-held ((redis-checkpoint-store-lock ,st))
+       (bt2:with-lock-held ((redis-checkpoint-store-lock ,st))
          (let* ((conn (or (redis-checkpoint-store-conn ,st)
                           (setf (redis-checkpoint-store-conn ,st)
                                 (let ((redis:*connection* nil))
@@ -325,8 +325,8 @@ order: session -> log -> store-redis (the same chain the step path uses)."
             (handle (cdr pair)))
         (push sid seen)
         (incf checked)
-        (bordeaux-threads:with-lock-held ((libactr/server:handle-lock handle))
-          (bordeaux-threads:with-lock-held
+        (bt2:with-lock-held ((libactr/server:handle-lock handle))
+          (bt2:with-lock-held
               ((libactr/server:server-log-lock
                 (cluster-server m)
                 (libactr:session-student-id (libactr/server:handle-session handle))))
@@ -422,8 +422,8 @@ marker in cluster-takeover-tick."
        server sid
        (make-instance 'libactr/server:session-handle
                       :session session
-                      :lock (bordeaux-threads:make-lock
-                             (format nil "session-~a" sid))
+                      :lock (bt2:make-lock
+                             :name (format nil "session-~a" sid))
                       :adapter adapter))
       (with-cluster-redis (m)
         ;; A4 (phase 14): the route flip — both routes (HSET+HINCRBY each),
@@ -540,7 +540,7 @@ return 0"
                             ;; order: manager/store locks are RELEASED at this
                             ;; point and the handle lock is a leaf (the step
                             ;; path holds nothing beneath it) — no cycle.
-                            (bordeaux-threads:with-lock-held
+                            (bt2:with-lock-held
                                 ((libactr/server:handle-lock h))
                               (libactr:checkpoint-session
                                (libactr/server:handle-session h))))
@@ -594,15 +594,15 @@ before the asserted lower bound. Deadline computed in INTEGER seconds
                      2))
         (destroyed 0))
     (dolist (th (cluster-threads m))
-      (loop :until (or (not (bordeaux-threads:thread-alive-p th))
+      (loop :until (or (not (bt2:thread-alive-p th))
                        (> (get-universal-time) deadline))
             :do (sleep 0.05))
-      (when (bordeaux-threads:thread-alive-p th)
+      (when (bt2:thread-alive-p th)
         (incf destroyed)
         (format *error-output*
                 "libactr/cluster: stop deadline reached — destroying tick thread ~a (it may hold the redis lock mid-command)~%"
-                (bordeaux-threads:thread-name th))
-        (ignore-errors (bordeaux-threads:destroy-thread th))))
+                (bt2:thread-name th))
+        (ignore-errors (bt2:destroy-thread th))))
     destroyed))
 
 (defun make-cluster-manager (&key server worker-id redis-host redis-port
@@ -637,15 +637,15 @@ restart requires stop-cluster-manager first."
     (return-from start-cluster-manager m))
   (setf (cluster-running m) t
         (cluster-threads m)
-        (list (bordeaux-threads:make-thread
+        (list (bt2:make-thread
                (lambda () (%tick-loop m "heartbeat" #'cluster-heartbeat-tick
                                       (cluster-heartbeat-interval m)))
                :name (uiop:strcat "cluster-heartbeat-" (cluster-worker-id m)))
-              (bordeaux-threads:make-thread
+              (bt2:make-thread
                (lambda () (%tick-loop m "scan" #'cluster-scan-tick
                                       (cluster-scan-interval m)))
                :name (uiop:strcat "cluster-scan-" (cluster-worker-id m)))
-              (bordeaux-threads:make-thread
+              (bt2:make-thread
                (lambda () (%tick-loop m "takeover" #'cluster-takeover-tick
                                       (cluster-takeover-interval m)))
                :name (uiop:strcat "cluster-takeover-" (cluster-worker-id m)))))
@@ -673,7 +673,7 @@ outlive the manager). Safe to call multiple times."
   ;; with-store-redis applies), idempotent (conn slot nil'ed).
   (let ((store (cluster-store m)))
     (when (typep store 'redis-checkpoint-store)
-      (bordeaux-threads:with-lock-held ((redis-checkpoint-store-lock store))
+      (bt2:with-lock-held ((redis-checkpoint-store-lock store))
         (when (redis-checkpoint-store-conn store)
           (let ((redis:*connection* (redis-checkpoint-store-conn store)))
             (ignore-errors (redis:disconnect)))

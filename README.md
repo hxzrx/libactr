@@ -21,8 +21,11 @@ self-contained: a fresh clone runs all ten test suites standalone.
 
 ## Requirements
 
-- SBCL (developed and tested on 2.6.7; baselines re-verified on 2.6.8); any
-  ANSI CL with ASDF 3.3+ should work.
+- SBCL (developed and tested; ten-suite baselines re-verified on 2.6.9) or
+  CCL (1.13; all ten suites pass with identical counts — the cluster e2e
+  spawns its workers in whichever of the two runs it). Threading is
+  bordeaux-threads APIv2 throughout; any ANSI CL with ASDF 3.3+ and threads
+  should work.
 - [Quicklisp](https://www.quicklisp.org/) for the service-layer deps:
   hunchentoot, bordeaux-threads, yason (server); cl-redis (redis-store);
   dexador (cluster); fiveam (tests).
@@ -161,6 +164,11 @@ sbcl --non-interactive \
   --eval '(ql:quickload :libactr/subtraction-adapter)' \
   --load examples/cluster-worker.lisp \
   --eval '(libactr/cluster-worker:main :port 8801 :redis-port 6379 :worker-id "w1")'
+
+# CCL workers: same systems + MAIN call, but via a --load bootstrap script
+# (CCL resolves package prefixes in -e forms at read time, before quicklisp
+# defines them) — see the launch comment atop examples/cluster-worker.lisp;
+# the kill-worker e2e generates exactly that script per worker.
 ```
 
 The ingress proxy (alternative: any external load balancer — see guide):
@@ -417,17 +425,24 @@ sbcl --non-interactive --eval '(ql:quickload :libactr/cluster-test)' --eval '(5a
 # :libactr/past-tense-tutor, :libactr/subtraction-tutor, :libactr/empirical
 ```
 
-Green baseline at 0.4.1 (review fixes F1-F9), re-verified 2026-10-07 on
-SBCL 2.6.7 with the core suite re-verified identical on CCL 1.13 (Windows;
-assertion-level FiveAM counts, 0 failures): `:libactr` 409, `:libactr/server`
-366, `:libactr/empirical` 35, `:libactr/fraction-tutor` 22,
-`:libactr/past-tense-tutor` 24, `:libactr/subtraction-tutor` 21; the concurrent
-and dual legs rerun the `:libactr` suite with bordeaux/act-r loaded (435 /
-468 as run). The redis-dependent suites (`:libactr/redis-store` 51 + 1
-designed skip, `:libactr/cluster` 128 incl. the kill-worker e2e) either
-self-start a local redis-server or — when `LIBACTR_TEST_REDIS_HOST` /
-`LIBACTR_TEST_REDIS_PORT` point at an external DISPOSABLE instance — connect
-there directly (FLUSHDB on entry; never point this at real data).
+Under CCL, drive the suites with `ccl --batch --load <script>` instead —
+write the `ql:quickload` / `5am:run!` forms to a file (CCL resolves package
+prefixes in `-e` forms at read time, before quicklisp defines them).
+
+Green baseline at 0.4.2 (CCL portability + bordeaux-threads APIv2),
+re-verified 2026-10-08 on Linux with SBCL 2.6.9 AND CCL 1.13 (assertion-level
+FiveAM counts identical on both, 0 failures): `:libactr` 409,
+`:libactr/server` 366, `:libactr/empirical` 35, `:libactr/fraction-tutor` 22,
+`:libactr/past-tense-tutor` 24, `:libactr/subtraction-tutor` 21; the
+concurrent and dual legs rerun the `:libactr` suite with bordeaux/act-r
+loaded (435 / 442 standalone — 468 when both legs share one process). The
+redis-dependent suites (`:libactr/redis-store` 51 + 1 designed skip — 54
+with a local redis-server binary, where the AOF kill/relaunch test runs its
+3 checks; `:libactr/cluster` 128 incl. the kill-worker e2e, spawned in the
+same implementation as the test image) either self-start a local
+redis-server or — when `LIBACTR_TEST_REDIS_HOST` / `LIBACTR_TEST_REDIS_PORT`
+point at an external DISPOSABLE instance — connect there directly (FLUSHDB
+on entry; never point this at real data).
 
 ## Dual-track validation
 

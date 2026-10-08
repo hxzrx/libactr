@@ -439,7 +439,7 @@ unchanged, dotted pairs included."
     (let* ((rlog (make-redis-event-log :key "libactr:test:evconc"
                                        :host (%test-redis-host) :port port))
            (n 30)
-           (writer (bt:make-thread
+           (writer (bt2:make-thread
                     (lambda ()
                       (dotimes (i n)
                         (log-append rlog
@@ -447,14 +447,14 @@ unchanged, dotted pairs included."
                                      :student-id "s1" :problem-id "p1"
                                      :kc-event (make-kc-event :kc 'add
                                                               :correct-p t)))))))
-           (reader (bt:make-thread
+           (reader (bt2:make-thread
                     (lambda ()
                       (loop
-                        (unless (bt:thread-alive-p writer) (return))
+                        (unless (bt2:thread-alive-p writer) (return))
                         (log-all-events rlog)
                         (log-last-seq rlog))))))
-      (bt:join-thread writer)
-      (bt:join-thread reader)
+      (bt2:join-thread writer)
+      (bt2:join-thread reader)
       ;; the log is intact: n events, contiguous seqs, correct kc stream
       (let ((events (log-all-events rlog)))
         (is (= n (length events)))

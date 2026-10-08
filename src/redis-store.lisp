@@ -22,7 +22,7 @@
    ;; single socket (also closes the double-connect window of the old
    ;; check-then-set lazy init).
    (lock :reader redis-event-log-lock
-         :initform (bt:make-lock "redis-event-log")))
+         :initform (bt2:make-lock :name "redis-event-log")))
   (:documentation "Append-only event log backed by a Redis LIST with AOF persistence.
 One cl-redis connection, lazily opened; every operation on it serialized under
 the instance lock (single-socket, not thread-safe)."))
@@ -42,7 +42,7 @@ all under the log's per-instance lock (review F2). cl-redis's connect refuses if
 log opens its own independent connection."
   (let ((l (gensym)))
     `(let ((,l ,log))
-       (bt:with-lock-held ((redis-event-log-lock ,l))
+       (bt2:with-lock-held ((redis-event-log-lock ,l))
          (let ((conn (or (slot-value ,l 'conn)
                          (setf (slot-value ,l 'conn)
                                (let ((redis:*connection* nil))
@@ -208,7 +208,7 @@ produced the phase-10 char-list tree). Circular structure is not handled
 (defmethod disconnect-log ((log redis-event-log))
   "Close the cl-redis connection if open; idempotent. Does NOT create a connection.
 Under the log lock (review F2: an in-flight op on another thread holds it)."
-  (bt:with-lock-held ((redis-event-log-lock log))
+  (bt2:with-lock-held ((redis-event-log-lock log))
     (let ((conn (slot-value log 'conn)))
       (when conn
         (let ((redis:*connection* conn))

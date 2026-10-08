@@ -3,7 +3,7 @@
 All notable changes to libactr are documented here. Phase references point at the
 design docs in the project-level `docs/` repository.
 
-## Unreleased — test infrastructure (post-0.4.1)
+## 0.4.2 (2026-10-08) — CCL portability, bordeaux-threads APIv2, external-redis test infrastructure
 
 The redis-dependent suites can now run against an EXTERNAL disposable redis:
 setting `LIBACTR_TEST_REDIS_HOST`/`LIBACTR_TEST_REDIS_PORT` makes the
@@ -40,6 +40,43 @@ skip it takes under external-redis mode; (b) the cluster e2e (parent image +
 the OOM killer silently removes a worker mid-load and the failure masquerades
 as worker-up poll timeouts and proxy 503s. README's cluster guide now carries
 the measured worker footprint as a provisioning hint.
+
+- **bordeaux-threads APIv2 everywhere.** Threading now uses the APIv2 package
+  consistently (`BT2`, built by the same `:bordeaux-threads` system alongside
+  APIv1 since v0.9.x — no dependency or version change): every `bt:` /
+  `bordeaux-threads:` prefix became `bt2:`, `bt:lock-p` → `bt2:lockp` (v2
+  rename), and every `make-lock` passes its name by `:name` keyword (v2 takes
+  `&key name`; v1 took an optional positional). The mixed-API failure mode is
+  worth remembering: a v1 `with-lock-held` on a v2 lock signals TYPE-ERROR
+  (v1 inlines SB-THREAD:MUTEX; a BT2:LOCK is a wrapper, not a mutex) — this
+  surfaced as 11 cluster failures while server.lisp had moved to v2 but
+  cluster.lisp/proxy.lisp still used the v1 full-name `bordeaux-threads:`
+  prefix, and `make-lock` sites missed by the `:name` rewrite additionally
+  signal "odd number of &KEY arguments". v2 `join-thread` is strictly
+  fail-loud (signals `abnormal-exit` when a thread died of an unhandled
+  condition); every join site audited — the test threads either handle their
+  conditions or the test should fail loudly.
+- **CCL: full support, verified.** The kill-worker e2e now spawns its workers
+  in the SAME implementation as the test image (follow-the-parent). The SBCL
+  branch loads quicklisp explicitly — [run-evidenced] a `#-quicklisp`
+  reader-conditional guard is illegal as a bare SBCL `--eval` (with quicklisp
+  already loaded it reads as ZERO forms; SBCL's --eval demands exactly one
+  form per string and signals, killing the worker instantly), so the guard is
+  a runtime `(unless (find-package :ql) ...)`. The CCL branch generates a
+  `--load` bootstrap script: CCL resolves package prefixes in -e forms at
+  READ time, before quicklisp defines them, so package-prefixed --eval
+  strings cannot be used; and `uiop:argv0` returns NIL under CCL (probed,
+  CCL 1.13/Linux), so the binary resolves via PATH. examples/cluster-worker.lisp
+  documents both launch forms.
+
+Full ten-suite matrix green on CCL 1.13 (Linux, 2026-10-08; assertion counts
+identical to SBCL): core 409, concurrent 435, dual 442 (the vendored act-r
+oracle compiles and passes under CCL — no exemption needed), server 366,
+redis-store 51 + 1 designed skip under external-redis mode AND 54 with the
+local self-started redis-server (the AOF kill/relaunch test executes — both
+modes verified on both implementations, Redis 8.10.1), fraction-tutor 22,
+past-tense-tutor 24, subtraction-tutor 21, empirical 35, cluster 128
+including the kill-worker e2e run with a CCL parent and CCL workers.
 
 ## 0.4.1 (2026-10-07) — concurrency, robustness, and scalability review fixes
 

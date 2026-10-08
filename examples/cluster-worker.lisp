@@ -1,11 +1,17 @@
 ;;;; examples/cluster-worker.lisp — phase 13 cluster worker bootstrap.
 ;;;; DUAL USE: the deployment reference AND the e2e test's worker program.
-;;;; Launch (e2e does exactly this):
+;;;; Launch (e2e does exactly this, spawning workers in the SAME lisp as the
+;;;; test image):
 ;;;;   sbcl --non-interactive \
+;;;;     --eval '(unless (find-package :ql) (load (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))' \
 ;;;;     --eval '(ql:quickload :libactr/cluster)' \
 ;;;;     --eval '(ql:quickload :libactr/subtraction-adapter)' \
 ;;;;     --load <this file> \
 ;;;;     --eval '(libactr/cluster-worker:main :port 8801 :redis-port 6390 :worker-id "w1")'
+;;;;   ccl --batch --load <a bootstrap script that quickloads the same two
+;;;;     systems, loads this file, and calls MAIN — CCL reads -e forms'
+;;;;     package prefixes before quicklisp defines them, so --eval cannot
+;;;;     carry ql:/libactr symbols (see CLAUDE.md 'CCL portability check').
 ;;;; The worker registers the subtraction model under "sub" (all workers in a
 ;;;; cluster MUST register the same model table — deployment guide, spec §13.6),
 ;;;; runs its tutor-server with redis event logs, joins the cluster, and blocks.

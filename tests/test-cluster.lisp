@@ -479,7 +479,7 @@ with a warning; the local session is untouched."
                      (make-instance 'session-handle
                                     :session (handle-session
                                               (gethash fake-sid (server-sessions s2)))
-                                    :lock (bordeaux-threads:make-lock "fake")
+                                    :lock (bt2:make-lock :name "fake")
                                     :adapter (cdr (gethash "sub" (server-models s2))))))
              (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
                (is (= 0 taken))
@@ -512,7 +512,7 @@ idempotent flip instead of skipping as a foreign collision."
                    (make-instance 'session-handle
                                   :session (libactr:restore-from-checkpoint
                                             cp (car entry) log)
-                                  :lock (bordeaux-threads:make-lock "half")
+                                  :lock (bt2:make-lock :name "half")
                                   :adapter (cdr entry)))
              (multiple-value-bind (taken dead) (cluster-takeover-tick m2)
                (declare (ignore dead))
@@ -725,7 +725,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
            (doom-sock (usocket:socket-listen "127.0.0.1" doom-port :reuse-address t))
            (doom-conn (let ((redis:*connection* nil))
                         (redis:connect :host (%test-redis-host) :port port)))
-           (doom-th (bordeaux-threads:make-thread
+           (doom-th (bt2:make-thread
                      (lambda ()
                        (ignore-errors
                          (let ((c (usocket:socket-accept doom-sock)))
@@ -786,7 +786,7 @@ retry. This is the leg that goes red under the brief's Step-5 probe.]"
                             (cdr (assoc "status" (yason:parse b3 :object-as :alist)
                                         :test #'string=))))))
         (ignore-errors (usocket:socket-close doom-sock))   ; unblocks a pending accept
-        (ignore-errors (bordeaux-threads:join-thread doom-th))
+        (ignore-errors (bt2:join-thread doom-th))
         (let ((redis:*connection* doom-conn))
           (ignore-errors (redis:disconnect)))
         (stop-tutor-proxy p)
@@ -895,12 +895,12 @@ hanging the leave below)."
            (setf (libactr/cluster::cluster-running m) t
                  (cluster-threads m)
                  (loop :repeat 3 :collect
-                       (bordeaux-threads:make-thread
+                       (bt2:make-thread
                         (lambda () (loop :while (libactr/cluster::cluster-running m)
                                          :do (sleep 0.05))))))
            (setf (libactr/cluster::cluster-running m) nil)
            (is (= 0 (libactr/cluster::%stop-tick-threads m)))
-           (is (every (lambda (th) (not (bordeaux-threads:thread-alive-p th)))
+           (is (every (lambda (th) (not (bt2:thread-alive-p th)))
                       (cluster-threads m))))
       ;; P21 (parked-minors cleanup): fixture hygiene (see the C1 test above).
       (stop-tutor-server s))))
@@ -913,7 +913,7 @@ hanging the leave below)."
              :server s
              :worker-id "w-df"
              :heartbeat-interval 0.1 :scan-interval 0.1 :takeover-interval 0.1))
-         (th (bordeaux-threads:make-thread (lambda () (sleep 100)))))
+         (th (bt2:make-thread (lambda () (sleep 100)))))
     (unwind-protect
          (progn
            (setf (libactr/cluster::cluster-running m) nil
@@ -1041,7 +1041,7 @@ retry-to-same-worker-fails-again)."
            (sentinel-port (%find-free-port))
            (sentinel-sock (usocket:socket-listen "127.0.0.1" sentinel-port
                                                  :reuse-address t))
-           (sentinel-th (bordeaux-threads:make-thread
+           (sentinel-th (bt2:make-thread
                          (lambda ()
                            (loop :repeat 4 :do
                              (ignore-errors
@@ -1090,13 +1090,13 @@ retry-to-same-worker-fails-again)."
         ;; a finished thread is instant). Assertions have already run, so the
         ;; extra counted accepts are harmless.]
         (ignore-errors
-          (loop :while (bordeaux-threads:thread-alive-p sentinel-th)
+          (loop :while (bt2:thread-alive-p sentinel-th)
                 :do (ignore-errors
                       (usocket:socket-close
                        (usocket:socket-connect "127.0.0.1" sentinel-port)))
                     (sleep 0.05)))
         (ignore-errors (usocket:socket-close sentinel-sock))
-        (ignore-errors (bordeaux-threads:join-thread sentinel-th))
+        (ignore-errors (bt2:join-thread sentinel-th))
         (stop-tutor-proxy p)
         (stop-cluster-manager m1)
         (stop-tutor-server s1)))))

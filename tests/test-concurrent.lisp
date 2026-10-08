@@ -15,7 +15,7 @@
          (prod-before (mapcar #'production-name (model-definition-productions md))))
     (let ((threads
             (loop repeat n collect
-                  (bt:make-thread
+                  (bt2:make-thread
                    (lambda ()
                      (let* ((s (start-session md (gensym) (gensym)))
                             (r (step-session s (make-step-intent
@@ -23,7 +23,7 @@
                        (list :status (trace-result-status r)
                              :path (session-path s)
                              :sum (chunk-slot (buffer-chunk (session-state s) 'goal) 'sum))))))))
-      (let ((results (mapcar #'bt:join-thread threads)))
+      (let ((results (mapcar #'bt2:join-thread threads)))
         (is (= n (length results)))
         (dolist (r results)
           (is (eq :on-path (getf r :status)))

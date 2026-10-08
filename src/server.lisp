@@ -103,7 +103,7 @@ The cognitive-session itself (libactr core) holds no lock slot."))
   ((acceptor       :accessor server-acceptor       :initform nil)
    (port           :reader   server-port           :initarg :port :initform 0)
    (students       :accessor server-students       :initform (make-hash-table :test #'equal))
-   (students-lock  :reader   server-students-lock  :initform (bt:make-lock "tutor-server.students"))
+   (students-lock  :reader   server-students-lock  :initform (bt2:make-lock :name "tutor-server.students"))
    (sessions       :accessor server-sessions       :initform (make-hash-table :test #'equal))
    (models         :accessor server-models         :initform (make-hash-table :test #'equal))
    (redis-config   :reader   server-redis-config   :initarg :redis-config :initform nil)
@@ -211,7 +211,7 @@ which case the deployment is expected to have loaded libactr/redis-store."
 registry lock (this is the registry-held half of server-log-lock)."
   (or (gethash student-id (server-log-locks server))
       (setf (gethash student-id (server-log-locks server))
-            (bt:make-lock (format nil "student-log-~a" student-id)))))
+            (bt2:make-lock :name (format nil "student-log-~a" student-id)))))
 
 (defun server-log-lock (server student-id)
   "The per-student lock serializing every access to STUDENT-ID's SHARED event
@@ -222,7 +222,7 @@ thread used to iterate the same in-memory vector another thread was extending,
 and on the redis backend two ops interleaved on one socket). Takes the registry
 lock only to find-or-create the lock object (released before the caller
 acquires it — the acquisition chain stays SESSION -> LOG -> REGISTRY)."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (%ensure-log-lock-locked server student-id)))
 
 (defun server-sessions-snapshot (server)
@@ -230,7 +230,7 @@ acquires it — the acquisition chain stays SESSION -> LOG -> REGISTRY)."
 under the registry lock (review F1: iterating a live maphash races concurrent
 setf/remhash from request threads — the cluster scan/takeover ticks and any
 other external iterator must walk this snapshot instead)."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (let (acc)
       (maphash (lambda (sid handle) (push (cons sid handle) acc))
                (server-sessions server))
@@ -240,19 +240,19 @@ other external iterator must walk this snapshot instead)."
   "Install HANDLE under SESSION-ID in the sessions registry (under the registry
 lock — review F1: the cluster takeover path previously setf'd the table
 unlocked). Returns SESSION-ID."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (setf (gethash session-id (server-sessions server)) handle))
   session-id)
 
 (defun server-find-session-handle (server session-id)
   "Registry-locked session-handle lookup (review F1 read path — every reader
 of the sessions table goes through here or a snapshot)."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (gethash session-id (server-sessions server))))
 
 (defun server-model-entry (server model-id)
   "Registry-locked model-registry lookup (review F1 read path)."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (gethash model-id (server-models server))))
 
 (defun %check-student-id (student-id)
@@ -325,13 +325,13 @@ lock (the cache entry and the log are read/written together); the cache table
 update takes the registry lock inside. Cache invalidation: first call,
 kt-params instance change, or a log whose last-seq went DOWN (replaced/shrunk
 log — full replay). Returns nil when the student is unknown."
-  (let ((ss (or ss (bt:with-lock-held ((server-students-lock server))
+  (let ((ss (or ss (bt2:with-lock-held ((server-students-lock server))
                     (gethash student-id (server-students server))))))
     (when ss
-      (bt:with-lock-held ((server-log-lock server student-id))
+      (bt2:with-lock-held ((server-log-lock server student-id))
         (let* ((log (libactr:student-session-log ss))
                (params (server-kt-params server))
-               (cache (bt:with-lock-held ((server-students-lock server))
+               (cache (bt2:with-lock-held ((server-students-lock server))
                         (gethash student-id (server-mastery-cache server))))
                (last-seq (libactr:log-last-seq log))
                (entries
@@ -342,7 +342,7 @@ log — full replay). Returns nil when the student is unknown."
                     ;; full replay: first call, changed params, or a shrunken log.
                     (let ((entries (libactr:compute-mastery
                                     (libactr:log-all-events log) :kt-params params)))
-                      (bt:with-lock-held ((server-students-lock server))
+                      (bt2:with-lock-held ((server-students-lock server))
                         (setf (gethash student-id (server-mastery-cache server))
                               (list :last-seq last-seq :kt-params params :entries entries)))
                       entries))
@@ -352,7 +352,7 @@ log — full replay). Returns nil when the student is unknown."
                           (getf cache :entries)
                           (let ((entries (%fold-mastery-entries
                                           (getf cache :entries) new params)))
-                            (bt:with-lock-held ((server-students-lock server))
+                            (bt2:with-lock-held ((server-students-lock server))
                               (setf (gethash student-id (server-mastery-cache server))
                                     (list :last-seq last-seq :kt-params params :entries entries)))
                             entries)))))))
@@ -409,7 +409,7 @@ per-log lock)."
   (when (server-acceptor server)
     (hunchentoot:stop (server-acceptor server) :soft t))
   (setf (server-acceptor server) nil)
-  (let ((students (bt:with-lock-held ((server-students-lock server))
+  (let ((students (bt2:with-lock-held ((server-students-lock server))
                     (let (acc)
                       (maphash (lambda (id ss)
                                  (declare (ignore id))
@@ -426,7 +426,7 @@ under MODEL-ID (string). Subsequent server-start-session calls reference the
 model by id. Returns SERVER. The registry write takes the registry lock
 (review F1: registration racing a request-thread lookup used to be an
 unlocked writer-vs-reader pair)."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (setf (gethash model-id (server-models server)) (cons model adapter)))
   server)
 
@@ -491,7 +491,7 @@ most 128 characters — it is embedded in redis keys and event records)."
       ;; Phase 1 (registry): ensure the student-session + the log lock; capture
       ;; the shared log to inject into the candidate session.
       (multiple-value-bind (ss log-lock)
-          (bt:with-lock-held ((server-students-lock server))
+          (bt2:with-lock-held ((server-students-lock server))
             (values (ensure-student server student-id)
                     (%ensure-log-lock-locked server student-id)))
         (declare (ignore log-lock))
@@ -504,14 +504,14 @@ most 128 characters — it is embedded in redis keys and event records)."
                                                :model-id model-id :session-id sid)))
           (libactr:prepare-session adapter session problem-id)
           ;; Phase 3 (registry): idempotent active-check + register.
-          (bt:with-lock-held ((server-students-lock server))
+          (bt2:with-lock-held ((server-students-lock server))
             (or (find-active-session-id server ss)
                 (progn
                   (libactr:register-cognitive-session ss session)
                   (setf (gethash sid (server-sessions server))
                         (make-instance 'session-handle
                                        :session session
-                                       :lock (bt:make-lock (format nil "session-~a" sid))
+                                       :lock (bt2:make-lock :name (format nil "session-~a" sid))
                                        :adapter adapter))
                   sid))))))))
 
@@ -542,7 +542,7 @@ to close the TOCTOU window against a concurrent server-end-session."
       ;; Outside-lock fast path: cheap rejection of clearly-ended sessions.
       (when (eq :ended (libactr:session-status session))
         (return-from server-step-session (values nil :conflict)))
-      (bt:with-lock-held (lock)
+      (bt2:with-lock-held (lock)
         ;; Authoritative re-check under the lock: a concurrent server-end-session
         ;; may have ended this session between the fast-path check and lock
         ;; acquisition.
@@ -556,7 +556,7 @@ to close the TOCTOU window against a concurrent server-end-session."
         (let* ((raw (libactr:adapt-action adapter action session))
                (intents (if (libactr:step-intent-p raw) (list raw) raw))
                (results nil))
-          (bt:with-lock-held
+          (bt2:with-lock-held
               ((server-log-lock server (libactr:session-student-id session)))
             (dolist (intent intents)
               ;; Install this step's prime buffers (if any) before tracing.
@@ -581,11 +581,11 @@ step/mastery readers)."
       (return-from server-end-session (values nil :not-found)))
     (let ((lock (handle-lock handle))
           (session (handle-session handle)))
-      (bt:with-lock-held (lock)
-        (bt:with-lock-held
+      (bt2:with-lock-held (lock)
+        (bt2:with-lock-held
             ((server-log-lock server (libactr:session-student-id session)))
           (prog1 (libactr:end-session session)
-            (bt:with-lock-held ((server-students-lock server))
+            (bt2:with-lock-held ((server-students-lock server))
               (remhash session-id (server-sessions server)))))))))
 
 (defun server-drop-session (server session-id)
@@ -596,7 +596,7 @@ lapsed and whose sessions were adopted away drops those stale local handles
 so it can no longer step or checkpoint them (also usable for admin eviction).
 Serialized under the server's students-lock. Returns SESSION-ID when a
 handle was present and removed, nil otherwise."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (when (gethash session-id (server-sessions server))
       (remhash session-id (server-sessions server))
       session-id)))
@@ -616,7 +616,7 @@ INCREMENTAL BKT cache — only events appended since the last call are folded
 (log-events-since); full replay via compute-mastery happens on first call, a
 kt-params instance change, or a shrunken log. Results are identical to the
 from-scratch fold by construction (see %fold-mastery-entries)."
-  (let ((ss (bt:with-lock-held ((server-students-lock server))
+  (let ((ss (bt2:with-lock-held ((server-students-lock server))
               (gethash student-id (server-students server)))))
     (if (null ss)
         (values nil :not-found)
@@ -627,7 +627,7 @@ from-scratch fold by construction (see %fold-mastery-entries)."
 in Task 4 serializes this to JSON.) The registry counts are read under the
 registry lock (review F1: hash-table-count on a table a request thread may be
 mutating is an unlocked reader)."
-  (bt:with-lock-held ((server-students-lock server))
+  (bt2:with-lock-held ((server-students-lock server))
     (list :status "ok"
           :active_sessions (hash-table-count (server-sessions server))
           :students (hash-table-count (server-students server)))))
